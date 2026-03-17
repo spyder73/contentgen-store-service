@@ -1,0 +1,78 @@
+from __future__ import annotations
+
+from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..models import MediaItem
+from ..schemas import MediaItemIn, MediaItemOut, PagedResponse
+
+
+async def list_media(
+    session: AsyncSession,
+    clip_id: str | None = None,
+    type_: str | None = None,
+    page: int = 1,
+    limit: int = 50,
+) -> PagedResponse:
+    offset = (page - 1) * limit
+    query = select(MediaItem)
+    count_query = select(func.count()).select_from(MediaItem)
+    if clip_id:
+        query = query.where(MediaItem.clip_id == clip_id)
+        count_query = count_query.where(MediaItem.clip_id == clip_id)
+    if type_:
+        query = query.where(MediaItem.type == type_)
+        count_query = count_query.where(MediaItem.type == type_)
+
+    count_result = await session.execute(count_query)
+    total = count_result.scalar_one()
+    result = await session.execute(
+        query.order_by(MediaItem.created_at.desc()).offset(offset).limit(limit)
+    )
+    items = [MediaItemOut.from_orm_row(row) for row in result.scalars()]
+    return PagedResponse(items=items, total=total, page=page, limit=limit)
+
+
+async def get_media(session: AsyncSession, id: str) -> MediaItemOut | None:
+    row = await session.get(MediaItem, id)
+    if row is None:
+        return None
+    return MediaItemOut.from_orm_row(row)
+
+
+async def upsert_media(session: AsyncSession, body: MediaItemIn) -> MediaItemOut:
+    stmt = (
+        insert(MediaItem)
+        .values(
+            id=body.id,
+            clip_id=body.clip_id,
+            type=body.type,
+            prompt=body.prompt,
+            file_url=body.file_url,
+            metadata=body.metadata,
+            output_spec=body.output_spec,
+        )
+        .on_conflict_do_update(
+            index_elements=["id"],
+            set_={
+                "clip_id": body.clip_id,
+                "type": body.type,
+                "prompt": body.prompt,
+                "file_url": body.file_url,
+                "metadata": body.metadata,
+                "output_spec": body.output_spec,
+            },
+        )
+        .returning(MediaItem)
+    )
+    result = await session.execute(stmt)
+    await session.commit()
+    row = result.scalars().one()
+    return MediaItemOut.from_orm_row(row)
+
+
+async def delete_media(session: AsyncSession, id: str) -> bool:
+    result = await session.execute(delete(MediaItem).where(MediaItem.id == id))
+    await session.commit()
+    return result.rowcount > 0
