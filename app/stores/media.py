@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from sqlalchemy import delete, func, select
-from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import MediaItem
@@ -12,6 +11,7 @@ async def list_media(
     session: AsyncSession,
     clip_id: str | None = None,
     type_: str | None = None,
+    search: str | None = None,
     page: int = 1,
     limit: int = 50,
 ) -> PagedResponse:
@@ -24,7 +24,11 @@ async def list_media(
     if type_:
         query = query.where(MediaItem.type == type_)
         count_query = count_query.where(MediaItem.type == type_)
-
+    if search:
+        pattern = f"%{search}%"
+        search_filter = MediaItem.prompt.ilike(pattern) | MediaItem.id.ilike(pattern)
+        query = query.where(search_filter)
+        count_query = count_query.where(search_filter)
     count_result = await session.execute(count_query)
     total = count_result.scalar_one()
     result = await session.execute(
@@ -42,33 +46,18 @@ async def get_media(session: AsyncSession, id: str) -> MediaItemOut | None:
 
 
 async def upsert_media(session: AsyncSession, body: MediaItemIn) -> MediaItemOut:
-    stmt = (
-        insert(MediaItem)
-        .values(
-            id=body.id,
-            clip_id=body.clip_id,
-            type=body.type,
-            prompt=body.prompt,
-            file_url=body.file_url,
-            metadata=body.metadata,
-            output_spec=body.output_spec,
-        )
-        .on_conflict_do_update(
-            index_elements=["id"],
-            set_={
-                "clip_id": body.clip_id,
-                "type": body.type,
-                "prompt": body.prompt,
-                "file_url": body.file_url,
-                "metadata": body.metadata,
-                "output_spec": body.output_spec,
-            },
-        )
-        .returning(MediaItem)
-    )
-    result = await session.execute(stmt)
+    row = await session.get(MediaItem, body.id)
+    if row is None:
+        row = MediaItem(id=body.id)
+        session.add(row)
+    row.clip_id = body.clip_id
+    row.type = body.type
+    row.prompt = body.prompt
+    row.file_url = body.file_url
+    row.metadata_ = body.metadata
+    row.output_spec = body.output_spec
     await session.commit()
-    row = result.scalars().one()
+    await session.refresh(row)
     return MediaItemOut.from_orm_row(row)
 
 

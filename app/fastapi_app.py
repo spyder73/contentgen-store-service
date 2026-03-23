@@ -118,10 +118,11 @@ def create_fastapi_app() -> FastAPI:
         session: SessionDep,
         clip_id: str | None = Query(None),
         type: str | None = Query(None),
+        search: str | None = Query(None),
         page: int = Query(1, ge=1),
         limit: int = Query(50, ge=1, le=200),
     ) -> Any:
-        return await media.list_media(session, clip_id=clip_id, type_=type, page=page, limit=limit)
+        return await media.list_media(session, clip_id=clip_id, type_=type, search=search, page=page, limit=limit)
 
     @app.get("/v1/media/{id}", response_model=MediaItemOut)
     async def get_media_handler(id: str, session: SessionDep) -> Any:
