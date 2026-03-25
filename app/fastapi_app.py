@@ -9,8 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .db import get_session
 from .schemas import (
+    CharacterIn,
+    CharacterOut,
     ClipPromptIn,
     ClipPromptOut,
+    EpisodeIn,
+    EpisodeOut,
     MediaItemIn,
     MediaItemOut,
     PagedResponse,
@@ -18,8 +22,11 @@ from .schemas import (
     PipelineTemplateOut,
     PromptTemplateIn,
     PromptTemplateOut,
+    SeriesIn,
+    SeriesOut,
+    VoiceSnippetOut,
 )
-from .stores import clips, media, pipelines, prompts
+from .stores import characters, clips, episodes, media, pipelines, prompts, series, voice_snippets
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +146,116 @@ def create_fastapi_app() -> FastAPI:
     @app.delete("/v1/media/{id}", status_code=204)
     async def delete_media_handler(id: str, session: SessionDep) -> None:
         deleted = await media.delete_media(session, id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="not_found")
+
+    # ── series ───────────────────────────────────────────────────────────────
+
+    @app.get("/v1/series", response_model=PagedResponse)
+    async def list_series_handler(
+        session: SessionDep,
+        page: int = Query(1, ge=1),
+        limit: int = Query(50, ge=1, le=200),
+    ) -> Any:
+        return await series.list_series(session, page=page, limit=limit)
+
+    @app.get("/v1/series/{id}", response_model=SeriesOut)
+    async def get_series_handler(id: str, session: SessionDep) -> Any:
+        row = await series.get_series(session, id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
+
+    @app.put("/v1/series/{id}", response_model=SeriesOut)
+    async def upsert_series_handler(id: str, body: SeriesIn, session: SessionDep) -> Any:
+        body.id = id
+        return await series.upsert_series(session, body)
+
+    @app.delete("/v1/series/{id}", status_code=204)
+    async def delete_series_handler(id: str, session: SessionDep) -> None:
+        deleted = await series.delete_series(session, id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="not_found")
+
+    # ── characters ───────────────────────────────────────────────────────────
+
+    @app.get("/v1/characters", response_model=PagedResponse)
+    async def list_characters_handler(
+        session: SessionDep,
+        series_id: str | None = Query(None),
+        page: int = Query(1, ge=1),
+        limit: int = Query(50, ge=1, le=200),
+    ) -> Any:
+        return await characters.list_characters(session, series_id=series_id, page=page, limit=limit)
+
+    @app.get("/v1/characters/{id}", response_model=CharacterOut)
+    async def get_character_handler(id: str, session: SessionDep) -> Any:
+        row = await characters.get_character(session, id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
+
+    @app.put("/v1/characters/{id}", response_model=CharacterOut)
+    async def upsert_character_handler(id: str, body: CharacterIn, session: SessionDep) -> Any:
+        body.id = id
+        return await characters.upsert_character(session, body)
+
+    @app.delete("/v1/characters/{id}", status_code=204)
+    async def delete_character_handler(id: str, session: SessionDep) -> None:
+        deleted = await characters.delete_character(session, id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="not_found")
+
+    # ── episodes ─────────────────────────────────────────────────────────────
+
+    @app.get("/v1/episodes", response_model=PagedResponse)
+    async def list_episodes_handler(
+        session: SessionDep,
+        series_id: str | None = Query(None),
+        page: int = Query(1, ge=1),
+        limit: int = Query(50, ge=1, le=200),
+    ) -> Any:
+        return await episodes.list_episodes(session, series_id=series_id, page=page, limit=limit)
+
+    @app.get("/v1/episodes/{id}", response_model=EpisodeOut)
+    async def get_episode_handler(id: str, session: SessionDep) -> Any:
+        row = await episodes.get_episode(session, id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
+
+    @app.put("/v1/episodes/{id}", response_model=EpisodeOut)
+    async def upsert_episode_handler(id: str, body: EpisodeIn, session: SessionDep) -> Any:
+        body.id = id
+        return await episodes.upsert_episode(session, body)
+
+    @app.delete("/v1/episodes/{id}", status_code=204)
+    async def delete_episode_handler(id: str, session: SessionDep) -> None:
+        deleted = await episodes.delete_episode(session, id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="not_found")
+
+    # ── voice snippets ───────────────────────────────────────────────────────
+
+    @app.get("/v1/voice-snippets", response_model=PagedResponse)
+    async def list_voice_snippets_handler(
+        session: SessionDep,
+        character_id: str | None = Query(None),
+        page: int = Query(1, ge=1),
+        limit: int = Query(50, ge=1, le=200),
+    ) -> Any:
+        return await voice_snippets.list_voice_snippets(session, character_id=character_id, page=page, limit=limit)
+
+    @app.get("/v1/voice-snippets/{id}", response_model=VoiceSnippetOut)
+    async def get_voice_snippet_handler(id: str, session: SessionDep) -> Any:
+        row = await voice_snippets.get_voice_snippet(session, id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
+
+    @app.delete("/v1/voice-snippets/{id}", status_code=204)
+    async def delete_voice_snippet_handler(id: str, session: SessionDep) -> None:
+        deleted = await voice_snippets.delete_voice_snippet(session, id)
         if not deleted:
             raise HTTPException(status_code=404, detail="not_found")
 

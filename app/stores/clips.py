@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from sqlalchemy import delete, func, select
-from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import ClipPrompt
@@ -29,23 +28,15 @@ async def get_clip(session: AsyncSession, id: str) -> ClipPromptOut | None:
 
 
 async def upsert_clip(session: AsyncSession, body: ClipPromptIn) -> ClipPromptOut:
-    stmt = (
-        insert(ClipPrompt)
-        .values(
-            id=body.id,
-            name=body.name,
-            metadata=body.metadata,
-            style=body.style,
-        )
-        .on_conflict_do_update(
-            index_elements=["id"],
-            set_={"name": body.name, "metadata": body.metadata, "style": body.style},
-        )
-        .returning(ClipPrompt)
-    )
-    result = await session.execute(stmt)
+    row = await session.get(ClipPrompt, body.id)
+    if row is None:
+        row = ClipPrompt(id=body.id)
+        session.add(row)
+    row.name = body.name
+    row.metadata_ = body.metadata
+    row.style = body.style
     await session.commit()
-    row = result.scalars().one()
+    await session.refresh(row)
     return ClipPromptOut.from_orm_row(row)
 
 
