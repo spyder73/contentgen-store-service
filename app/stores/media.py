@@ -12,6 +12,7 @@ async def list_media(
     clip_id: str | None = None,
     type_: str | None = None,
     search: str | None = None,
+    is_favourite: bool | None = None,
     page: int = 1,
     limit: int = 50,
 ) -> PagedResponse:
@@ -29,6 +30,9 @@ async def list_media(
         search_filter = MediaItem.prompt.ilike(pattern) | MediaItem.id.ilike(pattern)
         query = query.where(search_filter)
         count_query = count_query.where(search_filter)
+    if is_favourite is not None:
+        query = query.where(MediaItem.is_favourite == is_favourite)
+        count_query = count_query.where(MediaItem.is_favourite == is_favourite)
     count_result = await session.execute(count_query)
     total = count_result.scalar_one()
     result = await session.execute(
@@ -65,3 +69,13 @@ async def delete_media(session: AsyncSession, id: str) -> bool:
     result = await session.execute(delete(MediaItem).where(MediaItem.id == id))
     await session.commit()
     return result.rowcount > 0
+
+
+async def toggle_favourite(session: AsyncSession, id: str, is_favourite: bool) -> MediaItemOut | None:
+    row = await session.get(MediaItem, id)
+    if row is None:
+        return None
+    row.is_favourite = is_favourite
+    await session.commit()
+    await session.refresh(row)
+    return MediaItemOut.from_orm_row(row)

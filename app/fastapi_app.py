@@ -7,6 +7,8 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from pydantic import BaseModel
+
 from .db import get_session
 from .schemas import (
     CharacterIn,
@@ -26,6 +28,10 @@ from .schemas import (
     SeriesOut,
     VoiceSnippetOut,
 )
+
+
+class ToggleFavouriteBody(BaseModel):
+    is_favourite: bool
 from .stores import characters, clips, episodes, media, pipelines, prompts, series, voice_snippets
 
 logger = logging.getLogger(__name__)
@@ -126,10 +132,19 @@ def create_fastapi_app() -> FastAPI:
         clip_id: str | None = Query(None),
         type: str | None = Query(None),
         search: str | None = Query(None),
+        is_favourite: bool | None = Query(None),
         page: int = Query(1, ge=1),
         limit: int = Query(50, ge=1, le=200),
     ) -> Any:
-        return await media.list_media(session, clip_id=clip_id, type_=type, search=search, page=page, limit=limit)
+        return await media.list_media(
+            session,
+            clip_id=clip_id,
+            type_=type,
+            search=search,
+            is_favourite=is_favourite,
+            page=page,
+            limit=limit,
+        )
 
     @app.get("/v1/media/{id}", response_model=MediaItemOut)
     async def get_media_handler(id: str, session: SessionDep) -> Any:
@@ -148,6 +163,17 @@ def create_fastapi_app() -> FastAPI:
         deleted = await media.delete_media(session, id)
         if not deleted:
             raise HTTPException(status_code=404, detail="not_found")
+
+    @app.patch("/v1/media/{id}/favourite", response_model=MediaItemOut)
+    async def toggle_media_favourite(
+        id: str,
+        body: ToggleFavouriteBody,
+        session: SessionDep,
+    ) -> Any:
+        result = await media.toggle_favourite(session, id, body.is_favourite)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Media item not found")
+        return result
 
     # ── series ───────────────────────────────────────────────────────────────
 

@@ -92,6 +92,7 @@ class MediaItemOut(BaseModel):
     file_url: str
     metadata: dict[str, Any] = {}
     output_spec: dict[str, Any] | None = None
+    is_favourite: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -105,6 +106,7 @@ class MediaItemOut(BaseModel):
             file_url=row.file_url,
             metadata=row.metadata_ or {},
             output_spec=row.output_spec,
+            is_favourite=row.is_favourite or False,
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
