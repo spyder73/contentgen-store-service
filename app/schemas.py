@@ -122,6 +122,10 @@ class MediaItemIn(BaseModel):
     output_spec: dict[str, Any] | None = None
 
 
+class ToggleFavouriteBody(BaseModel):
+    is_favourite: bool
+
+
 class PagedResponse(BaseModel):
     items: list[Any]
     total: int

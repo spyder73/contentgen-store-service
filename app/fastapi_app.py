@@ -26,12 +26,10 @@ from .schemas import (
     PromptTemplateOut,
     SeriesIn,
     SeriesOut,
+    ToggleFavouriteBody,
     VoiceSnippetOut,
 )
 
-
-class ToggleFavouriteBody(BaseModel):
-    is_favourite: bool
 from .stores import characters, clips, episodes, media, pipelines, prompts, series, voice_snippets
 
 logger = logging.getLogger(__name__)
