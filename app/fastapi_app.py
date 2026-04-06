@@ -30,7 +30,7 @@ from .schemas import (
     VoiceSnippetOut,
 )
 
-from .stores import characters, clips, episodes, media, pipelines, prompts, series, voice_snippets
+from .stores import characters, clips, episodes, media, pipelines, prompts, series, system_prompts, voice_snippets
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,22 @@ def create_fastapi_app() -> FastAPI:
         deleted = await prompts.delete_prompt(session, id)
         if not deleted:
             raise HTTPException(status_code=404, detail="not_found")
+
+    # ── system prompts ──────────────────────────────────────────────────────
+
+    @app.get("/v1/system-prompts/{id}", response_model=str)
+    async def get_system_prompt_handler(id: str, session: SessionDep) -> Any:
+        content = await system_prompts.get_system_prompt(session, id)
+        if content is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return content
+
+    @app.put("/v1/system-prompts/{id}", response_model=str)
+    async def upsert_system_prompt_handler(id: str, body: dict, session: SessionDep) -> Any:
+        content = body.get("content", "")
+        if not content:
+            raise HTTPException(status_code=400, detail="content is required")
+        return await system_prompts.upsert_system_prompt(session, id, content)
 
     # ── clips ───────────────────────────────────────────────────────────────
 

@@ -43,6 +43,19 @@ class PromptTemplate(Base):
     )
 
 
+class SystemPrompt(Base):
+    __tablename__ = "system_prompts"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class ClipPrompt(Base):
     __tablename__ = "clip_prompts"
 
