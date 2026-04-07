@@ -60,6 +60,11 @@ class ClipPromptOut(BaseModel):
     name: str
     metadata: dict[str, Any] = {}
     style: dict[str, Any] = {}
+    media_refs: dict[str, Any] = {"images": [], "ai_videos": [], "audios": []}
+    render_output_urls: list[Any] = []
+    is_dirty: bool = False
+    finished_at: datetime | None = None
+    thumbnail_url: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -70,6 +75,11 @@ class ClipPromptOut(BaseModel):
             name=row.name,
             metadata=row.metadata_ or {},
             style=row.style or {},
+            media_refs=row.media_refs or {"images": [], "ai_videos": [], "audios": []},
+            render_output_urls=row.render_output_urls or [],
+            is_dirty=row.is_dirty or False,
+            finished_at=row.finished_at,
+            thumbnail_url=row.thumbnail_url,
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
@@ -80,6 +90,11 @@ class ClipPromptIn(BaseModel):
     name: str = ""
     metadata: dict[str, Any] = {}
     style: dict[str, Any] = {}
+    media_refs: dict[str, Any] = {"images": [], "ai_videos": [], "audios": []}
+    render_output_urls: list[Any] = []
+    is_dirty: bool = False
+    finished_at: datetime | None = None
+    thumbnail_url: str | None = None
 
 
 class MediaItemOut(BaseModel):
@@ -93,6 +108,11 @@ class MediaItemOut(BaseModel):
     metadata: dict[str, Any] = {}
     output_spec: dict[str, Any] | None = None
     is_favourite: bool = False
+    name: str = ""
+    pipeline_run_id: str | None = None
+    scene_id: str | None = None
+    parent_media_id: str | None = None
+    role: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -107,6 +127,11 @@ class MediaItemOut(BaseModel):
             metadata=row.metadata_ or {},
             output_spec=row.output_spec,
             is_favourite=row.is_favourite or False,
+            name=row.name or "",
+            pipeline_run_id=row.pipeline_run_id,
+            scene_id=row.scene_id,
+            parent_media_id=row.parent_media_id,
+            role=row.role,
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
@@ -120,10 +145,48 @@ class MediaItemIn(BaseModel):
     file_url: str = ""
     metadata: dict[str, Any] = {}
     output_spec: dict[str, Any] | None = None
+    name: str = ""
+    pipeline_run_id: str | None = None
+    scene_id: str | None = None
+    parent_media_id: str | None = None
+    role: str | None = None
 
 
 class ToggleFavouriteBody(BaseModel):
     is_favourite: bool
+
+
+class SwapClipMediaBody(BaseModel):
+    kind: str  # "image" | "ai_video" | "audio"
+    media_index: int
+    new_media_id: str
+
+
+class RenameMediaBody(BaseModel):
+    name: str
+
+
+class ClipSummaryOut(BaseModel):
+    id: str
+    name: str
+    created_at: datetime
+    updated_at: datetime
+    finished_at: datetime | None = None
+    thumbnail_url: str | None = None
+    is_dirty: bool = False
+    media_count: dict[str, int] = {"images": 0, "ai_videos": 0, "audios": 0}
+
+
+class ClipFullOut(BaseModel):
+    clip: ClipPromptOut
+    media: list[MediaItemOut]
+
+
+class MediaStatsOut(BaseModel):
+    total: int
+    image: int
+    video: int
+    audio: int
 
 
 class PagedResponse(BaseModel):

@@ -13,19 +13,24 @@ from .db import get_session
 from .schemas import (
     CharacterIn,
     CharacterOut,
+    ClipFullOut,
     ClipPromptIn,
     ClipPromptOut,
+    ClipSummaryOut,
     EpisodeIn,
     EpisodeOut,
     MediaItemIn,
     MediaItemOut,
+    MediaStatsOut,
     PagedResponse,
     PipelineTemplateIn,
     PipelineTemplateOut,
     PromptTemplateIn,
     PromptTemplateOut,
+    RenameMediaBody,
     SeriesIn,
     SeriesOut,
+    SwapClipMediaBody,
     ToggleFavouriteBody,
     VoiceSnippetOut,
 )
@@ -120,6 +125,18 @@ def create_fastapi_app() -> FastAPI:
     ) -> Any:
         return await clips.list_clips(session, page=page, limit=limit)
 
+    # NOTE: /v1/clips/summary must be registered before /v1/clips/{id}
+    @app.get("/v1/clips/summary", response_model=PagedResponse)
+    async def list_clip_summaries_handler(
+        session: SessionDep,
+        page: int = Query(1, ge=1),
+        limit: int = Query(50, ge=1, le=200),
+        finished_only: bool = Query(False),
+    ) -> Any:
+        return await clips.list_clip_summaries(
+            session, page=page, limit=limit, finished_only=finished_only
+        )
+
     @app.get("/v1/clips/{id}", response_model=ClipPromptOut)
     async def get_clip_handler(id: str, session: SessionDep) -> Any:
         row = await clips.get_clip(session, id)
@@ -138,7 +155,33 @@ def create_fastapi_app() -> FastAPI:
         if not deleted:
             raise HTTPException(status_code=404, detail="not_found")
 
+    @app.get("/v1/clips/{id}/full", response_model=ClipFullOut)
+    async def get_full_clip_handler(id: str, session: SessionDep) -> Any:
+        result = await clips.get_full_clip(session, id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return result
+
+    @app.post("/v1/clips/{id}/swap", response_model=ClipFullOut)
+    async def swap_clip_media_handler(
+        id: str, body: SwapClipMediaBody, session: SessionDep
+    ) -> Any:
+        try:
+            result = await clips.swap_clip_media(session, id, body)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except (ValueError, IndexError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        if result is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return result
+
     # ── media items ─────────────────────────────────────────────────────────
+
+    # NOTE: /v1/media/stats must be registered before /v1/media/{id}
+    @app.get("/v1/media/stats", response_model=MediaStatsOut)
+    async def get_media_stats_handler(session: SessionDep) -> Any:
+        return await media.get_media_stats(session)
 
     @app.get("/v1/media", response_model=PagedResponse)
     async def list_media_handler(
@@ -147,6 +190,9 @@ def create_fastapi_app() -> FastAPI:
         type: str | None = Query(None),
         search: str | None = Query(None),
         is_favourite: bool | None = Query(None),
+        pipeline_run_id: str | None = Query(None),
+        scene_id: str | None = Query(None),
+        role: str | None = Query(None),
         page: int = Query(1, ge=1),
         limit: int = Query(50, ge=1, le=200),
     ) -> Any:
@@ -156,6 +202,9 @@ def create_fastapi_app() -> FastAPI:
             type_=type,
             search=search,
             is_favourite=is_favourite,
+            pipeline_run_id=pipeline_run_id,
+            scene_id=scene_id,
+            role=role,
             page=page,
             limit=limit,
         )
@@ -187,6 +236,17 @@ def create_fastapi_app() -> FastAPI:
         result = await media.toggle_favourite(session, id, body.is_favourite)
         if result is None:
             raise HTTPException(status_code=404, detail="Media item not found")
+        return result
+
+    @app.put("/v1/media/{id}/rename", response_model=MediaItemOut)
+    async def rename_media_handler(
+        id: str,
+        body: RenameMediaBody,
+        session: SessionDep,
+    ) -> Any:
+        result = await media.rename_media(session, id, body.name)
+        if result is None:
+            raise HTTPException(status_code=404, detail="not_found")
         return result
 
     # ── series ───────────────────────────────────────────────────────────────

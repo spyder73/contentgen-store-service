@@ -63,6 +63,17 @@ class ClipPrompt(Base):
     name: Mapped[str] = mapped_column(Text, default="")
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
     style: Mapped[dict] = mapped_column(JSONB, default=dict)
+    media_refs: Mapped[dict] = mapped_column(
+        JSONB, default=lambda: {"images": [], "ai_videos": [], "audios": []}
+    )
+    render_output_urls: Mapped[list] = mapped_column(JSONB, default=list)
+    is_dirty: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="FALSE"
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    thumbnail_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -86,6 +97,15 @@ class MediaItem(Base):
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
     output_spec: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     is_favourite: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="FALSE")
+    name: Mapped[str] = mapped_column(Text, default="")
+    pipeline_run_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), nullable=True)
+    scene_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parent_media_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("media_items.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    role: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -97,6 +117,10 @@ class MediaItem(Base):
         Index("ix_media_items_clip_id", "clip_id"),
         Index("ix_media_items_type", "type"),
         Index("ix_media_items_created_at", "created_at"),
+        Index("ix_media_items_pipeline_run_id", "pipeline_run_id"),
+        Index("ix_media_items_scene_id", "scene_id"),
+        Index("ix_media_items_name", "name"),
+        Index("ix_media_items_pipeline_scene_type", "pipeline_run_id", "scene_id", "type"),
     )
 
 
