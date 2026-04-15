@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -169,14 +169,33 @@ def create_fastapi_app() -> FastAPI:
         try:
             result = await clips.swap_clip_media(session, id, body)
         except LookupError as exc:
-            raise HTTPException(status_code=404, detail=str(exc))
+            raise HTTPException(status_code=404, detail=f"media_not_found: {exc}")
         except (ValueError, IndexError) as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         if result is None:
-            raise HTTPException(status_code=404, detail="not_found")
+            raise HTTPException(status_code=404, detail="clip_not_found")
         return result
 
     # ── media items ─────────────────────────────────────────────────────────
+
+    # NOTE: /v1/media/{id}/file routes must be registered before /v1/media/{id}
+    @app.put("/v1/media/{id}/file", status_code=204)
+    async def upload_media_file_handler(id: str, request: Request, session: SessionDep) -> None:
+        data = await request.body()
+        if not data:
+            raise HTTPException(status_code=400, detail="empty body")
+        mime_type = request.headers.get("Content-Type", "application/octet-stream")
+        ok = await media.store_file_data(session, id, data, mime_type)
+        if not ok:
+            raise HTTPException(status_code=404, detail="not_found")
+
+    @app.get("/v1/media/{id}/file")
+    async def download_media_file_handler(id: str, session: SessionDep) -> Response:
+        result = await media.get_file_data(session, id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="no_file_data")
+        data, mime_type = result
+        return Response(content=data, media_type=mime_type)
 
     # NOTE: /v1/media/stats must be registered before /v1/media/{id}
     @app.get("/v1/media/stats", response_model=MediaStatsOut)
