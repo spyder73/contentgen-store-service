@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from sqlalchemy import delete, select
-from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import PipelineTemplate
@@ -21,24 +20,19 @@ async def get_pipeline(session: AsyncSession, id: str) -> PipelineTemplateOut | 
 
 
 async def upsert_pipeline(session: AsyncSession, body: PipelineTemplateIn) -> PipelineTemplateOut:
-    stmt = (
-        insert(PipelineTemplate)
-        .values(id=body.id, name=body.name, data=body.data, version=body.version)
-        .on_conflict_do_update(
-            index_elements=["id"],
-            set_={"name": body.name, "data": body.data, "version": body.version},
-        )
-        .returning(PipelineTemplate)
-    )
-    result = await session.execute(stmt)
+    row = await session.get(PipelineTemplate, body.id)
+    if row is None:
+        row = PipelineTemplate(id=body.id)
+        session.add(row)
+    row.name = body.name
+    row.data = body.data
+    row.version = body.version
     await session.commit()
-    row = result.scalars().one()
+    await session.refresh(row)
     return PipelineTemplateOut.model_validate(row)
 
 
 async def delete_pipeline(session: AsyncSession, id: str) -> bool:
-    result = await session.execute(
-        delete(PipelineTemplate).where(PipelineTemplate.id == id)
-    )
+    result = await session.execute(delete(PipelineTemplate).where(PipelineTemplate.id == id))
     await session.commit()
     return result.rowcount > 0
