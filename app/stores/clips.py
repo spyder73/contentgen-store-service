@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 from ..models import ClipPrompt, MediaItem
 from ..schemas import (
@@ -15,14 +19,22 @@ from ..schemas import (
 )
 
 
+def _user_filter(user_id: str | None):
+    """Return a WHERE clause for user_id filtering."""
+    if user_id:
+        return ClipPrompt.user_id == user_id
+    return True  # no filter
+
+
 async def list_clips(
-    session: AsyncSession, page: int = 1, limit: int = 50
+    session: AsyncSession, page: int = 1, limit: int = 50, user_id: str | None = None
 ) -> PagedResponse:
     offset = (page - 1) * limit
-    count_result = await session.execute(select(func.count()).select_from(ClipPrompt))
+    filt = _user_filter(user_id)
+    count_result = await session.execute(select(func.count()).select_from(ClipPrompt).where(filt))
     total = count_result.scalar_one()
     result = await session.execute(
-        select(ClipPrompt).order_by(ClipPrompt.created_at.desc()).offset(offset).limit(limit)
+        select(ClipPrompt).where(filt).order_by(ClipPrompt.created_at.desc()).offset(offset).limit(limit)
     )
     items = [ClipPromptOut.from_orm_row(row) for row in result.scalars()]
     return PagedResponse(items=items, total=total, page=page, limit=limit)
@@ -33,13 +45,17 @@ async def list_clip_summaries(
     page: int = 1,
     limit: int = 50,
     finished_only: bool = False,
+    user_id: str | None = None,
 ) -> PagedResponse:
     offset = (page - 1) * limit
+    where = [_user_filter(user_id)]
+    if finished_only:
+        where.append(ClipPrompt.finished_at.isnot(None))
     count_query = select(func.count()).select_from(ClipPrompt)
     query = select(ClipPrompt)
-    if finished_only:
-        count_query = count_query.where(ClipPrompt.finished_at.isnot(None))
-        query = query.where(ClipPrompt.finished_at.isnot(None))
+    for w in where:
+        count_query = count_query.where(w)
+        query = query.where(w)
     count_result = await session.execute(count_query)
     total = count_result.scalar_one()
     result = await session.execute(
@@ -92,10 +108,14 @@ async def get_full_clip(session: AsyncSession, id: str) -> ClipFullOut | None:
     return ClipFullOut(clip=clip_out, media=media_items)
 
 
-async def upsert_clip(session: AsyncSession, body: ClipPromptIn) -> ClipPromptOut:
+async def upsert_clip(
+    session: AsyncSession, body: ClipPromptIn, user_id: str | None = None
+) -> ClipPromptOut:
     row = await session.get(ClipPrompt, body.id)
     if row is None:
         row = ClipPrompt(id=body.id)
+        if user_id:
+            row.user_id = user_id
         session.add(row)
     row.name = body.name
     row.metadata_ = body.metadata
@@ -115,6 +135,7 @@ async def swap_clip_media(
 ) -> ClipFullOut | None:
     row = await session.get(ClipPrompt, clip_id)
     if row is None:
+        logger.warning("swap_clip_media: clip_id=%s not found in DB", clip_id)
         return None
 
     kind_map = {"image": "images", "ai_video": "ai_videos", "audio": "audios"}
@@ -132,6 +153,10 @@ async def swap_clip_media(
 
     new_item = await session.get(MediaItem, body.new_media_id)
     if new_item is None:
+        logger.warning(
+            "swap_clip_media: media_item=%s not found in DB (clip=%s, kind=%s, index=%d)",
+            body.new_media_id, clip_id, body.kind, body.media_index,
+        )
         raise LookupError(f"media item '{body.new_media_id}' not found")
 
     bucket[body.media_index] = body.new_media_id

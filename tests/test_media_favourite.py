@@ -1,6 +1,7 @@
 """Tests for is_favourite field, filter, and toggle endpoint."""
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -8,9 +9,24 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+INTERNAL_SECRET = "test-secret-xyz"
+
+
+@pytest.fixture(autouse=True)
+def _internal_secret_env(monkeypatch):
+    # Pin the env var per-test so run order against other test modules that
+    # overwrite it can't make our requests 401.
+    monkeypatch.setenv("INTERNAL_API_SECRET", INTERNAL_SECRET)
+
+
 from app.fastapi_app import create_fastapi_app
 from app.schemas import MediaItemOut
 from app.db import get_session
+
+AUTH_HEADERS = {
+    "X-Internal-Secret": INTERNAL_SECRET,
+    "X-User-ID": "user-1",
+}
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -101,6 +117,7 @@ class TestToggleFavouriteEndpoint:
             resp = client.patch(
                 f"/v1/media/{media_id}/favourite",
                 json={"is_favourite": True},
+                headers=AUTH_HEADERS,
             )
 
         assert resp.status_code == 200
@@ -116,6 +133,7 @@ class TestToggleFavouriteEndpoint:
             resp = client.patch(
                 f"/v1/media/{media_id}/favourite",
                 json={"is_favourite": False},
+                headers=AUTH_HEADERS,
             )
 
         assert resp.status_code == 200
@@ -128,6 +146,7 @@ class TestToggleFavouriteEndpoint:
             resp = client.patch(
                 f"/v1/media/{media_id}/favourite",
                 json={"is_favourite": True},
+                headers=AUTH_HEADERS,
             )
 
         assert resp.status_code == 404
@@ -140,7 +159,11 @@ class TestToggleFavouriteEndpoint:
         paged = PagedResponse(items=[unfav_item], total=1, page=1, limit=50)
 
         with patch("app.stores.media.list_media", new=AsyncMock(return_value=paged)) as mock_list:
-            resp = client.get("/v1/media", params={"is_favourite": "false"})
+            resp = client.get(
+                "/v1/media",
+                params={"is_favourite": "false"},
+                headers=AUTH_HEADERS,
+            )
 
         assert resp.status_code == 200
         data = resp.json()

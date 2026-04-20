@@ -8,13 +8,18 @@ from ..schemas import PagedResponse, SeriesIn, SeriesOut
 
 
 async def list_series(
-    session: AsyncSession, page: int = 1, limit: int = 50
+    session: AsyncSession, page: int = 1, limit: int = 50, user_id: str | None = None
 ) -> PagedResponse:
     offset = (page - 1) * limit
-    count_result = await session.execute(select(func.count()).select_from(Series))
+    query = select(func.count()).select_from(Series)
+    data_query = select(Series)
+    if user_id:
+        query = query.where(Series.user_id == user_id)
+        data_query = data_query.where(Series.user_id == user_id)
+    count_result = await session.execute(query)
     total = count_result.scalar_one()
     result = await session.execute(
-        select(Series).order_by(Series.created_at.desc()).offset(offset).limit(limit)
+        data_query.order_by(Series.created_at.desc()).offset(offset).limit(limit)
     )
     items = [SeriesOut.from_orm_row(row) for row in result.scalars()]
     return PagedResponse(items=items, total=total, page=page, limit=limit)
@@ -27,10 +32,14 @@ async def get_series(session: AsyncSession, id: str) -> SeriesOut | None:
     return SeriesOut.from_orm_row(row)
 
 
-async def upsert_series(session: AsyncSession, body: SeriesIn) -> SeriesOut:
+async def upsert_series(
+    session: AsyncSession, body: SeriesIn, user_id: str | None = None
+) -> SeriesOut:
     row = await session.get(Series, body.id)
     if row is None:
         row = Series(id=body.id)
+        if user_id:
+            row.user_id = user_id
         session.add(row)
     row.name = body.name
     row.description = body.description
