@@ -19,15 +19,15 @@ from ..schemas import (
 )
 
 
-def _user_filter(user_id: str | None):
-    """Return a WHERE clause for user_id filtering."""
-    if user_id:
-        return ClipPrompt.user_id == user_id
-    return True  # no filter
+def _user_filter(user_id: str):
+    """Return a WHERE clause for user_id filtering. user_id is required."""
+    if not user_id:
+        raise ValueError("user_id is required for clip listing")
+    return ClipPrompt.user_id == user_id
 
 
 async def list_clips(
-    session: AsyncSession, page: int = 1, limit: int = 50, user_id: str | None = None
+    session: AsyncSession, *, user_id: str, page: int = 1, limit: int = 50
 ) -> PagedResponse:
     offset = (page - 1) * limit
     filt = _user_filter(user_id)
@@ -42,10 +42,11 @@ async def list_clips(
 
 async def list_clip_summaries(
     session: AsyncSession,
+    *,
+    user_id: str,
     page: int = 1,
     limit: int = 50,
     finished_only: bool = False,
-    user_id: str | None = None,
 ) -> PagedResponse:
     offset = (page - 1) * limit
     where = [_user_filter(user_id)]

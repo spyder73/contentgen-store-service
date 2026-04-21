@@ -8,14 +8,13 @@ from ..schemas import PagedResponse, SeriesIn, SeriesOut
 
 
 async def list_series(
-    session: AsyncSession, page: int = 1, limit: int = 50, user_id: str | None = None
+    session: AsyncSession, *, user_id: str, page: int = 1, limit: int = 50
 ) -> PagedResponse:
+    if not user_id:
+        raise ValueError("user_id is required for series listing")
     offset = (page - 1) * limit
-    query = select(func.count()).select_from(Series)
-    data_query = select(Series)
-    if user_id:
-        query = query.where(Series.user_id == user_id)
-        data_query = data_query.where(Series.user_id == user_id)
+    query = select(func.count()).select_from(Series).where(Series.user_id == user_id)
+    data_query = select(Series).where(Series.user_id == user_id)
     count_result = await session.execute(query)
     total = count_result.scalar_one()
     result = await session.execute(

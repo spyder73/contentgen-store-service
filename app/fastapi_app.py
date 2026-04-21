@@ -242,7 +242,8 @@ def create_fastapi_app() -> FastAPI:
         page: int = Query(1, ge=1),
         limit: int = Query(50, ge=1, le=200),
     ) -> Any:
-        return await clips.list_clips(session, page=page, limit=limit, user_id=_get_user_id(request))
+        user_id = _require_user_id(request)
+        return await clips.list_clips(session, page=page, limit=limit, user_id=user_id)
 
     # NOTE: /v1/clips/summary must be registered before /v1/clips/{id}
     @app.get("/v1/clips/summary", response_model=PagedResponse)
@@ -253,8 +254,9 @@ def create_fastapi_app() -> FastAPI:
         limit: int = Query(50, ge=1, le=200),
         finished_only: bool = Query(False),
     ) -> Any:
+        user_id = _require_user_id(request)
         return await clips.list_clip_summaries(
-            session, page=page, limit=limit, finished_only=finished_only, user_id=_get_user_id(request)
+            session, page=page, limit=limit, finished_only=finished_only, user_id=user_id
         )
 
     @app.get("/v1/clips/{id}", response_model=ClipPromptOut)
@@ -334,7 +336,8 @@ def create_fastapi_app() -> FastAPI:
     # NOTE: /v1/media/stats must be registered before /v1/media/{id}
     @app.get("/v1/media/stats", response_model=MediaStatsOut)
     async def get_media_stats_handler(request: Request, session: SessionDep) -> Any:
-        return await media.get_media_stats(session, user_id=_get_user_id(request))
+        user_id = _require_user_id(request)
+        return await media.get_media_stats(session, user_id=user_id)
 
     @app.get("/v1/media", response_model=PagedResponse)
     async def list_media_handler(
@@ -421,7 +424,8 @@ def create_fastapi_app() -> FastAPI:
         page: int = Query(1, ge=1),
         limit: int = Query(50, ge=1, le=200),
     ) -> Any:
-        return await series.list_series(session, page=page, limit=limit, user_id=_get_user_id(request))
+        user_id = _require_user_id(request)
+        return await series.list_series(session, page=page, limit=limit, user_id=user_id)
 
     @app.get("/v1/series/{id}", response_model=SeriesOut)
     async def get_series_handler(id: str, session: SessionDep) -> Any:
