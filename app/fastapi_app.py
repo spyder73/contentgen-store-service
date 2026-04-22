@@ -106,6 +106,10 @@ class CreditsGrantBody(BaseModel):
     username: str | None = None
     amount_credits: int
     note: str = ""
+    
+class AuthVerifyRequest(BaseModel):
+        username: str
+        password: str
 
 
 def _credits_error_response(err: credits.CreditsError) -> JSONResponse:
@@ -158,10 +162,6 @@ def create_fastapi_app() -> FastAPI:
         return {"status": "ok"}
 
     # ── auth ────────────────────────────────────────────────────────────────
-
-    class AuthVerifyRequest(BaseModel):
-        username: str
-        password: str
 
     @app.post("/auth/verify")
     async def verify_credentials_handler(body: AuthVerifyRequest, session: SessionDep) -> Any:
