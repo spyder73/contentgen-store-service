@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import uuid
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -301,11 +301,9 @@ class TestAdminGrant:
     def test_admin_grant_ok(self, client):
         admin = str(uuid.uuid4())
         target = str(uuid.uuid4())
+        grant_mock = AsyncMock(return_value={"status": "granted", "balance": 1000, "reserved": 0})
         with patch("app.stores.credits.is_admin", new=AsyncMock(return_value=True)), \
-             patch(
-                 "app.stores.credits.grant",
-                 new=AsyncMock(return_value={"status": "granted", "balance": 1000, "reserved": 0}),
-             ):
+             patch("app.stores.credits.grant", new=grant_mock):
             resp = client.post(
                 "/v1/internal/admin/credits/grant",
                 headers={"X-User-ID": admin, "X-Internal-Secret": INTERNAL_SECRET},
@@ -313,6 +311,34 @@ class TestAdminGrant:
             )
         assert resp.status_code == 200
         assert resp.json()["status"] == "granted"
+        grant_mock.assert_awaited_once_with(
+            ANY,
+            admin_user_id=admin,
+            target_user_id=target,
+            target_username=None,
+            amount=1000,
+            note="topup",
+        )
+
+    def test_admin_grant_accepts_username(self, client):
+        admin = str(uuid.uuid4())
+        grant_mock = AsyncMock(return_value={"status": "granted", "balance": 1000, "reserved": 0})
+        with patch("app.stores.credits.is_admin", new=AsyncMock(return_value=True)), \
+             patch("app.stores.credits.grant", new=grant_mock):
+            resp = client.post(
+                "/v1/internal/admin/credits/grant",
+                headers={"X-User-ID": admin, "X-Internal-Secret": INTERNAL_SECRET},
+                json={"username": "@creator", "amount_credits": 1000, "note": "topup"},
+            )
+        assert resp.status_code == 200
+        grant_mock.assert_awaited_once_with(
+            ANY,
+            admin_user_id=admin,
+            target_user_id=None,
+            target_username="creator",
+            amount=1000,
+            note="topup",
+        )
 
 
 class TestAdminLedger:
@@ -326,13 +352,21 @@ class TestAdminLedger:
 
     def test_admin_ledger_ok(self, client):
         admin = str(uuid.uuid4())
-        rows = [{"id": str(uuid.uuid4()), "kind": "grant", "delta": 1000}]
+        rows = [{"id": str(uuid.uuid4()), "kind": "grant", "delta": 1000, "user_username": "creator"}]
+        ledger_mock = AsyncMock(return_value=rows)
         with patch("app.stores.credits.is_admin", new=AsyncMock(return_value=True)), \
-             patch("app.stores.credits.ledger", new=AsyncMock(return_value=rows)):
+             patch("app.stores.credits.ledger", new=ledger_mock):
             resp = client.get(
                 "/v1/internal/admin/credits/ledger",
                 headers={"X-User-ID": admin, "X-Internal-Secret": INTERNAL_SECRET},
-                params={"limit": 10},
+                params={"username": "@creator", "limit": 10},
             )
         assert resp.status_code == 200
         assert resp.json() == rows
+        ledger_mock.assert_awaited_once_with(
+            ANY,
+            user_id=None,
+            username="creator",
+            since=None,
+            limit=10,
+        )

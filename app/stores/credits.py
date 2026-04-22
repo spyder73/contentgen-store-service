@@ -17,8 +17,10 @@ from typing import Optional
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from ..models import CreditsLedger, User
+from . import users
 
 
 MARKUP = Decimal("1.7")
@@ -426,12 +428,25 @@ async def grant(
     session: AsyncSession,
     *,
     admin_user_id: str,
-    target_user_id: str,
+    target_user_id: str | None = None,
+    target_username: str | None = None,
     amount: int,
     note: str,
 ) -> dict:
     if amount <= 0:
         raise CreditsError("invalid_amount")
+
+    resolved_user = None
+    if target_username:
+        resolved_user = await users.get_user_by_username(session, target_username)
+    elif target_user_id:
+        resolved_user = await users.get_user_by_id(session, target_user_id)
+
+    if resolved_user is None:
+        raise CreditsError("user_not_found")
+
+    target_user_id = resolved_user.id
+
     await session.execute(
         text("UPDATE users SET credits_balance = credits_balance + :a WHERE id = :uid"),
         {"a": amount, "uid": target_user_id},
@@ -449,6 +464,8 @@ async def grant(
     bv = await get_balance(session, target_user_id)
     return {
         "status": "granted",
+        "user_id": target_user_id,
+        "username": resolved_user.username,
         "balance": bv.balance if bv else 0,
         "reserved": bv.reserved if bv else 0,
     }
@@ -458,12 +475,16 @@ async def ledger(
     session: AsyncSession,
     *,
     user_id: Optional[str] = None,
+    username: Optional[str] = None,
     since: Optional[str] = None,
     limit: int = 100,
 ) -> list[dict]:
+    ledger_user = aliased(User)
+    admin_user = aliased(User)
     stmt = select(
         CreditsLedger.id,
         CreditsLedger.user_id,
+        ledger_user.username,
         CreditsLedger.kind,
         CreditsLedger.delta,
         CreditsLedger.pipeline_run_id,
@@ -475,10 +496,19 @@ async def ledger(
         CreditsLedger.cost_source,
         CreditsLedger.note,
         CreditsLedger.admin_user_id,
+        admin_user.username,
         CreditsLedger.created_at,
+    ).join(
+        ledger_user,
+        ledger_user.id == CreditsLedger.user_id,
+    ).outerjoin(
+        admin_user,
+        admin_user.id == CreditsLedger.admin_user_id,
     ).order_by(CreditsLedger.created_at.desc())
     if user_id:
         stmt = stmt.where(CreditsLedger.user_id == user_id)
+    if username:
+        stmt = stmt.where(ledger_user.username == username)
     if since:
         stmt = stmt.where(CreditsLedger.created_at >= since)
     stmt = stmt.limit(limit)
@@ -489,18 +519,20 @@ async def ledger(
             {
                 "id": r[0],
                 "user_id": r[1],
-                "kind": r[2],
-                "delta": int(r[3]),
-                "pipeline_run_id": r[4],
-                "checkpoint_id": r[5],
-                "attempt": r[6],
-                "provider": r[7],
-                "model": r[8],
-                "cost_usd": float(r[9]) if r[9] is not None else None,
-                "cost_source": r[10],
-                "note": r[11],
-                "admin_user_id": r[12],
-                "created_at": r[13].isoformat() if r[13] else None,
+                "user_username": r[2],
+                "kind": r[3],
+                "delta": int(r[4]),
+                "pipeline_run_id": r[5],
+                "checkpoint_id": r[6],
+                "attempt": r[7],
+                "provider": r[8],
+                "model": r[9],
+                "cost_usd": float(r[10]) if r[10] is not None else None,
+                "cost_source": r[11],
+                "note": r[12],
+                "admin_user_id": r[13],
+                "admin_username": r[14],
+                "created_at": r[15].isoformat() if r[15] else None,
             }
         )
     return out

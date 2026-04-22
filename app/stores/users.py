@@ -26,6 +26,13 @@ async def get_user_by_id(session: AsyncSession, user_id: str) -> User | None:
     return await session.get(User, user_id)
 
 
+async def get_user_by_username(session: AsyncSession, username: str) -> User | None:
+    result = await session.execute(
+        select(User).where(User.username == username, User.is_active.is_(True))
+    )
+    return result.scalar_one_or_none()
+
+
 async def list_users(session: AsyncSession) -> list[User]:
     result = await session.execute(
         select(User).where(User.is_active.is_(True)).order_by(User.username)

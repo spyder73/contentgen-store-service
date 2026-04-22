@@ -102,9 +102,10 @@ class CreditsReleaseBody(BaseModel):
 
 
 class CreditsGrantBody(BaseModel):
-    user_id: str
+    user_id: str | None = None
+    username: str | None = None
     amount_credits: int
-    note: str
+    note: str = ""
 
 
 def _credits_error_response(err: credits.CreditsError) -> JSONResponse:
@@ -625,11 +626,16 @@ def create_fastapi_app() -> FastAPI:
         admin_id = _require_user_id(request)
         if not await credits.is_admin(session, admin_id):
             raise HTTPException(status_code=403, detail="not_admin")
+        target_user_id = (body.user_id or "").strip() or None
+        target_username = (body.username or "").strip().lstrip("@") or None
+        if not target_user_id and not target_username:
+            raise HTTPException(status_code=400, detail="user_id_or_username_required")
         try:
             return await credits.grant(
                 session,
                 admin_user_id=admin_id,
-                target_user_id=body.user_id,
+                target_user_id=target_user_id,
+                target_username=target_username,
                 amount=body.amount_credits,
                 note=body.note,
             )
@@ -641,13 +647,15 @@ def create_fastapi_app() -> FastAPI:
         request: Request,
         session: SessionDep,
         user_id: str | None = Query(None),
+        username: str | None = Query(None),
         since: str | None = Query(None),
         limit: int = Query(100, ge=1, le=500),
     ) -> Any:
         admin_id = _require_user_id(request)
         if not await credits.is_admin(session, admin_id):
             raise HTTPException(status_code=403, detail="not_admin")
-        return await credits.ledger(session, user_id=user_id, since=since, limit=limit)
+        username = username.strip().lstrip("@") if username else None
+        return await credits.ledger(session, user_id=user_id, username=username, since=since, limit=limit)
 
     # ── error handler ────────────────────────────────────────────────────────
 
