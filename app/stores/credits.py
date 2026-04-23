@@ -10,6 +10,7 @@ refuses to boot if they disagree.
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Optional
@@ -23,15 +24,25 @@ from ..models import CreditsLedger, User
 from . import users
 
 
-MARKUP = Decimal("1.7")
+MARKUP = Decimal(os.getenv("MARKUP", "1.7"))
+CREDITS_PER_USD = Decimal(os.getenv("CREDITS_PER_USD", "100"))
 
 
 def usd_to_credits(actual_cost_usd: Decimal | float | str) -> int:
     """1 credit = $0.01; always ceil after markup so the platform never loses cents."""
     usd = Decimal(str(actual_cost_usd))
-    raw = usd * Decimal(100) * MARKUP
+    raw = usd * CREDITS_PER_USD * MARKUP
     # ceil via math (Decimal rounding would work too, but math.ceil on float is adequate here)
     return int(math.ceil(float(raw)))
+
+
+def credits_to_usd(credits: int) -> Decimal:
+    if credits <= 0:
+        return Decimal("0")
+    denominator = CREDITS_PER_USD * MARKUP
+    if denominator <= 0:
+        return Decimal("0")
+    return Decimal(credits) / denominator
 
 
 @dataclass
@@ -224,7 +235,16 @@ async def settle(
     if hold is None:
         raise CreditsError("no_matching_hold")
 
-    actual_credits = usd_to_credits(actual_cost_usd)
+    actual_cost_decimal = Decimal(str(actual_cost_usd))
+    actual_credits = usd_to_credits(actual_cost_decimal)
+    resolved_cost_source = (cost_source or "").strip() or None
+    if actual_credits <= 0:
+        # Missing provider telemetry: settle using the held estimate so the
+        # checkpoint is never free while still preserving idempotent accounting.
+        actual_credits = hold
+        actual_cost_decimal = credits_to_usd(actual_credits)
+        if resolved_cost_source is None:
+            resolved_cost_source = "registry_estimate"
     bv = await get_balance(session, user_id)
     if bv is None:
         raise CreditsError("user_not_found")
@@ -292,8 +312,8 @@ async def settle(
             attempt=attempt,
             provider=provider,
             model=model,
-            cost_usd=Decimal(str(actual_cost_usd)),
-            cost_source=cost_source,
+            cost_usd=actual_cost_decimal,
+            cost_source=resolved_cost_source,
             idempotency_key=idempotency_key,
         )
     )
