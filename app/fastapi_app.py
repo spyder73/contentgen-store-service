@@ -173,48 +173,70 @@ def create_fastapi_app() -> FastAPI:
     # ── pipeline templates ──────────────────────────────────────────────────
 
     @app.get("/v1/pipelines", response_model=list[PipelineTemplateOut])
-    async def list_pipelines_handler(session: SessionDep) -> Any:
-        return await pipelines.list_pipelines(session)
+    async def list_pipelines_handler(request: Request, session: SessionDep) -> Any:
+        user_id = _get_user_id(request)
+        return await pipelines.list_pipelines(session, user_id=user_id)
 
     @app.get("/v1/pipelines/{id}", response_model=PipelineTemplateOut)
-    async def get_pipeline_handler(id: str, session: SessionDep) -> Any:
-        row = await pipelines.get_pipeline(session, id)
+    async def get_pipeline_handler(id: str, request: Request, session: SessionDep) -> Any:
+        user_id = _require_user_id(request)
+        row = await pipelines.get_pipeline(session, id, user_id=user_id)
         if row is None:
             raise HTTPException(status_code=404, detail="not_found")
         return row
 
     @app.put("/v1/pipelines/{id}", response_model=PipelineTemplateOut)
-    async def upsert_pipeline_handler(id: str, body: PipelineTemplateIn, session: SessionDep) -> Any:
+    async def upsert_pipeline_handler(id: str, body: PipelineTemplateIn, request: Request, session: SessionDep) -> Any:
+        user_id = _require_user_id(request)
         body.id = id
-        return await pipelines.upsert_pipeline(session, body)
+        return await pipelines.upsert_pipeline(session, body, user_id=user_id)
 
     @app.delete("/v1/pipelines/{id}", status_code=204)
-    async def delete_pipeline_handler(id: str, session: SessionDep) -> None:
-        deleted = await pipelines.delete_pipeline(session, id)
+    async def delete_pipeline_handler(id: str, request: Request, session: SessionDep) -> None:
+        user_id = _require_user_id(request)
+        deleted = await pipelines.delete_pipeline(session, id, user_id=user_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="not_found")
 
     # ── prompt templates ────────────────────────────────────────────────────
 
     @app.get("/v1/prompts", response_model=list[PromptTemplateOut])
-    async def list_prompts_handler(session: SessionDep) -> Any:
-        return await prompts.list_prompts(session)
+    async def list_prompts_handler(request: Request, session: SessionDep) -> Any:
+        user_id = _get_user_id(request)
+        return await prompts.list_prompts(session, user_id=user_id)
 
     @app.get("/v1/prompts/{id}", response_model=PromptTemplateOut)
-    async def get_prompt_handler(id: str, session: SessionDep) -> Any:
-        row = await prompts.get_prompt(session, id)
+    async def get_prompt_handler(id: str, request: Request, session: SessionDep) -> Any:
+        user_id = _require_user_id(request)
+        row = await prompts.get_prompt(session, id, user_id=user_id)
         if row is None:
             raise HTTPException(status_code=404, detail="not_found")
         return row
 
     @app.put("/v1/prompts/{id}", response_model=PromptTemplateOut)
-    async def upsert_prompt_handler(id: str, body: PromptTemplateIn, session: SessionDep) -> Any:
+    async def upsert_prompt_handler(id: str, body: PromptTemplateIn, request: Request, session: SessionDep) -> Any:
+        user_id = _require_user_id(request)
         body.id = id
-        return await prompts.upsert_prompt(session, body)
+        return await prompts.upsert_prompt(session, body, user_id=user_id)
 
     @app.delete("/v1/prompts/{id}", status_code=204)
-    async def delete_prompt_handler(id: str, session: SessionDep) -> None:
-        deleted = await prompts.delete_prompt(session, id)
+    async def delete_prompt_handler(id: str, request: Request, session: SessionDep) -> None:
+        user_id = _require_user_id(request)
+        deleted = await prompts.delete_prompt(session, id, user_id=user_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
+
+    @app.put("/v1/prompts/{id}", response_model=PromptTemplateOut)
+    async def upsert_prompt_handler(id: str, body: PromptTemplateIn, request: Request, session: SessionDep) -> Any:
+        user_id = _require_user_id(request)
+        body.id = id
+        return await prompts.upsert_prompt(session, body, user_id=user_id)
+
+    @app.delete("/v1/prompts/{id}", status_code=204)
+    async def delete_prompt_handler(id: str, request: Request, session: SessionDep) -> None:
+        user_id = _require_user_id(request)
+        deleted = await prompts.delete_prompt(session, id, user_id=user_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="not_found")
 

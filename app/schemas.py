@@ -13,6 +13,7 @@ class PipelineTemplateOut(BaseModel):
     name: str
     data: dict[str, Any]
     version: int
+    user_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -22,6 +23,7 @@ class PipelineTemplateIn(BaseModel):
     name: str
     data: dict[str, Any]
     version: int = 1
+    user_id: str | None = None
 
 
 class PromptTemplateOut(BaseModel):
@@ -31,6 +33,7 @@ class PromptTemplateOut(BaseModel):
     name: str
     content: str
     metadata: dict[str, Any] = {}
+    user_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -41,6 +44,7 @@ class PromptTemplateOut(BaseModel):
             name=row.name,
             content=row.content,
             metadata=row.metadata_ or {},
+            user_id=row.user_id,
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
@@ -51,6 +55,7 @@ class PromptTemplateIn(BaseModel):
     name: str
     content: str
     metadata: dict[str, Any] = {}
+    user_id: str | None = None
 
 
 class ClipPromptOut(BaseModel):

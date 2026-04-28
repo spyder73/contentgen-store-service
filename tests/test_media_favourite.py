@@ -73,6 +73,11 @@ class TestMediaItemOutSchema:
         row.metadata_ = {}
         row.output_spec = None
         row.is_favourite = True
+        row.name = "test-media"
+        row.pipeline_run_id = None
+        row.scene_id = None
+        row.parent_media_id = None
+        row.role = None
         row.created_at = datetime.now(timezone.utc)
         row.updated_at = datetime.now(timezone.utc)
 
@@ -90,6 +95,11 @@ class TestMediaItemOutSchema:
         row.metadata_ = {}
         row.output_spec = None
         row.is_favourite = None
+        row.name = "test-media"
+        row.pipeline_run_id = None
+        row.scene_id = None
+        row.parent_media_id = None
+        row.role = None
         row.created_at = datetime.now(timezone.utc)
         row.updated_at = datetime.now(timezone.utc)
 
