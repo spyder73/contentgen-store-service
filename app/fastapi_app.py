@@ -276,10 +276,11 @@ def create_fastapi_app() -> FastAPI:
         page: int = Query(1, ge=1),
         limit: int = Query(50, ge=1, le=200),
         finished_only: bool = Query(False),
+        search: str | None = Query(None),
     ) -> Any:
         user_id = _require_user_id(request)
         return await clips.list_clip_summaries(
-            session, page=page, limit=limit, finished_only=finished_only, user_id=user_id
+            session, page=page, limit=limit, finished_only=finished_only, user_id=user_id, search=search
         )
 
     @app.get("/v1/clips/{id}", response_model=ClipPromptOut)

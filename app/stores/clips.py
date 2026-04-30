@@ -47,11 +47,14 @@ async def list_clip_summaries(
     page: int = 1,
     limit: int = 50,
     finished_only: bool = False,
+    search: str | None = None,
 ) -> PagedResponse:
     offset = (page - 1) * limit
     where = [_user_filter(user_id)]
     if finished_only:
         where.append(ClipPrompt.finished_at.isnot(None))
+    if search:
+        where.append(ClipPrompt.name.ilike(f"%{search}%"))
     count_query = select(func.count()).select_from(ClipPrompt)
     query = select(ClipPrompt)
     for w in where:
