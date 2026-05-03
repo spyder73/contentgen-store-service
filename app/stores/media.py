@@ -17,6 +17,7 @@ async def list_media(
     pipeline_run_id: str | None = None,
     scene_id: str | None = None,
     role: str | None = None,
+    source: str | None = None,
     page: int = 1,
     limit: int = 50,
     user_id: str | None = None,
@@ -54,6 +55,11 @@ async def list_media(
     if role:
         query = query.where(MediaItem.role == role)
         count_query = count_query.where(MediaItem.role == role)
+
+    if source:
+        filter_expr = MediaItem.metadata_["source"].astext == source
+        query = query.where(filter_expr)
+        count_query = count_query.where(filter_expr)
 
     count_result = await session.execute(count_query)
     total = count_result.scalar_one()
