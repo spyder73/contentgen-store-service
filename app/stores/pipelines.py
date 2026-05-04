@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import PipelineTemplate, PipelineTemplateAssignment, User
@@ -43,7 +43,7 @@ async def list_pipelines(session: AsyncSession, user_id: str | None = None, admi
             or_(
                 PipelineTemplate.user_id == user_id,
                 PipelineTemplate.visibility == "global",
-                PipelineTemplate.id.in_(assigned),
+                and_(PipelineTemplate.visibility == "assigned", PipelineTemplate.id.in_(assigned)),
             )
         )
     elif not admin and user_id is not None:
@@ -61,7 +61,7 @@ async def get_pipeline(session: AsyncSession, id: str, user_id: str | None = Non
         return await _out(session, row)
     if row.user_id == user_id or row.visibility == "global":
         return await _out(session, row)
-    if user_id:
+    if user_id and row.visibility == "assigned":
         assigned = await session.get(PipelineTemplateAssignment, {"template_id": id, "user_id": user_id})
         if assigned is not None:
             return await _out(session, row)
@@ -94,7 +94,12 @@ async def upsert_pipeline(
         row.user_id = user_id
     await session.flush()
     if admin:
-        await set_pipeline_assignments(session, body.id, body.assigned_user_ids, commit=False)
+        await set_pipeline_assignments(
+            session,
+            body.id,
+            body.assigned_user_ids if row.visibility == "assigned" else [],
+            commit=False,
+        )
     await session.commit()
     await session.refresh(row)
     return await _out(session, row)
@@ -118,6 +123,8 @@ async def set_pipeline_visibility(session: AsyncSession, id: str, visibility: st
     if row is None:
         return None
     row.visibility = visibility
+    if visibility != "assigned":
+        await session.execute(delete(PipelineTemplateAssignment).where(PipelineTemplateAssignment.template_id == id))
     await session.commit()
     await session.refresh(row)
     return await _out(session, row)
@@ -134,6 +141,7 @@ async def set_pipeline_assignments(
     if row is None:
         return None
     normalized = sorted({u.strip() for u in user_ids if u and u.strip()})
+    row.visibility = "assigned" if normalized else "private"
     await session.execute(delete(PipelineTemplateAssignment).where(PipelineTemplateAssignment.template_id == id))
     for uid in normalized:
         session.add(PipelineTemplateAssignment(template_id=id, user_id=uid))

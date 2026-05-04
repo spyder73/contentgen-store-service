@@ -83,7 +83,7 @@ async def set_feature(session: AsyncSession, feature_key: str, whitelist_enabled
 
 async def set_user_features(session: AsyncSession, user_id: str, feature_keys: list[str]) -> list[AccessFeatureOut]:
     await ensure_defaults(session)
-    normalized = sorted({key.strip() for key in feature_keys if key and key.strip() and key.strip() != "studio"})
+    normalized = sorted({key.strip() for key in feature_keys if key and key.strip()})
     await session.execute(delete(AccessFeatureUser).where(AccessFeatureUser.user_id == user_id))
     for feature_key in normalized:
         if await session.get(AccessFeature, feature_key) is None:
@@ -105,17 +105,13 @@ async def get_user_access(session: AsyncSession, user_id: str) -> UserAccessOut 
     else:
         allowed = []
         for feature in features:
-            if feature.feature_key == "studio":
-                allowed.append(feature.feature_key)
-            elif not feature.whitelist_enabled or user_id in feature.user_ids:
+            if not feature.whitelist_enabled or user_id in feature.user_ids:
                 allowed.append(feature.feature_key)
     visible_tabs = [
         tab
         for tab, feature_key in TAB_FEATURES.items()
         if feature_key in allowed or (tab == "admin" and user.is_admin)
     ]
-    if "studio" not in visible_tabs:
-        visible_tabs.insert(0, "studio")
     return UserAccessOut(
         user_id=user_id,
         is_admin=bool(user.is_admin),
