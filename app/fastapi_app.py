@@ -25,8 +25,12 @@ from .schemas import (
     MediaItemOut,
     MediaStatsOut,
     PagedResponse,
+    AccessFeatureOut,
+    AccessFeaturePatch,
+    PipelineAssignmentsUpdate,
     PipelineTemplateIn,
     PipelineTemplateOut,
+    PipelineVisibilityUpdate,
     PromptTemplateIn,
     PromptTemplateOut,
     RenameMediaBody,
@@ -34,10 +38,14 @@ from .schemas import (
     SeriesOut,
     SwapClipMediaBody,
     ToggleFavouriteBody,
+    UserAccessOut,
+    UserFeatureUpdate,
+    UserOut,
     VoiceSnippetOut,
 )
 
 from .stores import (
+    access,
     characters,
     clips,
     credits,
@@ -169,6 +177,16 @@ def create_fastapi_app() -> FastAPI:
         if user is None:
             raise HTTPException(status_code=401, detail="invalid_credentials")
         return {"user_id": user.id, "username": user.username, "display_name": user.display_name}
+
+    # ── access control ──────────────────────────────────────────────────────
+
+    @app.get("/v1/me/access", response_model=UserAccessOut)
+    async def get_my_access_handler(request: Request, session: SessionDep) -> Any:
+        user_id = _require_user_id(request)
+        row = await access.get_user_access(session, user_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="user_not_found")
+        return row
 
     # ── pipeline templates ──────────────────────────────────────────────────
 
@@ -681,6 +699,116 @@ def create_fastapi_app() -> FastAPI:
             raise HTTPException(status_code=403, detail="not_admin")
         username = username.strip().lstrip("@") if username else None
         return await credits.ledger(session, user_id=user_id, username=username, since=since, limit=limit)
+
+    # ── internal admin: users, access, templates ────────────────────────────
+
+    @app.get("/v1/internal/admin/users", response_model=list[UserOut])
+    async def admin_users_handler(request: Request, session: SessionDep) -> Any:
+        admin_id = _require_user_id(request)
+        if not await credits.is_admin(session, admin_id):
+            raise HTTPException(status_code=403, detail="not_admin")
+        return await users.list_users(session)
+
+    @app.get("/v1/internal/admin/access/features", response_model=list[AccessFeatureOut])
+    async def admin_access_features_handler(request: Request, session: SessionDep) -> Any:
+        admin_id = _require_user_id(request)
+        if not await credits.is_admin(session, admin_id):
+            raise HTTPException(status_code=403, detail="not_admin")
+        return await access.list_features(session)
+
+    @app.patch("/v1/internal/admin/access/features/{feature_key}", response_model=AccessFeatureOut)
+    async def admin_patch_access_feature_handler(
+        feature_key: str,
+        body: AccessFeaturePatch,
+        request: Request,
+        session: SessionDep,
+    ) -> Any:
+        admin_id = _require_user_id(request)
+        if not await credits.is_admin(session, admin_id):
+            raise HTTPException(status_code=403, detail="not_admin")
+        return await access.set_feature(session, feature_key, body.whitelist_enabled)
+
+    @app.put("/v1/internal/admin/access/users/{user_id}/features", response_model=list[AccessFeatureOut])
+    async def admin_set_user_features_handler(
+        user_id: str,
+        body: UserFeatureUpdate,
+        request: Request,
+        session: SessionDep,
+    ) -> Any:
+        admin_id = _require_user_id(request)
+        if not await credits.is_admin(session, admin_id):
+            raise HTTPException(status_code=403, detail="not_admin")
+        return await access.set_user_features(session, user_id, body.feature_keys)
+
+    @app.get("/v1/internal/admin/pipelines", response_model=list[PipelineTemplateOut])
+    async def admin_list_pipelines_handler(request: Request, session: SessionDep) -> Any:
+        admin_id = _require_user_id(request)
+        if not await credits.is_admin(session, admin_id):
+            raise HTTPException(status_code=403, detail="not_admin")
+        return await pipelines.list_pipelines(session, user_id=admin_id, admin=True)
+
+    @app.put("/v1/internal/admin/pipelines/{id}", response_model=PipelineTemplateOut)
+    async def admin_upsert_pipeline_handler(
+        id: str,
+        body: PipelineTemplateIn,
+        request: Request,
+        session: SessionDep,
+    ) -> Any:
+        admin_id = _require_user_id(request)
+        if not await credits.is_admin(session, admin_id):
+            raise HTTPException(status_code=403, detail="not_admin")
+        body.id = id
+        return await pipelines.upsert_pipeline(session, body, user_id=admin_id, admin=True)
+
+    @app.patch("/v1/internal/admin/pipelines/{id}/visibility", response_model=PipelineTemplateOut)
+    async def admin_pipeline_visibility_handler(
+        id: str,
+        body: PipelineVisibilityUpdate,
+        request: Request,
+        session: SessionDep,
+    ) -> Any:
+        admin_id = _require_user_id(request)
+        if not await credits.is_admin(session, admin_id):
+            raise HTTPException(status_code=403, detail="not_admin")
+        row = await pipelines.set_pipeline_visibility(session, id, body.visibility)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
+
+    @app.put("/v1/internal/admin/pipelines/{id}/assignments", response_model=PipelineTemplateOut)
+    async def admin_pipeline_assignments_handler(
+        id: str,
+        body: PipelineAssignmentsUpdate,
+        request: Request,
+        session: SessionDep,
+    ) -> Any:
+        admin_id = _require_user_id(request)
+        if not await credits.is_admin(session, admin_id):
+            raise HTTPException(status_code=403, detail="not_admin")
+        row = await pipelines.set_pipeline_assignments(session, id, body.user_ids)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
+
+    @app.get("/v1/internal/admin/prompts", response_model=list[PromptTemplateOut])
+    async def admin_list_prompts_handler(request: Request, session: SessionDep) -> Any:
+        admin_id = _require_user_id(request)
+        if not await credits.is_admin(session, admin_id):
+            raise HTTPException(status_code=403, detail="not_admin")
+        return await prompts.list_prompts(session, user_id=admin_id, admin=True)
+
+    @app.put("/v1/internal/admin/prompts/{id}", response_model=PromptTemplateOut)
+    async def admin_upsert_prompt_handler(
+        id: str,
+        body: PromptTemplateIn,
+        request: Request,
+        session: SessionDep,
+    ) -> Any:
+        admin_id = _require_user_id(request)
+        if not await credits.is_admin(session, admin_id):
+            raise HTTPException(status_code=403, detail="not_admin")
+        body.id = id
+        return await prompts.upsert_prompt(session, body, user_id=admin_id, admin=True)
 
     # ── error handler ────────────────────────────────────────────────────────
 

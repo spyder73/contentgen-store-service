@@ -14,6 +14,8 @@ class PipelineTemplateOut(BaseModel):
     data: dict[str, Any]
     version: int
     user_id: str | None = None
+    visibility: str = "private"
+    assigned_user_ids: list[str] = []
     created_at: datetime
     updated_at: datetime
 
@@ -24,6 +26,8 @@ class PipelineTemplateIn(BaseModel):
     data: dict[str, Any]
     version: int = 1
     user_id: str | None = None
+    visibility: str = "private"
+    assigned_user_ids: list[str] = []
 
 
 class PromptTemplateOut(BaseModel):
@@ -34,6 +38,7 @@ class PromptTemplateOut(BaseModel):
     content: str
     metadata: dict[str, Any] = {}
     user_id: str | None = None
+    visibility: str = "private"
     created_at: datetime
     updated_at: datetime
 
@@ -45,6 +50,7 @@ class PromptTemplateOut(BaseModel):
             content=row.content,
             metadata=row.metadata_ or {},
             user_id=row.user_id,
+            visibility=getattr(row, "visibility", "private") or "private",
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
@@ -56,6 +62,47 @@ class PromptTemplateIn(BaseModel):
     content: str
     metadata: dict[str, Any] = {}
     user_id: str | None = None
+    visibility: str = "private"
+
+
+class UserOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    username: str
+    display_name: str = ""
+    is_active: bool = True
+    is_admin: bool = False
+    created_at: datetime
+
+
+class AccessFeatureOut(BaseModel):
+    feature_key: str
+    whitelist_enabled: bool
+    user_ids: list[str] = []
+
+
+class UserAccessOut(BaseModel):
+    user_id: str
+    is_admin: bool = False
+    allowed_features: list[str] = []
+    visible_tabs: list[str] = []
+
+
+class AccessFeaturePatch(BaseModel):
+    whitelist_enabled: bool
+
+
+class UserFeatureUpdate(BaseModel):
+    feature_keys: list[str]
+
+
+class PipelineAssignmentsUpdate(BaseModel):
+    user_ids: list[str]
+
+
+class PipelineVisibilityUpdate(BaseModel):
+    visibility: str
 
 
 class ClipPromptOut(BaseModel):
