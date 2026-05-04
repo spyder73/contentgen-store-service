@@ -790,6 +790,15 @@ def create_fastapi_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="not_found")
         return row
 
+    @app.delete("/v1/internal/admin/pipelines/{id}", status_code=204)
+    async def admin_delete_pipeline_handler(id: str, request: Request, session: SessionDep) -> None:
+        admin_id = _require_user_id(request)
+        if not await credits.is_admin(session, admin_id):
+            raise HTTPException(status_code=403, detail="not_admin")
+        deleted = await pipelines.delete_pipeline(session, id, user_id=admin_id, admin=True)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="not_found")
+
     @app.get("/v1/internal/admin/prompts", response_model=list[PromptTemplateOut])
     async def admin_list_prompts_handler(request: Request, session: SessionDep) -> Any:
         admin_id = _require_user_id(request)
