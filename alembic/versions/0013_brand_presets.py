@@ -8,7 +8,7 @@ from sqlalchemy.dialects import postgresql
 
 
 revision = "0013_brand_presets"
-down_revision = "0012_access_control"
+down_revision = "0012"
 branch_labels = None
 depends_on = None
 
