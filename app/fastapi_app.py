@@ -13,6 +13,9 @@ from pydantic import BaseModel
 from .db import get_session
 from .logging_config import new_request_id, set_request_id, set_user_id
 from .schemas import (
+    BrandPresetIn,
+    BrandPresetOut,
+    BrandPresetPatch,
     CharacterIn,
     CharacterOut,
     ClipFullOut,
@@ -46,6 +49,7 @@ from .schemas import (
 
 from .stores import (
     access,
+    brand_presets,
     characters,
     clips,
     credits,
@@ -255,6 +259,45 @@ def create_fastapi_app() -> FastAPI:
     async def delete_prompt_handler(id: str, request: Request, session: SessionDep) -> None:
         user_id = _require_user_id(request)
         deleted = await prompts.delete_prompt(session, id, user_id=user_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="not_found")
+
+    # ── brand presets ───────────────────────────────────────────────────────
+
+    @app.get("/v1/brand-presets", response_model=list[BrandPresetOut])
+    async def list_brand_presets_handler(
+        request: Request,
+        session: SessionDep,
+        clip_style: str | None = Query(None),
+    ) -> Any:
+        user_id = _require_user_id(request)
+        return await brand_presets.list_brand_presets(session, user_id=user_id, clip_style=clip_style)
+
+    @app.post("/v1/brand-presets", response_model=BrandPresetOut)
+    async def create_brand_preset_handler(
+        body: BrandPresetIn, request: Request, session: SessionDep
+    ) -> Any:
+        user_id = _require_user_id(request)
+        if not body.clip_style.strip():
+            raise HTTPException(status_code=400, detail="clip_style_required")
+        if not body.name.strip():
+            raise HTTPException(status_code=400, detail="name_required")
+        return await brand_presets.create_brand_preset(session, body, user_id=user_id)
+
+    @app.patch("/v1/brand-presets/{id}", response_model=BrandPresetOut)
+    async def update_brand_preset_handler(
+        id: str, body: BrandPresetPatch, request: Request, session: SessionDep
+    ) -> Any:
+        user_id = _require_user_id(request)
+        row = await brand_presets.update_brand_preset(session, id, body, user_id=user_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
+
+    @app.delete("/v1/brand-presets/{id}", status_code=204)
+    async def delete_brand_preset_handler(id: str, request: Request, session: SessionDep) -> None:
+        user_id = _require_user_id(request)
+        deleted = await brand_presets.delete_brand_preset(session, id, user_id=user_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="not_found")
 

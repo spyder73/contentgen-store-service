@@ -137,6 +137,32 @@ class PromptTemplate(Base):
     )
 
 
+class BrandPreset(Base):
+    __tablename__ = "brand_presets"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, server_default=func.gen_random_uuid()
+    )
+    user_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    clip_style: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    brand_tag: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    preset_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_brand_presets_user_clip_style", "user_id", "clip_style"),
+        UniqueConstraint("user_id", "clip_style", "name", name="uq_brand_presets_user_style_name"),
+    )
+
+
 class AccessFeature(Base):
     __tablename__ = "access_features"
 

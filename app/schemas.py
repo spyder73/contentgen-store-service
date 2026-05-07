@@ -65,6 +65,45 @@ class PromptTemplateIn(BaseModel):
     visibility: str = "private"
 
 
+class BrandPresetOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    clip_style: str
+    name: str
+    brand_tag: str = ""
+    preset_json: dict[str, Any] = {}
+    user_id: str
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_orm_row(cls, row) -> "BrandPresetOut":
+        return cls(
+            id=row.id,
+            clip_style=row.clip_style,
+            name=row.name,
+            brand_tag=row.brand_tag or "",
+            preset_json=row.preset_json or {},
+            user_id=row.user_id,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+
+
+class BrandPresetIn(BaseModel):
+    clip_style: str
+    name: str
+    brand_tag: str = ""
+    preset_json: dict[str, Any] = {}
+
+
+class BrandPresetPatch(BaseModel):
+    name: str | None = None
+    brand_tag: str | None = None
+    preset_json: dict[str, Any] | None = None
+
+
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
