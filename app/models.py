@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, Numeric, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, Numeric, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -134,6 +134,87 @@ class PromptTemplate(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class RenderTemplate(Base):
+    __tablename__ = "render_templates"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=True
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    kind: Mapped[str] = mapped_column(Text, nullable=False, default="carousel", server_default="carousel")
+    source: Mapped[str] = mapped_column(Text, nullable=False, default="user_saved", server_default="user_saved")
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active", server_default="active")
+    config: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    preview_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_from_clip_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_from_instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "source IN ('builtin','user_saved','agent_generated')",
+            name="render_templates_source_valid",
+        ),
+        CheckConstraint(
+            "status IN ('draft','active','archived')",
+            name="render_templates_status_valid",
+        ),
+        Index("ix_render_templates_user_id", "user_id"),
+        Index("ix_render_templates_kind_status", "kind", "status"),
+    )
+
+
+class RenderProposal(Base):
+    __tablename__ = "render_proposals"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    clip_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    user_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=True
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False, default="carousel_design", server_default="carousel_design")
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="draft", server_default="draft")
+    instruction: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    source_template_id: Mapped[str | None] = mapped_column(
+        Text, ForeignKey("render_templates.id", ondelete="SET NULL"), nullable=True
+    )
+    metadata_patch_json: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    template_config_json: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    preview_output_refs_json: Mapped[dict | list] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    validation_report_json: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft','validated','approved','rejected','failed')",
+            name="render_proposals_status_valid",
+        ),
+        Index("ix_render_proposals_user_id", "user_id"),
+        Index("ix_render_proposals_clip_id", "clip_id"),
+        Index("ix_render_proposals_status", "status"),
     )
 
 

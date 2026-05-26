@@ -34,6 +34,12 @@ from .schemas import (
     PromptTemplateIn,
     PromptTemplateOut,
     RenameMediaBody,
+    RenderProposalIn,
+    RenderProposalOut,
+    RenderProposalStatusPatch,
+    RenderTemplateCloneIn,
+    RenderTemplateIn,
+    RenderTemplateOut,
     SeriesIn,
     SeriesOut,
     SwapClipMediaBody,
@@ -53,6 +59,7 @@ from .stores import (
     media,
     pipelines,
     prompts,
+    render_templates,
     series,
     system_prompts,
     users,
@@ -266,6 +273,121 @@ def create_fastapi_app() -> FastAPI:
         if content is None:
             raise HTTPException(status_code=404, detail="not_found")
         return content
+
+    # ── render templates ────────────────────────────────────────────────────
+
+    @app.get("/v1/render-templates", response_model=list[RenderTemplateOut])
+    async def list_render_templates_handler(
+        request: Request,
+        session: SessionDep,
+        kind: str | None = Query(None),
+        include_archived: bool = Query(False),
+    ) -> Any:
+        user_id = _require_user_id(request)
+        return await render_templates.list_templates(
+            session, user_id=user_id, kind=kind, include_archived=include_archived
+        )
+
+    @app.post("/v1/render-templates", response_model=RenderTemplateOut)
+    async def create_render_template_handler(
+        body: RenderTemplateIn, request: Request, session: SessionDep
+    ) -> Any:
+        user_id = _require_user_id(request)
+        try:
+            return await render_templates.create_template(session, body, user_id=user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.get("/v1/render-templates/{id}", response_model=RenderTemplateOut)
+    async def get_render_template_handler(id: str, request: Request, session: SessionDep) -> Any:
+        user_id = _require_user_id(request)
+        row = await render_templates.get_template(session, id, user_id=user_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
+
+    @app.put("/v1/render-templates/{id}", response_model=RenderTemplateOut)
+    async def update_render_template_handler(
+        id: str, body: RenderTemplateIn, request: Request, session: SessionDep
+    ) -> Any:
+        user_id = _require_user_id(request)
+        try:
+            row = await render_templates.update_template(session, id, body, user_id=user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
+
+    @app.delete("/v1/render-templates/{id}", status_code=204)
+    async def delete_render_template_handler(id: str, request: Request, session: SessionDep) -> None:
+        user_id = _require_user_id(request)
+        archived = await render_templates.archive_template(session, id, user_id=user_id)
+        if not archived:
+            raise HTTPException(status_code=404, detail="not_found")
+
+    @app.post("/v1/render-templates/{id}/clone", response_model=RenderTemplateOut)
+    async def clone_render_template_handler(
+        id: str,
+        request: Request,
+        session: SessionDep,
+        body: RenderTemplateCloneIn | None = None,
+    ) -> Any:
+        user_id = _require_user_id(request)
+        row = await render_templates.clone_template(
+            session, id, body or RenderTemplateCloneIn(), user_id=user_id
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
+
+    # ── render proposals ────────────────────────────────────────────────────
+
+    @app.post("/v1/render-proposals", response_model=RenderProposalOut)
+    async def create_render_proposal_handler(
+        body: RenderProposalIn, request: Request, session: SessionDep
+    ) -> Any:
+        user_id = _require_user_id(request)
+        try:
+            return await render_templates.create_proposal(session, body, user_id=user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.get("/v1/render-proposals", response_model=list[RenderProposalOut])
+    async def list_render_proposals_handler(
+        request: Request,
+        session: SessionDep,
+        clip_id: str | None = Query(None),
+    ) -> Any:
+        user_id = _require_user_id(request)
+        return await render_templates.list_proposals(session, user_id=user_id, clip_id=clip_id)
+
+    @app.get("/v1/render-proposals/{id}", response_model=RenderProposalOut)
+    async def get_render_proposal_handler(id: str, request: Request, session: SessionDep) -> Any:
+        user_id = _require_user_id(request)
+        row = await render_templates.get_proposal(session, id, user_id=user_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
+
+    @app.patch("/v1/render-proposals/{id}/status", response_model=RenderProposalOut)
+    async def patch_render_proposal_status_handler(
+        id: str, body: RenderProposalStatusPatch, request: Request, session: SessionDep
+    ) -> Any:
+        user_id = _require_user_id(request)
+        try:
+            row = await render_templates.set_proposal_status(
+                session,
+                id,
+                body.status,
+                user_id=user_id,
+                validation_report_json=body.validation_report_json,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
 
     @app.put("/v1/system-prompts/{id}", response_model=str)
     async def upsert_system_prompt_handler(id: str, body: dict, session: SessionDep) -> Any:

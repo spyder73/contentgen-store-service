@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PipelineTemplateOut(BaseModel):
@@ -63,6 +63,78 @@ class PromptTemplateIn(BaseModel):
     metadata: dict[str, Any] = {}
     user_id: str | None = None
     visibility: str = "private"
+
+
+class RenderTemplateOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_id: str | None = None
+    name: str
+    description: str = ""
+    kind: str = "carousel"
+    source: str = "user_saved"
+    status: str = "active"
+    config: dict[str, Any] = Field(default_factory=dict)
+    preview_url: str | None = None
+    created_from_clip_id: str | None = None
+    created_from_instruction: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class RenderTemplateIn(BaseModel):
+    id: str | None = None
+    name: str
+    description: str = ""
+    kind: str = "carousel"
+    source: str = "user_saved"
+    status: str = "active"
+    config: dict[str, Any] = Field(default_factory=dict)
+    preview_url: str | None = None
+    created_from_clip_id: str | None = None
+    created_from_instruction: str | None = None
+
+
+class RenderTemplateCloneIn(BaseModel):
+    id: str | None = None
+    name: str | None = None
+
+
+class RenderProposalOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    clip_id: str | None = None
+    user_id: str | None = None
+    kind: str = "carousel_design"
+    status: str = "draft"
+    instruction: str = ""
+    source_template_id: str | None = None
+    metadata_patch_json: dict[str, Any] = Field(default_factory=dict)
+    template_config_json: dict[str, Any] = Field(default_factory=dict)
+    preview_output_refs_json: Any = Field(default_factory=list)
+    validation_report_json: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    approved_at: datetime | None = None
+
+
+class RenderProposalIn(BaseModel):
+    id: str | None = None
+    clip_id: str | None = None
+    kind: str = "carousel_design"
+    status: str = "draft"
+    instruction: str = ""
+    source_template_id: str | None = None
+    metadata_patch_json: dict[str, Any] = Field(default_factory=dict)
+    template_config_json: dict[str, Any] = Field(default_factory=dict)
+    preview_output_refs_json: Any = Field(default_factory=list)
+    validation_report_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class RenderProposalStatusPatch(BaseModel):
+    status: str
+    validation_report_json: dict[str, Any] | None = None
 
 
 class UserOut(BaseModel):

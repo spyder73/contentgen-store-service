@@ -38,6 +38,8 @@ def _keep_secret(monkeypatch):
 SAMPLE_ROUTES = [
     ("get", "/v1/pipelines"),
     ("get", "/v1/prompts"),
+    ("get", "/v1/render-templates"),
+    ("get", "/v1/render-proposals"),
     ("get", "/v1/clips"),
     ("get", "/v1/media"),
     ("get", "/v1/media/stats"),
