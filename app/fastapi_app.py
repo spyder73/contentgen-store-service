@@ -967,6 +967,27 @@ def create_fastapi_app() -> FastAPI:
         body.id = id
         return await prompts.upsert_prompt(session, body, user_id=admin_id, admin=True)
 
+    @app.put("/v1/admin/prompt-templates/{id}", response_model=PromptTemplateOut)
+    async def admin_seed_prompt_template_handler(
+        id: str,
+        body: PromptTemplateIn,
+        session: SessionDep,
+    ) -> Any:
+        """Seed a built-in prompt template if missing.
+
+        Gated by the X-Internal-Secret middleware only (no admin user needed):
+        the Go backend calls this at startup with no user context to ensure its
+        local-asset prompt templates exist in the store. Create-if-missing —
+        an existing row is never overwritten, so user edits to built-ins are
+        preserved. Seeded rows default to global visibility.
+        """
+        body.id = id
+        # Built-ins must resolve for every service/user, so seed them global by
+        # default. The backend never sets visibility on its seed calls.
+        if body.visibility != "global":
+            body.visibility = "global"
+        return await prompts.seed_prompt(session, body)
+
     # ── error handler ────────────────────────────────────────────────────────
 
     @app.exception_handler(Exception)
