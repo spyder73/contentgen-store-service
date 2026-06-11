@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import PipelineRunSnapshot
@@ -28,6 +28,10 @@ async def get_snapshot(session: AsyncSession, id: str) -> PipelineRunSnapshotOut
 async def upsert_snapshot(
     session: AsyncSession, body: PipelineRunSnapshotIn, user_id: str | None = None
 ) -> PipelineRunSnapshotOut:
+    # Trust model: reached only via the internal-secret-gated service-to-service
+    # PUT route; the Go backend always writes the run's own user, so we stamp
+    # user_id on insert and never enforce ownership on update (unlike
+    # upsert_pipeline, which refuses cross-user overwrites for end-user callers).
     row = await session.get(PipelineRunSnapshot, body.id)
     if row is None:
         row = PipelineRunSnapshot(id=body.id)
@@ -39,11 +43,3 @@ async def upsert_snapshot(
     await session.commit()
     await session.refresh(row)
     return PipelineRunSnapshotOut.model_validate(row)
-
-
-async def delete_snapshot(session: AsyncSession, id: str) -> bool:
-    result = await session.execute(
-        delete(PipelineRunSnapshot).where(PipelineRunSnapshot.id == id)
-    )
-    await session.commit()
-    return result.rowcount > 0
