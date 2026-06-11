@@ -382,6 +382,7 @@ class CharacterOut(BaseModel):
     description: str = ""
     voice: str = ""
     reference_image_media_id: str | None = None
+    generator_profile_id: str | None = None
     metadata: dict[str, Any] = {}
     created_at: datetime
     updated_at: datetime
@@ -395,6 +396,7 @@ class CharacterOut(BaseModel):
             description=row.description,
             voice=row.voice,
             reference_image_media_id=row.reference_image_media_id,
+            generator_profile_id=row.generator_profile_id,
             metadata=row.metadata_ or {},
             created_at=row.created_at,
             updated_at=row.updated_at,
@@ -408,6 +410,7 @@ class CharacterIn(BaseModel):
     description: str = ""
     voice: str = ""
     reference_image_media_id: str | None = None
+    generator_profile_id: str | None = None
     metadata: dict[str, Any] = {}
 
 
@@ -475,3 +478,33 @@ class VoiceSnippetOut(BaseModel):
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
+
+
+# ── GeneratorProfile ─────────────────────────────────────────────────────
+
+class GeneratorProfileOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    slug: str
+    version: int
+    status: str
+    user_id: str | None = None
+    name: str
+    media_type: str = "image"
+    spec: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
+class GeneratorProfileCreate(BaseModel):
+    slug: str
+    name: str
+    media_type: str = "image"
+    user_id: str | None = None
+    spec: dict[str, Any] = Field(default_factory=dict)
+
+
+class GeneratorProfileUpdate(BaseModel):
+    name: str | None = None
+    spec: dict[str, Any] | None = None

@@ -22,6 +22,9 @@ from .schemas import (
     ClipSummaryOut,
     EpisodeIn,
     EpisodeOut,
+    GeneratorProfileCreate,
+    GeneratorProfileOut,
+    GeneratorProfileUpdate,
     MediaItemIn,
     MediaItemOut,
     MediaStatsOut,
@@ -59,6 +62,7 @@ from .stores import (
     clips,
     credits,
     episodes,
+    generator_profiles,
     media,
     pipelines,
     prompts,
@@ -718,6 +722,80 @@ def create_fastapi_app() -> FastAPI:
     async def delete_voice_snippet_handler(id: str, session: SessionDep) -> None:
         deleted = await voice_snippets.delete_voice_snippet(session, id)
         if not deleted:
+            raise HTTPException(status_code=404, detail="not_found")
+
+    # ── generator profiles ───────────────────────────────────────────────────
+    # Versioned generator definitions (base model + adapters + prompt + params).
+    # A slug groups versions; a slug holds at most one draft. Publishing freezes
+    # a row (immutable, undeletable); drafts are the only mutable/deletable rows.
+
+    @app.get("/v1/generator-profiles", response_model=list[GeneratorProfileOut])
+    async def list_generator_profiles_handler(
+        session: SessionDep,
+        status: str | None = Query(None),
+        user_id: str | None = Query(None),
+        slug: str | None = Query(None),
+    ) -> Any:
+        return await generator_profiles.list_profiles(
+            session, status=status, user_id=user_id, slug=slug
+        )
+
+    # NOTE: /v1/generator-profiles/by-ref/{ref} must precede /{id}.
+    @app.get("/v1/generator-profiles/by-ref/{ref}", response_model=GeneratorProfileOut)
+    async def get_generator_profile_by_ref_handler(ref: str, session: SessionDep) -> Any:
+        try:
+            row = await generator_profiles.get_profile_by_ref(session, ref)
+        except generator_profiles.GeneratorProfileError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
+
+    @app.get("/v1/generator-profiles/{id}", response_model=GeneratorProfileOut)
+    async def get_generator_profile_handler(id: str, session: SessionDep) -> Any:
+        row = await generator_profiles.get_profile(session, id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
+
+    @app.post("/v1/generator-profiles", response_model=GeneratorProfileOut)
+    async def create_generator_profile_handler(
+        body: GeneratorProfileCreate, session: SessionDep
+    ) -> Any:
+        try:
+            return await generator_profiles.create_profile(session, body)
+        except generator_profiles.GeneratorProfileError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+
+    @app.put("/v1/generator-profiles/{id}", response_model=GeneratorProfileOut)
+    async def update_generator_profile_handler(
+        id: str, body: GeneratorProfileUpdate, session: SessionDep
+    ) -> Any:
+        try:
+            row = await generator_profiles.update_profile(session, id, body)
+        except generator_profiles.GeneratorProfileError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
+
+    @app.post("/v1/generator-profiles/{id}/publish", response_model=GeneratorProfileOut)
+    async def publish_generator_profile_handler(id: str, session: SessionDep) -> Any:
+        try:
+            row = await generator_profiles.publish_profile(session, id)
+        except generator_profiles.GeneratorProfileError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
+
+    @app.delete("/v1/generator-profiles/{id}", status_code=204)
+    async def delete_generator_profile_handler(id: str, session: SessionDep) -> None:
+        try:
+            deleted = await generator_profiles.delete_profile(session, id)
+        except generator_profiles.GeneratorProfileError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+        if deleted is None:
             raise HTTPException(status_code=404, detail="not_found")
 
     # ── credits ──────────────────────────────────────────────────────────────

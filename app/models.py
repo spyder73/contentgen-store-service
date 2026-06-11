@@ -377,6 +377,11 @@ class Character(Base):
         ForeignKey("media_items.id", ondelete="SET NULL"),
         nullable=True,
     )
+    generator_profile_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("generator_profiles.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -387,6 +392,49 @@ class Character(Base):
 
     __table_args__ = (
         Index("ix_characters_series_id", "series_id"),
+    )
+
+
+class GeneratorProfile(Base):
+    """A versioned image/video generator definition (base model + adapters + params).
+
+    A ``slug`` groups versions; ``(slug, version)`` is unique. A slug may hold at
+    most one ``draft`` at a time, plus any number of ``published`` (frozen)
+    versions. Publishing freezes a row; drafts are the only mutable/deletable
+    rows. Characters reference a profile via ``generator_profile_id``.
+    """
+
+    __tablename__ = "generator_profiles"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, server_default=func.gen_random_uuid()
+    )
+    slug: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="draft", server_default="draft")
+    user_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=True
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    media_type: Mapped[str] = mapped_column(Text, nullable=False, default="image", server_default="image")
+    spec: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("slug", "version", name="uq_generator_profiles_slug_version"),
+        CheckConstraint(
+            "status IN ('draft','published')",
+            name="generator_profiles_status_valid",
+        ),
+        Index("ix_generator_profiles_slug_version", "slug", "version", unique=True),
+        Index("ix_generator_profiles_status", "status"),
     )
 
 
