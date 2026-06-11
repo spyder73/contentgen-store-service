@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from .db import get_session
 from .logging_config import new_request_id, set_request_id, set_user_id
+from .migration_state import get_migration_status
 from .schemas import (
     CharacterIn,
     CharacterOut,
@@ -177,7 +178,7 @@ def create_fastapi_app() -> FastAPI:
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
-        return {"status": "ok"}
+        return {"status": "ok", "migrations": get_migration_status()}
 
     # ── auth ────────────────────────────────────────────────────────────────
 
