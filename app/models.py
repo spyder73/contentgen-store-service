@@ -438,3 +438,35 @@ class VoiceSnippet(Base):
     __table_args__ = (
         Index("ix_voice_snippets_character_id", "character_id"),
     )
+
+
+class PipelineRunSnapshot(Base):
+    """Persisted snapshot of a pipeline run so runs survive a backend restart.
+
+    The full run state is serialised into the JSONB ``snapshot`` column by the
+    Go backend; ``status`` is duplicated as a top-level column purely so the
+    backend's rehydration policy can be applied without unmarshalling every
+    snapshot.
+    """
+
+    __tablename__ = "pipeline_run_snapshots"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    snapshot: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_pipeline_run_snapshots_user_id", "user_id"),
+        Index("ix_pipeline_run_snapshots_status", "status"),
+    )

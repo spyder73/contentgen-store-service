@@ -28,6 +28,8 @@ from .schemas import (
     AccessFeatureOut,
     AccessFeaturePatch,
     PipelineAssignmentsUpdate,
+    PipelineRunSnapshotIn,
+    PipelineRunSnapshotOut,
     PipelineTemplateIn,
     PipelineTemplateOut,
     PipelineVisibilityUpdate,
@@ -60,6 +62,7 @@ from .stores import (
     pipelines,
     prompts,
     render_templates,
+    run_snapshots,
     series,
     system_prompts,
     users,
@@ -222,6 +225,29 @@ def create_fastapi_app() -> FastAPI:
         deleted = await pipelines.delete_pipeline(session, id, user_id=user_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="not_found")
+
+    # ── pipeline run snapshots ──────────────────────────────────────────────
+    # Persisted run state so the Go backend can rehydrate runs after a restart
+    # (otherwise the frontend's stored run IDs 404 on regenerate).
+
+    @app.get("/v1/run-snapshots", response_model=list[PipelineRunSnapshotOut])
+    async def list_run_snapshots_handler(request: Request, session: SessionDep) -> Any:
+        user_id = _get_user_id(request)
+        return await run_snapshots.list_snapshots(session, user_id=user_id)
+
+    @app.get("/v1/run-snapshots/{id}", response_model=PipelineRunSnapshotOut)
+    async def get_run_snapshot_handler(id: str, session: SessionDep) -> Any:
+        row = await run_snapshots.get_snapshot(session, id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
+
+    @app.put("/v1/run-snapshots/{id}", response_model=PipelineRunSnapshotOut)
+    async def upsert_run_snapshot_handler(
+        id: str, body: PipelineRunSnapshotIn, request: Request, session: SessionDep
+    ) -> Any:
+        body.id = id
+        return await run_snapshots.upsert_snapshot(session, body, user_id=_get_user_id(request))
 
     # ── prompt templates ────────────────────────────────────────────────────
 

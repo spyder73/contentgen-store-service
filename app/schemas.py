@@ -30,6 +30,23 @@ class PipelineTemplateIn(BaseModel):
     assigned_user_ids: list[str] = []
 
 
+class PipelineRunSnapshotOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_id: str | None = None
+    status: str = ""
+    snapshot: dict[str, Any] = {}
+    created_at: datetime
+    updated_at: datetime
+
+
+class PipelineRunSnapshotIn(BaseModel):
+    id: str
+    status: str = ""
+    snapshot: dict[str, Any] = {}
+
+
 class PromptTemplateOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
