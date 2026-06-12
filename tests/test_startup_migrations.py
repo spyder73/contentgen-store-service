@@ -92,7 +92,57 @@ class TestRunMigrations:
         monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://x:y@nowhere/db")
         calls = []
         with patch.object(app_main, "_database_state", return_value="stamped"), \
+             patch.object(app_main, "_stamped_version", return_value="0014"), \
              patch("alembic.command.stamp", side_effect=lambda cfg, rev: calls.append(("stamp", rev))), \
+             patch("alembic.command.upgrade", side_effect=lambda cfg, rev: calls.append(("upgrade", rev))):
+            set_migration_status("not run")
+            app_main.run_migrations()
+        assert calls == [("upgrade", "head")]
+        assert get_migration_status() == "ok"
+
+    def test_orphaned_known_stamp_is_remapped_before_upgrade(self, monkeypatch):
+        """Production was once stamped '0013_brand_presets'; that migration was
+        later renamed out of the chain, so the stamp must be remapped to its
+        schema-equivalent revision before upgrading."""
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://x:y@nowhere/db")
+        calls = []
+        with patch.object(app_main, "_database_state", return_value="stamped"), \
+             patch.object(app_main, "_stamped_version", return_value="0013_brand_presets"), \
+             patch(
+                 "alembic.command.stamp",
+                 side_effect=lambda cfg, rev, purge=False: calls.append(("stamp", rev, purge)),
+             ), \
+             patch("alembic.command.upgrade", side_effect=lambda cfg, rev: calls.append(("upgrade", rev))):
+            set_migration_status("not run")
+            app_main.run_migrations()
+        assert calls == [("stamp", "0012", True), ("upgrade", "head")]
+        assert get_migration_status() == "ok"
+
+    def test_unknown_unmapped_stamp_fails_soft_without_upgrade(self, monkeypatch):
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://x:y@nowhere/db")
+        calls = []
+        with patch.object(app_main, "_database_state", return_value="stamped"), \
+             patch.object(app_main, "_stamped_version", return_value="deadbeef"), \
+             patch(
+                 "alembic.command.stamp",
+                 side_effect=lambda cfg, rev, purge=False: calls.append(("stamp", rev)),
+             ), \
+             patch("alembic.command.upgrade", side_effect=lambda cfg, rev: calls.append(("upgrade", rev))):
+            set_migration_status("not run")
+            app_main.run_migrations()  # must not raise
+        assert calls == []
+        assert get_migration_status().startswith("failed: unknown alembic stamp 'deadbeef'")
+
+    def test_valid_stamp_passes_validation_and_upgrades(self, monkeypatch):
+        """A resolvable stamped revision must not trigger the remap path."""
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://x:y@nowhere/db")
+        calls = []
+        with patch.object(app_main, "_database_state", return_value="stamped"), \
+             patch.object(app_main, "_stamped_version", return_value="0012"), \
+             patch(
+                 "alembic.command.stamp",
+                 side_effect=lambda cfg, rev, purge=False: calls.append(("stamp", rev)),
+             ), \
              patch("alembic.command.upgrade", side_effect=lambda cfg, rev: calls.append(("upgrade", rev))):
             set_migration_status("not run")
             app_main.run_migrations()

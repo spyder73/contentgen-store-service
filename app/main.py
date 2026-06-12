@@ -22,6 +22,13 @@ _REPO_ROOT = os.path.dirname(_APP_DIR)
 # schema matching this revision.
 _LEGACY_BASELINE = "0013"
 
+# Historical revision ids that were renamed/removed from the migration chain
+# after being stamped on a live database, mapped to the schema-equivalent
+# revision in the current chain. '0013_brand_presets' (down_revision 0012) was
+# stamped on production in May 2026 and later replaced by the plain-numbered
+# chain, leaving the stamp unresolvable.
+_STAMP_REMAP = {"0013_brand_presets": "0012"}
+
 
 def _database_state() -> str:
     """Classify the database: 'stamped' (alembic_version exists), 'legacy'
@@ -46,6 +53,37 @@ def _database_state() -> str:
             await engine.dispose()
 
     return asyncio.run(probe())
+
+
+def _stamped_version() -> str:
+    """Return the revision recorded in alembic_version ('' when absent)."""
+    import asyncio
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    async def probe() -> str:
+        engine = create_async_engine(os.environ["DATABASE_URL"])
+        try:
+            async with engine.connect() as conn:
+                row = (
+                    await conn.execute(text("SELECT version_num FROM alembic_version"))
+                ).first()
+                return row[0] if row else ""
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(probe())
+
+
+def _revision_exists(config, revision: str) -> bool:
+    from alembic.script import ScriptDirectory
+
+    try:
+        ScriptDirectory.from_config(config).get_revision(revision)
+        return True
+    except Exception:  # noqa: BLE001 — unresolvable revision, regardless of error class
+        return False
 
 
 def run_migrations() -> None:
@@ -85,6 +123,26 @@ def run_migrations() -> None:
                 _LEGACY_BASELINE,
             )
             command.stamp(config, _LEGACY_BASELINE)
+        elif state == "stamped":
+            db_rev = _stamped_version()
+            if db_rev and not _revision_exists(config, db_rev):
+                remap = _STAMP_REMAP.get(db_rev)
+                if remap is None:
+                    logger.critical(
+                        "alembic: database stamped with unknown revision %r and no "
+                        "remap is defined — leaving the stamp untouched",
+                        db_rev,
+                    )
+                    set_migration_status(
+                        f"failed: unknown alembic stamp {db_rev!r} (manual repair needed)"
+                    )
+                    return
+                logger.warning(
+                    "alembic: remapping orphaned stamp %s -> %s", db_rev, remap
+                )
+                # purge: the orphaned revision cannot be resolved, so a normal
+                # stamp (which walks from the current head) would fail too.
+                command.stamp(config, remap, purge=True)
 
         logger.info("alembic: upgrading database to head (state=%s)", state)
         command.upgrade(config, "head")
