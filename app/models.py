@@ -338,6 +338,16 @@ class MediaItem(Base):
         Index("ix_media_items_scene_id", "scene_id"),
         Index("ix_media_items_name", "name"),
         Index("ix_media_items_pipeline_scene_type", "pipeline_run_id", "scene_id", "type"),
+        # The library list access pattern: WHERE user_id=? ORDER BY created_at DESC.
+        # Matching the index order to the sort lets Postgres serve the page
+        # without a separate sort step. Created in migration 0016.
+        Index(
+            "ix_media_items_user_created_desc",
+            "user_id",
+            created_at.desc(),
+        ),
+        # Favourites filter: WHERE user_id=? AND is_favourite=?. Created in 0016.
+        Index("ix_media_items_user_favourite", "user_id", "is_favourite"),
     )
 
 

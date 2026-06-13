@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlalchemy import cast, delete, func, select, text, Text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from ..models import MediaItem
 from ..schemas import MediaItemIn, MediaItemOut, MediaStatsOut, PagedResponse
@@ -25,7 +26,15 @@ async def list_media(
     if not user_id:
         raise ValueError("list_media requires user_id")
     offset = (page - 1) * limit
-    query = select(MediaItem).where(MediaItem.user_id == user_id)
+    # Defer the LargeBinary `file_data` BLOB: the list never serializes it
+    # (MediaItemOut excludes it) so reading it per row only amplifies I/O and
+    # TOAST de-toasting. The deferred column is never touched in this path —
+    # MediaItemOut.from_orm_row reads no BLOB — so no lazy-load is triggered.
+    query = (
+        select(MediaItem)
+        .where(MediaItem.user_id == user_id)
+        .options(defer(MediaItem.file_data))
+    )
     count_query = select(func.count()).select_from(MediaItem).where(MediaItem.user_id == user_id)
 
     if clip_id:
