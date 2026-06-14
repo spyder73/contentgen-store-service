@@ -29,6 +29,7 @@ from .schemas import (
     MediaItemOut,
     MediaStatsOut,
     PagedResponse,
+    RelatedMediaOut,
     AccessFeatureOut,
     AccessFeaturePatch,
     PipelineAssignmentsUpdate,
@@ -585,6 +586,15 @@ def create_fastapi_app() -> FastAPI:
             limit=limit,
             user_id=user_id,
         )
+
+    # NOTE: /v1/media/{id}/related must be registered before /v1/media/{id}
+    @app.get("/v1/media/{id}/related", response_model=RelatedMediaOut)
+    async def get_related_media_handler(id: str, request: Request, session: SessionDep) -> Any:
+        user_id = _require_user_id(request)
+        related = await media.get_related_media(session, id, user_id=user_id)
+        if related is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return related
 
     @app.get("/v1/media/{id}", response_model=MediaItemOut)
     async def get_media_handler(id: str, request: Request, session: SessionDep) -> Any:

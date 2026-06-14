@@ -78,6 +78,7 @@ class TestMediaItemOutSchema:
         row.scene_id = None
         row.parent_media_id = None
         row.role = None
+        row.micro_thumbnail = None
         row.created_at = datetime.now(timezone.utc)
         row.updated_at = datetime.now(timezone.utc)
 
@@ -100,6 +101,7 @@ class TestMediaItemOutSchema:
         row.scene_id = None
         row.parent_media_id = None
         row.role = None
+        row.micro_thumbnail = None
         row.created_at = datetime.now(timezone.utc)
         row.updated_at = datetime.now(timezone.utc)
 

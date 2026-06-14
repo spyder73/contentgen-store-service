@@ -5,9 +5,15 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
-from ..derivatives import is_image_content_type, make_thumbnail
+from ..derivatives import is_image_content_type, make_micro_thumbnail, make_thumbnail
 from ..models import MediaItem
-from ..schemas import MediaItemIn, MediaItemOut, MediaStatsOut, PagedResponse
+from ..schemas import (
+    MediaItemIn,
+    MediaItemOut,
+    MediaStatsOut,
+    PagedResponse,
+    RelatedMediaOut,
+)
 
 
 async def list_media(
@@ -99,6 +105,69 @@ async def get_media(
     if row is None:
         return None
     return MediaItemOut.from_orm_row(row)
+
+
+# Cap how many siblings/variations the lineage view returns — the inspector
+# shows a row of thumbnails, not an unbounded gallery.
+_LINEAGE_LIMIT = 24
+
+
+async def get_related_media(
+    session: AsyncSession, id: str, user_id: str | None = None
+) -> RelatedMediaOut | None:
+    """Return the lineage of a media item: its parent, its co-variation siblings
+    (sharing the same ``parent_media_id``), and the variations derived from it
+    (rows whose ``parent_media_id`` points back at it).
+
+    All results are scoped to ``user_id`` and exclude the item itself. Returns
+    None when the item does not exist / is not owned; an item with no lineage
+    yields an empty ``RelatedMediaOut`` (no parent, empty lists). BLOBs are
+    deferred — the inspector renders thumbnails, never the originals.
+    """
+    if not user_id:
+        raise ValueError("get_related_media requires user_id")
+    row = await _get_owned(session, id, user_id)
+    if row is None:
+        return None
+
+    deferred = (defer(MediaItem.file_data), defer(MediaItem.thumbnail_data))
+
+    parent_out: MediaItemOut | None = None
+    siblings: list[MediaItemOut] = []
+    if row.parent_media_id:
+        parent_row = await _get_owned(session, row.parent_media_id, user_id)
+        if parent_row is not None:
+            parent_out = MediaItemOut.from_orm_row(parent_row)
+        # Siblings: same parent, not this item.
+        sib_q = (
+            select(MediaItem)
+            .where(
+                MediaItem.user_id == user_id,
+                MediaItem.parent_media_id == row.parent_media_id,
+                MediaItem.id != id,
+            )
+            .options(*deferred)
+            .order_by(MediaItem.created_at.desc())
+            .limit(_LINEAGE_LIMIT)
+        )
+        sib_res = await session.execute(sib_q)
+        siblings = [MediaItemOut.from_orm_row(r) for r in sib_res.scalars()]
+
+    # Variations: rows whose parent is this item.
+    var_q = (
+        select(MediaItem)
+        .where(
+            MediaItem.user_id == user_id,
+            MediaItem.parent_media_id == id,
+        )
+        .options(*deferred)
+        .order_by(MediaItem.created_at.desc())
+        .limit(_LINEAGE_LIMIT)
+    )
+    var_res = await session.execute(var_q)
+    variations = [MediaItemOut.from_orm_row(r) for r in var_res.scalars()]
+
+    return RelatedMediaOut(parent=parent_out, siblings=siblings, variations=variations)
 
 
 async def upsert_media(
@@ -196,6 +265,11 @@ async def store_file_data(
             # (e.g. already small enough, or a re-upload with a different format).
             row.thumbnail_data = None
             row.thumbnail_content_type = None
+        # The micro-thumb blur-up placeholder is produced even for small images
+        # (it's a placeholder, not a payload optimisation). None → clear it.
+        row.micro_thumbnail = make_micro_thumbnail(data, mime_type)
+    else:
+        row.micro_thumbnail = None
     await session.commit()
     return True
 
@@ -216,14 +290,31 @@ async def get_thumbnail(
     if row is None:
         return None
     if row.thumbnail_data is not None and row.thumbnail_content_type:
+        # Opportunistically backfill the micro-thumb for legacy rows that have a
+        # full thumbnail but predate the 0018 column. Cheap (a few hundred bytes)
+        # and saves the list path from ever needing the BLOB.
+        if row.micro_thumbnail is None and row.file_data is not None:
+            micro = make_micro_thumbnail(row.file_data, row.file_mime_type)
+            if micro is not None:
+                row.micro_thumbnail = micro
+                await session.commit()
         return row.thumbnail_data, row.thumbnail_content_type
     # No derivative yet — attempt lazy backfill from the stored original.
     if row.file_data is None or not is_image_content_type(row.file_mime_type):
         return None
     thumb = make_thumbnail(row.file_data, row.file_mime_type)
     if thumb is None:
+        # Even when no full thumbnail is warranted (image already small enough),
+        # the micro-thumb placeholder is still useful — backfill it lazily.
+        if row.micro_thumbnail is None:
+            micro = make_micro_thumbnail(row.file_data, row.file_mime_type)
+            if micro is not None:
+                row.micro_thumbnail = micro
+                await session.commit()
         return None
     row.thumbnail_data, row.thumbnail_content_type = thumb
+    if row.micro_thumbnail is None:
+        row.micro_thumbnail = make_micro_thumbnail(row.file_data, row.file_mime_type)
     await session.commit()
     return thumb
 

@@ -13,8 +13,10 @@ import pytest
 
 from app import derivatives
 from app.derivatives import (
+    MICRO_THUMBNAIL_MAX_EDGE,
     THUMBNAIL_CONTENT_TYPE,
     is_image_content_type,
+    make_micro_thumbnail,
     make_thumbnail,
 )
 
@@ -121,3 +123,58 @@ class TestMakeThumbnailEncode:
         assert result is not None
         _, content_type = result
         assert content_type == THUMBNAIL_CONTENT_TYPE
+
+
+# ── micro-thumbnail (blur-up placeholder) ─────────────────────────────────────
+
+class TestMakeMicroThumbnailDegradation:
+    def test_empty_bytes_returns_none(self):
+        assert make_micro_thumbnail(b"", "image/png") is None
+
+    def test_non_image_returns_none(self):
+        assert make_micro_thumbnail(b"not-an-image", "video/mp4") is None
+
+    def test_garbage_image_bytes_returns_none(self):
+        assert make_micro_thumbnail(b"\x89PNG\r\n\x1a\nGARBAGE", "image/png") is None
+
+
+@pytest.mark.skipif(not derivatives._PIL_AVAILABLE, reason="Pillow not installed")
+class TestMakeMicroThumbnailEncode:
+    def test_returns_base64_webp_data_uri(self):
+        original = _png_bytes(2000, 1000)
+        uri = make_micro_thumbnail(original, "image/png")
+        assert uri is not None
+        # Ready-to-use data URI for direct <img src> / CSS background.
+        assert uri.startswith("data:image/webp;base64,")
+        # Decodes back to a real WEBP no larger than the micro cap.
+        import base64
+
+        from PIL import Image
+
+        raw = base64.b64decode(uri.split(",", 1)[1])
+        with Image.open(io.BytesIO(raw)) as img:
+            assert img.format == "WEBP"
+            assert max(img.size) <= MICRO_THUMBNAIL_MAX_EDGE
+            # Aspect preserved (2:1) at micro scale.
+            assert img.size[0] >= img.size[1]
+
+    def test_small_image_still_produces_placeholder(self):
+        # Unlike make_thumbnail, the micro-thumb is produced even when the image
+        # is already small — it is a placeholder, not a payload optimisation.
+        original = _png_bytes(20, 20)
+        uri = make_micro_thumbnail(original, "image/png")
+        assert uri is not None
+        assert uri.startswith("data:image/webp;base64,")
+
+    def test_micro_thumb_is_tiny(self):
+        # The whole point: small enough to inline per-row in the list JSON.
+        original = _png_bytes(1920, 1080)
+        uri = make_micro_thumbnail(original, "image/png")
+        assert uri is not None
+        # A 28px webp data-URI is comfortably under ~2KB.
+        assert len(uri) < 2048
+
+    def test_rgba_is_flattened(self):
+        uri = make_micro_thumbnail(_png_rgba_bytes(800, 600), "image/png")
+        assert uri is not None
+        assert uri.startswith("data:image/webp;base64,")

@@ -258,6 +258,9 @@ class MediaItemOut(BaseModel):
     # exists, or it is an image whose bytes can be lazily thumbnailed). Lets the
     # Go list handler advertise a thumbnail URL only when one will resolve.
     has_thumbnail: bool = False
+    # Tiny base64 ``data:`` URI blur-up placeholder, inlined for instant paint.
+    # None for non-images / legacy rows (caller falls back to a neutral cell).
+    micro_thumb: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -284,9 +287,24 @@ class MediaItemOut(BaseModel):
             parent_media_id=row.parent_media_id,
             role=row.role,
             has_thumbnail=has_thumbnail,
+            # micro_thumbnail is a small TEXT column (not deferred) — reading it
+            # adds no BLOB I/O. getattr guards pre-0018 rows / test fixtures.
+            micro_thumb=getattr(row, "micro_thumbnail", None),
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
+
+
+class RelatedMediaOut(BaseModel):
+    """Lineage of a media item — the parent it derived from, its co-variations
+    (siblings sharing a parent), and the variations derived from it. Each is a
+    full ``MediaItemOut`` so the inspector can render a navigable thumbnail.
+    ``parent`` is None for roots / uploads; the lists are empty when absent.
+    """
+
+    parent: MediaItemOut | None = None
+    siblings: list[MediaItemOut] = []
+    variations: list[MediaItemOut] = []
 
 
 class MediaItemIn(BaseModel):

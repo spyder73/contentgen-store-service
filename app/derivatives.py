@@ -19,6 +19,7 @@ Design notes:
 """
 from __future__ import annotations
 
+import base64
 import io
 import logging
 
@@ -30,6 +31,13 @@ THUMBNAIL_MAX_EDGE = 512
 THUMBNAIL_CONTENT_TYPE = "image/webp"
 # WEBP quality: 80 is visually lossless at thumbnail scale with a small payload.
 _WEBP_QUALITY = 80
+
+# Long-edge cap for the *micro* thumbnail — a tiny webp used purely as a blur-up
+# placeholder painted under the real cell. ~28px keeps the base64 data-URI to a
+# few hundred bytes, small enough to inline in the list JSON for every row.
+MICRO_THUMBNAIL_MAX_EDGE = 28
+# Lower quality is fine — the micro-thumb is rendered heavily CSS-blurred.
+_MICRO_WEBP_QUALITY = 45
 
 try:  # Pillow is declared in requirements.txt; degrade gracefully if absent.
     from PIL import Image, ImageOps
@@ -98,4 +106,48 @@ def make_thumbnail(
             return buffer.getvalue(), THUMBNAIL_CONTENT_TYPE
     except Exception as exc:  # corrupt/truncated/unsupported image — no thumbnail
         logger.debug("thumbnail generation failed: %s", exc)
+        return None
+
+
+def make_micro_thumbnail(
+    data: bytes,
+    content_type: str | None,
+    max_edge: int = MICRO_THUMBNAIL_MAX_EDGE,
+) -> str | None:
+    """Encode a tiny webp blur-up placeholder as a base64 ``data:`` URI.
+
+    Unlike :func:`make_thumbnail`, this *always* produces output for a decodable
+    image — even one already smaller than ``max_edge`` — because the micro-thumb
+    is a placeholder painted (CSS-blurred) under the real cell, not a payload
+    optimisation. Returns ``None`` only when Pillow is missing, the content type
+    is non-image, or the bytes are undecodable (caller falls back to a neutral
+    cell). The returned string is a ready-to-use ``data:image/webp;base64,…`` URI
+    suitable for inlining directly in the media list JSON.
+    """
+    if not _PIL_AVAILABLE or not data:
+        return None
+    if not is_image_content_type(content_type):
+        return None
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            img = ImageOps.exif_transpose(img)
+            width, height = img.size
+            if width <= 0 or height <= 0:
+                return None
+            if img.mode in ("RGBA", "LA", "P"):
+                img = img.convert("RGBA")
+                background = Image.new("RGBA", img.size, (255, 255, 255, 255))
+                background.paste(img, mask=img.split()[-1])
+                img = background.convert("RGB")
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
+            # thumbnail() only shrinks; for an already-tiny image it leaves the
+            # size as-is, which is fine — the data-URI stays small either way.
+            img.thumbnail((max_edge, max_edge), Image.LANCZOS)
+            buffer = io.BytesIO()
+            img.save(buffer, format="WEBP", quality=_MICRO_WEBP_QUALITY, method=4)
+            encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+            return f"data:{THUMBNAIL_CONTENT_TYPE};base64,{encoded}"
+    except Exception as exc:  # corrupt/truncated/unsupported image — no micro-thumb
+        logger.debug("micro-thumbnail generation failed: %s", exc)
         return None

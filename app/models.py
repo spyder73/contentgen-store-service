@@ -330,6 +330,12 @@ class MediaItem(Base):
     # original, preserving pre-thumbnail behaviour.
     thumbnail_data: Mapped[bytes | None] = mapped_column(LargeBinary(), nullable=True)
     thumbnail_content_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Tiny (~28px) webp blur-up placeholder stored as a base64 ``data:`` URI
+    # *string* (a few hundred bytes). Unlike thumbnail_data this is small TEXT —
+    # it is inlined directly in the list JSON so cells never flash empty while
+    # the real thumbnail loads, with zero extra HTTP requests. Nullable/additive
+    # (migration 0018): NULL falls back to the existing neutral cell.
+    micro_thumbnail: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

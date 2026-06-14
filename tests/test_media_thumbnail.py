@@ -140,6 +140,96 @@ def test_store_file_data_skips_thumbnail_for_non_image():
                 row = await s.get(MediaItem, media_id)
                 assert row.thumbnail_data is None
                 assert row.thumbnail_content_type is None
+                assert row.micro_thumbnail is None
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+# ── store: micro-thumb (blur-up placeholder) ──────────────────────────────────
+
+@pytest.mark.skipif(not _PIL, reason="Pillow not installed")
+def test_store_file_data_generates_micro_thumb_for_image():
+    async def run():
+        uid = str(uuid.uuid4())
+        engine, factory = await _make_factory()
+        try:
+            mid = await _seed_image_row(factory, uid, with_bytes=None)
+            png = _png_bytes(1200, 900)
+            async with factory() as s:
+                await media_store.store_file_data(s, mid, png, "image/png", user_id=uid)
+            async with factory() as s:
+                row = await s.get(MediaItem, mid)
+                assert row.micro_thumbnail is not None
+                assert row.micro_thumbnail.startswith("data:image/webp;base64,")
+                # Tiny enough to inline per row in the list JSON.
+                assert len(row.micro_thumbnail) < 2048
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+@pytest.mark.skipif(not _PIL, reason="Pillow not installed")
+def test_store_file_data_generates_micro_thumb_for_small_image():
+    # The micro-thumb is a placeholder, so it is produced even when the image is
+    # already small (where the full thumbnail is intentionally skipped).
+    async def run():
+        uid = str(uuid.uuid4())
+        engine, factory = await _make_factory()
+        try:
+            mid = await _seed_image_row(factory, uid, with_bytes=None)
+            png = _png_bytes(64, 64)
+            async with factory() as s:
+                await media_store.store_file_data(s, mid, png, "image/png", user_id=uid)
+            async with factory() as s:
+                row = await s.get(MediaItem, mid)
+                assert row.thumbnail_data is None  # no full thumbnail for small img
+                assert row.micro_thumbnail is not None  # but a placeholder exists
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+@pytest.mark.skipif(not _PIL, reason="Pillow not installed")
+def test_list_media_surfaces_micro_thumb():
+    async def run():
+        uid = str(uuid.uuid4())
+        engine, factory = await _make_factory()
+        try:
+            mid = await _seed_image_row(factory, uid, with_bytes=None)
+            png = _png_bytes(800, 600)
+            async with factory() as s:
+                await media_store.store_file_data(s, mid, png, "image/png", user_id=uid)
+            async with factory() as s:
+                resp = await media_store.list_media(s, user_id=uid, page=1, limit=50)
+            assert resp.items[0].micro_thumb is not None
+            assert resp.items[0].micro_thumb.startswith("data:image/webp;base64,")
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+@pytest.mark.skipif(not _PIL, reason="Pillow not installed")
+def test_get_thumbnail_backfills_micro_thumb_for_legacy_row():
+    async def run():
+        uid = str(uuid.uuid4())
+        engine, factory = await _make_factory()
+        try:
+            png = _png_bytes(1000, 1000)
+            mid = await _seed_image_row(factory, uid, with_bytes=png)
+            async with factory() as s:
+                row = await s.get(MediaItem, mid)
+                assert row.micro_thumbnail is None  # pre-condition
+            async with factory() as s:
+                await media_store.get_thumbnail(s, mid, user_id=uid)
+            async with factory() as s:
+                row = await s.get(MediaItem, mid)
+                assert row.micro_thumbnail is not None
+                assert row.micro_thumbnail.startswith("data:image/webp;base64,")
         finally:
             await engine.dispose()
 
@@ -260,10 +350,12 @@ def test_media_item_out_has_thumbnail_from_thumbnail_content_type():
     row.role = None
     row.thumbnail_content_type = "image/webp"
     row.file_mime_type = None
+    row.micro_thumbnail = None
     row.created_at = datetime.now(timezone.utc)
     row.updated_at = datetime.now(timezone.utc)
     out = MediaItemOut.from_orm_row(row)
     assert out.has_thumbnail is True
+    assert out.micro_thumb is None
 
 
 # ── endpoint: GET /v1/media/{id}/thumbnail (mocked store) ──────────────────────
