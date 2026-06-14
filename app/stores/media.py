@@ -16,6 +16,55 @@ from ..schemas import (
 )
 
 
+# "Uploaded" vs "generated" is not a single literal source value. Manual uploads
+# write metadata.source in this set; everything else (generated, render_output,
+# the legacy "persisted" value, or no source at all) is treated as "generated".
+# Mirrors the frontend's `isGeneratedSource` heuristic so the server-side filter
+# and the client's mental model agree.
+_UPLOAD_SOURCES = ("manual_upload", "upload", "upload_pool", "uploaded")
+
+# Generated videos are stored with type "ai_video", but the library's type chip
+# (and the per-type facet counts) speak of "video". Bucket both raw column values
+# under the "video" facet so a ``type=video`` filter and the video count include
+# AI-generated videos (otherwise "0 videos" shows even when ai_video rows exist).
+_TYPE_BUCKETS: dict[str, tuple[str, ...]] = {
+    "video": ("video", "ai_video"),
+}
+
+
+def _type_bucket_for(raw_type: str | None) -> str | None:
+    """Map a raw ``type`` column value to its facet bucket (image/video/audio)."""
+    if raw_type in ("video", "ai_video"):
+        return "video"
+    return raw_type
+
+
+def _type_filter_expr(type_: str):
+    """WHERE expression for a type facet — expands ``video`` to also match the
+    ``ai_video`` rows generated videos are stored under."""
+    values = _TYPE_BUCKETS.get(type_)
+    if values:
+        return MediaItem.type.in_(values)
+    return MediaItem.type == type_
+
+
+def _source_filter_expr(source: str):
+    """Return a WHERE expression for the ``source`` bucket / literal.
+
+    - ``uploaded`` → metadata.source IN the upload set.
+    - ``generated`` → metadata.source NOT IN the upload set (includes NULL /
+      missing source, so legacy rows count as generated rather than vanishing).
+    - any other value → exact match on metadata.source (back-compat for callers
+      that pass a concrete source string).
+    """
+    src = MediaItem.metadata_["source"].astext
+    if source == "uploaded":
+        return src.in_(_UPLOAD_SOURCES)
+    if source == "generated":
+        return src.is_(None) | src.notin_(_UPLOAD_SOURCES)
+    return src == source
+
+
 async def list_media(
     session: AsyncSession,
     clip_id: str | None = None,
@@ -49,8 +98,9 @@ async def list_media(
         query = query.where(MediaItem.clip_id == clip_id)
         count_query = count_query.where(MediaItem.clip_id == clip_id)
     if type_:
-        query = query.where(MediaItem.type == type_)
-        count_query = count_query.where(MediaItem.type == type_)
+        type_expr = _type_filter_expr(type_)
+        query = query.where(type_expr)
+        count_query = count_query.where(type_expr)
     if search:
         pattern = f"%{search}%"
         search_filter = (
@@ -74,14 +124,24 @@ async def list_media(
         count_query = count_query.where(MediaItem.role == role)
 
     if source:
-        filter_expr = MediaItem.metadata_["source"].astext == source
+        filter_expr = _source_filter_expr(source)
         query = query.where(filter_expr)
         count_query = count_query.where(filter_expr)
 
     count_result = await session.execute(count_query)
     total = count_result.scalar_one()
+    # The secondary `id` key makes the order TOTAL: ``created_at DESC`` alone is
+    # ambiguous when many rows share a timestamp (a batch written in one
+    # transaction), and Postgres may then return tied rows in a different order
+    # per LIMIT/OFFSET query — so the same row can resurface on a later page
+    # (page-1 items leaking into page N). Breaking the tie by `id DESC` makes
+    # every page a deterministic slice of one global order: disjoint pages, no
+    # duplicates. (See ix_media_items_user_created_desc — the index is on
+    # user_id + created_at; id is appended in the sort, not the index.)
     result = await session.execute(
-        query.order_by(MediaItem.created_at.desc()).offset(offset).limit(limit)
+        query.order_by(MediaItem.created_at.desc(), MediaItem.id.desc())
+        .offset(offset)
+        .limit(limit)
     )
     items = [MediaItemOut.from_orm_row(row) for row in result.scalars()]
     return PagedResponse(items=items, total=total, page=page, limit=limit)
@@ -147,7 +207,7 @@ async def get_related_media(
                 MediaItem.id != id,
             )
             .options(*deferred)
-            .order_by(MediaItem.created_at.desc())
+            .order_by(MediaItem.created_at.desc(), MediaItem.id.desc())
             .limit(_LINEAGE_LIMIT)
         )
         sib_res = await session.execute(sib_q)
@@ -161,7 +221,7 @@ async def get_related_media(
             MediaItem.parent_media_id == id,
         )
         .options(*deferred)
-        .order_by(MediaItem.created_at.desc())
+        .order_by(MediaItem.created_at.desc(), MediaItem.id.desc())
         .limit(_LINEAGE_LIMIT)
     )
     var_res = await session.execute(var_q)
@@ -331,18 +391,37 @@ async def get_file_data(
 
 
 async def get_media_stats(session: AsyncSession, user_id: str | None = None) -> MediaStatsOut:
-    query = select(MediaItem.type, func.count().label("cnt"))
+    # Library-wide counts per type AND per source bucket. These are the canonical
+    # facet totals the UI shows on the type/source chips — derived here over the
+    # WHOLE library so a type/source absent from the current page never reads as
+    # "0 videos". Counting both facets in one grouped pass keeps it a single scan.
+    src = MediaItem.metadata_["source"].astext
+    query = select(MediaItem.type, src.label("source"), func.count().label("cnt"))
     if user_id:
         query = query.where(MediaItem.user_id == user_id)
-    query = query.group_by(MediaItem.type)
+    query = query.group_by(MediaItem.type, src)
     result = await session.execute(query)
-    counts: dict[str, int] = {}
+
+    type_counts: dict[str, int] = {}
+    uploaded = 0
+    generated = 0
+    total = 0
     for row in result:
-        counts[row.type] = row.cnt
-    total = sum(counts.values())
+        # Fold ai_video into the "video" facet so generated videos are counted.
+        bucket = _type_bucket_for(row.type)
+        if bucket:
+            type_counts[bucket] = type_counts.get(bucket, 0) + row.cnt
+        if row.source in _UPLOAD_SOURCES:
+            uploaded += row.cnt
+        else:  # generated bucket: everything else, including NULL/missing source
+            generated += row.cnt
+        total += row.cnt
+
     return MediaStatsOut(
         total=total,
-        image=counts.get("image", 0),
-        video=counts.get("video", 0),
-        audio=counts.get("audio", 0),
+        image=type_counts.get("image", 0),
+        video=type_counts.get("video", 0),
+        audio=type_counts.get("audio", 0),
+        uploaded=uploaded,
+        generated=generated,
     )

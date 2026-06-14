@@ -357,6 +357,11 @@ class MediaStatsOut(BaseModel):
     image: int
     video: int
     audio: int
+    # Source-bucket facet counts (library-wide), so the UI can show correct
+    # uploaded/generated totals on the source chips rather than per-page counts.
+    # Default 0 keeps older callers / fixtures that don't set them valid.
+    uploaded: int = 0
+    generated: int = 0
 
 
 class PagedResponse(BaseModel):
