@@ -323,6 +323,13 @@ class MediaItem(Base):
     role: Mapped[str | None] = mapped_column(Text, nullable=True)
     file_data: Mapped[bytes | None] = mapped_column(LargeBinary(), nullable=True)
     file_mime_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Small derived thumbnail (webp, ≤512px long edge) used by the library grid so
+    # cells never load the full-resolution original. Generated at file-store time
+    # for images and lazily backfilled on first thumbnail GET for legacy rows.
+    # Both nullable/additive (migration 0017): a NULL thumbnail falls back to the
+    # original, preserving pre-thumbnail behaviour.
+    thumbnail_data: Mapped[bytes | None] = mapped_column(LargeBinary(), nullable=True)
+    thumbnail_content_type: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

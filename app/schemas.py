@@ -254,11 +254,21 @@ class MediaItemOut(BaseModel):
     scene_id: str | None = None
     parent_media_id: str | None = None
     role: str | None = None
+    # Whether a grid thumbnail can be served for this item (a derivative already
+    # exists, or it is an image whose bytes can be lazily thumbnailed). Lets the
+    # Go list handler advertise a thumbnail URL only when one will resolve.
+    has_thumbnail: bool = False
     created_at: datetime
     updated_at: datetime
 
     @classmethod
     def from_orm_row(cls, row) -> "MediaItemOut":
+        # thumbnail_content_type / file_mime_type are not deferred, so reading
+        # them here triggers no BLOB load. `getattr` guards rows constructed
+        # before the 0017 columns existed (e.g. test fixtures).
+        has_thumbnail = bool(getattr(row, "thumbnail_content_type", None))
+        if not has_thumbnail and row.type == "image":
+            has_thumbnail = bool(getattr(row, "file_mime_type", None))
         return cls(
             id=row.id,
             clip_id=row.clip_id,
@@ -273,6 +283,7 @@ class MediaItemOut(BaseModel):
             scene_id=row.scene_id,
             parent_media_id=row.parent_media_id,
             role=row.role,
+            has_thumbnail=has_thumbnail,
             created_at=row.created_at,
             updated_at=row.updated_at,
         )

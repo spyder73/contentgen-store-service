@@ -528,6 +528,27 @@ def create_fastapi_app() -> FastAPI:
             },
         )
 
+    # NOTE: /v1/media/{id}/thumbnail must be registered before /v1/media/{id}
+    @app.get("/v1/media/{id}/thumbnail")
+    async def download_media_thumbnail_handler(
+        id: str, request: Request, session: SessionDep
+    ) -> Response:
+        user_id = _require_user_id(request)
+        result = await media.get_thumbnail(session, id, user_id=user_id)
+        if result is None:
+            # No derivative (non-image, missing bytes, or undecodable) — 404 so
+            # the proxy falls back to serving the original.
+            raise HTTPException(status_code=404, detail="no_thumbnail")
+        data, content_type = result
+        return Response(
+            content=data,
+            media_type=content_type,
+            headers={
+                "Cache-Control": "public, max-age=86400",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
     # NOTE: /v1/media/stats must be registered before /v1/media/{id}
     @app.get("/v1/media/stats", response_model=MediaStatsOut)
     async def get_media_stats_handler(request: Request, session: SessionDep) -> Any:

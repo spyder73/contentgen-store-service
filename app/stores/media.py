@@ -5,6 +5,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
+from ..derivatives import is_image_content_type, make_thumbnail
 from ..models import MediaItem
 from ..schemas import MediaItemIn, MediaItemOut, MediaStatsOut, PagedResponse
 
@@ -26,14 +27,15 @@ async def list_media(
     if not user_id:
         raise ValueError("list_media requires user_id")
     offset = (page - 1) * limit
-    # Defer the LargeBinary `file_data` BLOB: the list never serializes it
-    # (MediaItemOut excludes it) so reading it per row only amplifies I/O and
-    # TOAST de-toasting. The deferred column is never touched in this path —
-    # MediaItemOut.from_orm_row reads no BLOB — so no lazy-load is triggered.
+    # Defer the LargeBinary `file_data` and `thumbnail_data` BLOBs: the list
+    # never serializes them (MediaItemOut excludes both) so reading them per row
+    # only amplifies I/O and TOAST de-toasting. The deferred columns are never
+    # touched in this path — MediaItemOut.from_orm_row reads only the small
+    # mime-type columns — so no lazy-load is triggered.
     query = (
         select(MediaItem)
         .where(MediaItem.user_id == user_id)
-        .options(defer(MediaItem.file_data))
+        .options(defer(MediaItem.file_data), defer(MediaItem.thumbnail_data))
     )
     count_query = select(func.count()).select_from(MediaItem).where(MediaItem.user_id == user_id)
 
@@ -182,8 +184,48 @@ async def store_file_data(
         return False
     row.file_data = data
     row.file_mime_type = mime_type
+    # Eagerly derive the grid thumbnail for images so the library never has to
+    # load the full original. Non-images / undecodable bytes yield None → the
+    # grid falls back to the original (no thumbnail advertised).
+    if is_image_content_type(mime_type):
+        thumb = make_thumbnail(data, mime_type)
+        if thumb is not None:
+            row.thumbnail_data, row.thumbnail_content_type = thumb
+        else:
+            # Clear any stale derivative if the new bytes can't be thumbnailed
+            # (e.g. already small enough, or a re-upload with a different format).
+            row.thumbnail_data = None
+            row.thumbnail_content_type = None
     await session.commit()
     return True
+
+
+async def get_thumbnail(
+    session: AsyncSession, id: str, user_id: str | None = None
+) -> tuple[bytes, str] | None:
+    """Return ``(bytes, content_type)`` for the item's grid thumbnail.
+
+    Lazy backfill: if no derivative exists yet but the row is an image with
+    stored bytes, generate the thumbnail on this first GET and persist it so the
+    next request is served from the column. Returns None when no thumbnail can
+    be produced (caller falls back to the original).
+    """
+    if not user_id:
+        raise ValueError("get_thumbnail requires user_id")
+    row = await _get_owned(session, id, user_id)
+    if row is None:
+        return None
+    if row.thumbnail_data is not None and row.thumbnail_content_type:
+        return row.thumbnail_data, row.thumbnail_content_type
+    # No derivative yet — attempt lazy backfill from the stored original.
+    if row.file_data is None or not is_image_content_type(row.file_mime_type):
+        return None
+    thumb = make_thumbnail(row.file_data, row.file_mime_type)
+    if thumb is None:
+        return None
+    row.thumbnail_data, row.thumbnail_content_type = thumb
+    await session.commit()
+    return thumb
 
 
 async def get_file_data(
