@@ -248,6 +248,100 @@ class TestSettle:
         assert resp.json()["error"] == "balance_exhausted"
 
 
+# ── settle concurrency (store-level) ─────────────────────────────────────────
+
+
+class _FakeResult:
+    def __init__(self, row):
+        self._row = row
+
+    def first(self):
+        return self._row
+
+
+class _FakeSettleSession:
+    """Async session double backed by a shared in-memory user row.
+
+    ``get_balance`` reads a (possibly stale) snapshot while the settle UPDATE
+    mutates the *live* shared row. This models two settles for the same user
+    that each read the same starting balance/reserved before either commits —
+    the exact interleave a race-safe settle must survive. A relative UPDATE
+    composes correctly; an absolute ``SET credits_balance = :b`` computed from
+    the stale snapshot clobbers the other settle's write.
+    """
+
+    def __init__(self, shared: dict, hold: int, snapshot: dict):
+        self._shared = shared      # live committed row: {"balance", "reserved"}
+        self._hold = hold          # credits held for this checkpoint
+        self._snapshot = snapshot  # what get_balance sees (stale for the loser)
+
+    async def execute(self, statement, params=None):
+        sql = str(statement)
+        if sql.lstrip().upper().startswith("UPDATE USERS"):
+            if "credits_balance = :b" in sql:      # absolute write (buggy)
+                self._shared["balance"] = params["b"]
+                self._shared["reserved"] = params["r"]
+            else:                                   # relative write (race-safe)
+                self._shared["balance"] += params["balance_delta"]
+                self._shared["reserved"] -= params["hold"]
+            return _FakeResult((self._shared["balance"], self._shared["reserved"]))
+        name = statement.column_descriptions[0]["name"]
+        if name == "id":
+            return _FakeResult(None)               # not yet settled
+        if name == "delta":
+            return _FakeResult((self._hold,))
+        if name == "credits_balance":
+            s = self._snapshot
+            return _FakeResult((s["balance"], s["reserved"], 5000, False))
+        raise AssertionError(f"unexpected select: {sql}")
+
+    def add(self, _obj):
+        pass
+
+    async def commit(self):
+        pass
+
+    async def rollback(self):
+        pass
+
+
+@pytest.mark.asyncio
+class TestSettleConcurrency:
+    async def test_parallel_settles_do_not_clobber_balance_or_reserved(self):
+        from app.stores import credits
+
+        uid = str(uuid.uuid4())
+        run_id = str(uuid.uuid4())
+        shared = {"balance": 800, "reserved": 200}  # two 100-credit holds
+        hold = 100
+
+        async def _settle(checkpoint_id: str, snapshot: dict, key: str) -> dict:
+            sess = _FakeSettleSession(shared, hold, snapshot)
+            return await credits.settle(
+                sess,
+                user_id=uid,
+                pipeline_run_id=run_id,
+                checkpoint_id=checkpoint_id,
+                attempt=1,
+                actual_cost_usd="0.10",  # -> 17 credits, slack = 83 per checkpoint
+                provider="runware",
+                model="flux-dev",
+                cost_source="provider_telemetry",
+                idempotency_key=key,
+            )
+
+        # Both settles observe the same pre-settle snapshot (800/200): cp2 read
+        # its balance before cp1 committed.
+        stale = dict(shared)
+        await _settle("cp-1", dict(shared), "s-cp1")
+        result2 = await _settle("cp-2", stale, "s-cp2")
+
+        # slack 83 refunded twice, both 100-holds released.
+        assert shared == {"balance": 966, "reserved": 0}
+        assert result2["reserved"] == 0
+        assert result2["balance"] == 966
+
+
 # ── release ──────────────────────────────────────────────────────────────────
 
 

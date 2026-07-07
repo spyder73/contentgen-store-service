@@ -510,7 +510,13 @@ def create_fastapi_app() -> FastAPI:
 
     @app.get("/v1/media/{id}/file")
     async def download_media_file_handler(id: str, request: Request, session: SessionDep) -> Response:
-        user_id = _require_user_id(request)
+        # No _require_user_id: this route is reached via the go-backend's
+        # public, unauthenticated /media/uploads embed path, which forwards
+        # X-Internal-Secret but no X-User-ID. The internal-secret gate (see
+        # _internal_secret_gate middleware) is the auth; the UUID id is the
+        # access gate for the bytes. X-User-ID, when present, is still
+        # honored as an extra ownership filter (see media.get_file_data).
+        user_id = _get_user_id(request)
         result = await media.get_file_data(session, id, user_id=user_id)
         if result is None:
             raise HTTPException(status_code=404, detail="no_file_data")
@@ -534,7 +540,10 @@ def create_fastapi_app() -> FastAPI:
     async def download_media_thumbnail_handler(
         id: str, request: Request, session: SessionDep
     ) -> Response:
-        user_id = _require_user_id(request)
+        # See download_media_file_handler: no _require_user_id — this route
+        # is reached via the go-backend's public embed path with no
+        # X-User-ID, gated by X-Internal-Secret instead.
+        user_id = _get_user_id(request)
         result = await media.get_thumbnail(session, id, user_id=user_id)
         if result is None:
             # No derivative (non-image, missing bytes, or undecodable) — 404 so
@@ -656,8 +665,8 @@ def create_fastapi_app() -> FastAPI:
         return await series.list_series(session, page=page, limit=limit, user_id=user_id)
 
     @app.get("/v1/series/{id}", response_model=SeriesOut)
-    async def get_series_handler(id: str, session: SessionDep) -> Any:
-        row = await series.get_series(session, id)
+    async def get_series_handler(id: str, request: Request, session: SessionDep) -> Any:
+        row = await series.get_series(session, id, user_id=_require_user_id(request))
         if row is None:
             raise HTTPException(status_code=404, detail="not_found")
         return row
@@ -668,8 +677,8 @@ def create_fastapi_app() -> FastAPI:
         return await series.upsert_series(session, body, user_id=_get_user_id(request))
 
     @app.delete("/v1/series/{id}", status_code=204)
-    async def delete_series_handler(id: str, session: SessionDep) -> None:
-        deleted = await series.delete_series(session, id)
+    async def delete_series_handler(id: str, request: Request, session: SessionDep) -> None:
+        deleted = await series.delete_series(session, id, user_id=_require_user_id(request))
         if not deleted:
             raise HTTPException(status_code=404, detail="not_found")
 
@@ -685,8 +694,8 @@ def create_fastapi_app() -> FastAPI:
         return await characters.list_characters(session, series_id=series_id, page=page, limit=limit)
 
     @app.get("/v1/characters/{id}", response_model=CharacterOut)
-    async def get_character_handler(id: str, session: SessionDep) -> Any:
-        row = await characters.get_character(session, id)
+    async def get_character_handler(id: str, request: Request, session: SessionDep) -> Any:
+        row = await characters.get_character(session, id, user_id=_require_user_id(request))
         if row is None:
             raise HTTPException(status_code=404, detail="not_found")
         return row
@@ -697,8 +706,8 @@ def create_fastapi_app() -> FastAPI:
         return await characters.upsert_character(session, body)
 
     @app.delete("/v1/characters/{id}", status_code=204)
-    async def delete_character_handler(id: str, session: SessionDep) -> None:
-        deleted = await characters.delete_character(session, id)
+    async def delete_character_handler(id: str, request: Request, session: SessionDep) -> None:
+        deleted = await characters.delete_character(session, id, user_id=_require_user_id(request))
         if not deleted:
             raise HTTPException(status_code=404, detail="not_found")
 
@@ -714,8 +723,8 @@ def create_fastapi_app() -> FastAPI:
         return await episodes.list_episodes(session, series_id=series_id, page=page, limit=limit)
 
     @app.get("/v1/episodes/{id}", response_model=EpisodeOut)
-    async def get_episode_handler(id: str, session: SessionDep) -> Any:
-        row = await episodes.get_episode(session, id)
+    async def get_episode_handler(id: str, request: Request, session: SessionDep) -> Any:
+        row = await episodes.get_episode(session, id, user_id=_require_user_id(request))
         if row is None:
             raise HTTPException(status_code=404, detail="not_found")
         return row
@@ -726,8 +735,8 @@ def create_fastapi_app() -> FastAPI:
         return await episodes.upsert_episode(session, body)
 
     @app.delete("/v1/episodes/{id}", status_code=204)
-    async def delete_episode_handler(id: str, session: SessionDep) -> None:
-        deleted = await episodes.delete_episode(session, id)
+    async def delete_episode_handler(id: str, request: Request, session: SessionDep) -> None:
+        deleted = await episodes.delete_episode(session, id, user_id=_require_user_id(request))
         if not deleted:
             raise HTTPException(status_code=404, detail="not_found")
 
@@ -743,15 +752,15 @@ def create_fastapi_app() -> FastAPI:
         return await voice_snippets.list_voice_snippets(session, character_id=character_id, page=page, limit=limit)
 
     @app.get("/v1/voice-snippets/{id}", response_model=VoiceSnippetOut)
-    async def get_voice_snippet_handler(id: str, session: SessionDep) -> Any:
-        row = await voice_snippets.get_voice_snippet(session, id)
+    async def get_voice_snippet_handler(id: str, request: Request, session: SessionDep) -> Any:
+        row = await voice_snippets.get_voice_snippet(session, id, user_id=_require_user_id(request))
         if row is None:
             raise HTTPException(status_code=404, detail="not_found")
         return row
 
     @app.delete("/v1/voice-snippets/{id}", status_code=204)
-    async def delete_voice_snippet_handler(id: str, session: SessionDep) -> None:
-        deleted = await voice_snippets.delete_voice_snippet(session, id)
+    async def delete_voice_snippet_handler(id: str, request: Request, session: SessionDep) -> None:
+        deleted = await voice_snippets.delete_voice_snippet(session, id, user_id=_require_user_id(request))
         if not deleted:
             raise HTTPException(status_code=404, detail="not_found")
 

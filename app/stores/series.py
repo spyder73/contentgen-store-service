@@ -24,9 +24,16 @@ async def list_series(
     return PagedResponse(items=items, total=total, page=page, limit=limit)
 
 
-async def get_series(session: AsyncSession, id: str) -> SeriesOut | None:
+async def get_series(
+    session: AsyncSession, id: str, user_id: str | None = None
+) -> SeriesOut | None:
+    if not user_id:
+        raise ValueError("get_series requires user_id")
     row = await session.get(Series, id)
     if row is None:
+        return None
+    # Legacy rows with no owner stay readable; owned rows are user-scoped.
+    if row.user_id is not None and row.user_id != user_id:
         return None
     return SeriesOut.from_orm_row(row)
 
@@ -49,7 +56,16 @@ async def upsert_series(
     return SeriesOut.from_orm_row(row)
 
 
-async def delete_series(session: AsyncSession, id: str) -> bool:
-    result = await session.execute(delete(Series).where(Series.id == id))
+async def delete_series(
+    session: AsyncSession, id: str, user_id: str | None = None
+) -> bool:
+    if not user_id:
+        raise ValueError("delete_series requires user_id")
+    result = await session.execute(
+        delete(Series).where(
+            Series.id == id,
+            (Series.user_id == user_id) | (Series.user_id.is_(None)),
+        )
+    )
     await session.commit()
     return result.rowcount > 0
