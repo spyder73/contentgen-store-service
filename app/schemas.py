@@ -542,3 +542,72 @@ class GeneratorProfileCreate(BaseModel):
 class GeneratorProfileUpdate(BaseModel):
     name: str | None = None
     spec: dict[str, Any] | None = None
+
+
+# ── DatasetTemplate ───────────────────────────────────────────────────────
+
+class DatasetTemplateOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_id: str | None = None
+    name: str
+    description: str | None = None
+    collage_prompt: str
+    collage_model: str = "openai:gpt-image@2"
+    collage_width: int = 3840
+    collage_height: int = 2160
+    collage_quality: str | None = "high"
+    split_grid_x: int = 4
+    split_grid_y: int = 4
+    upscale_enabled: bool = True
+    upscale_model: str | None = "prunaai:p-image@upscale"
+    target_megapixels: int | None = 4
+    upscale_enhance_details: bool | None = False
+    upscale_realism: bool | None = False
+    caption_vision_model: str | None = "google/gemini-2.5-flash"
+    caption_format: str = "{{trigger_token}}, {{description}}"
+    is_default: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+
+class DatasetTemplateCreate(BaseModel):
+    name: str
+    collage_prompt: str
+    user_id: str | None = None
+    description: str | None = None
+    collage_model: str = "openai:gpt-image@2"
+    collage_width: int = 3840
+    collage_height: int = 2160
+    collage_quality: str = "high"
+    split_grid_x: int = 4
+    split_grid_y: int = 4
+    upscale_enabled: bool = True
+    upscale_model: str = "prunaai:p-image@upscale"
+    target_megapixels: int = 4
+    upscale_enhance_details: bool = False
+    upscale_realism: bool = False
+    caption_vision_model: str = "google/gemini-2.5-flash"
+    caption_format: str = "{{trigger_token}}, {{description}}"
+    is_default: bool = False
+
+
+class DatasetTemplateUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    collage_prompt: str | None = None
+    collage_model: str | None = None
+    collage_width: int | None = None
+    collage_height: int | None = None
+    collage_quality: str | None = None
+    split_grid_x: int | None = None
+    split_grid_y: int | None = None
+    upscale_enabled: bool | None = None
+    upscale_model: str | None = None
+    target_megapixels: int | None = None
+    upscale_enhance_details: bool | None = None
+    upscale_realism: bool | None = None
+    caption_vision_model: str | None = None
+    caption_format: str | None = None
+    is_default: bool | None = None

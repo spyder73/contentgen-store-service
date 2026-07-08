@@ -541,3 +541,64 @@ class PipelineRunSnapshot(Base):
         Index("ix_pipeline_run_snapshots_user_id", "user_id"),
         Index("ix_pipeline_run_snapshots_status", "status"),
     )
+
+
+class DatasetTemplate(Base):
+    """User-editable template for collage-based dataset generation.
+
+    Stores all settings for collage generation, splitting, upscaling, and captioning.
+    System templates have user_id=NULL; user templates are owned by a specific user.
+    At most one template can have is_default=TRUE.
+    """
+
+    __tablename__ = "dataset_templates"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, server_default=func.gen_random_uuid()
+    )
+    user_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=True
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    collage_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    collage_model: Mapped[str] = mapped_column(
+        Text, nullable=False, default="openai:gpt-image@2", server_default="openai:gpt-image@2"
+    )
+    collage_width: Mapped[int] = mapped_column(Integer, nullable=False, default=3840)
+    collage_height: Mapped[int] = mapped_column(Integer, nullable=False, default=2160)
+    collage_quality: Mapped[str | None] = mapped_column(Text, default="high")
+    split_grid_x: Mapped[int] = mapped_column(Integer, nullable=False, default=4)
+    split_grid_y: Mapped[int] = mapped_column(Integer, nullable=False, default=4)
+    upscale_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="TRUE"
+    )
+    upscale_model: Mapped[str | None] = mapped_column(Text, default="prunaai:p-image@upscale")
+    target_megapixels: Mapped[int | None] = mapped_column(Integer, default=4)
+    upscale_enhance_details: Mapped[bool | None] = mapped_column(Boolean, default=False)
+    upscale_realism: Mapped[bool | None] = mapped_column(Boolean, default=False)
+    caption_vision_model: Mapped[str | None] = mapped_column(
+        Text, default="google/gemini-2.5-flash"
+    )
+    caption_format: Mapped[str] = mapped_column(
+        Text, nullable=False, default="{{trigger_token}}, {{description}}",
+        server_default="{{trigger_token}}, {{description}}"
+    )
+    is_default: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="FALSE"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_dataset_templates_user_id", "user_id"),
+        Index(
+            "ix_dataset_templates_is_default",
+            "is_default",
+            postgresql_where=text("is_default = true"),
+        ),
+    )

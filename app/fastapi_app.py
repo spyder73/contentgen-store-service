@@ -1098,6 +1098,56 @@ def create_fastapi_app() -> FastAPI:
             body.visibility = "global"
         return await prompts.seed_prompt(session, body)
 
+    # ── dataset templates ────────────────────────────────────────────────────────
+
+    from .schemas import DatasetTemplateCreate, DatasetTemplateOut, DatasetTemplateUpdate
+    from .stores import dataset_templates
+
+    @app.get("/v1/dataset-templates", response_model=list[DatasetTemplateOut])
+    async def list_dataset_templates_handler(request: Request, session: SessionDep) -> Any:
+        user_id = _get_user_id(request)
+        return await dataset_templates.list_templates(session, user_id=user_id, include_system=True)
+
+    @app.get("/v1/dataset-templates/{id}", response_model=DatasetTemplateOut)
+    async def get_dataset_template_handler(id: str, session: SessionDep) -> Any:
+        template = await dataset_templates.get_template(session, id)
+        if template is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return template
+
+    @app.post("/v1/dataset-templates", response_model=DatasetTemplateOut, status_code=201)
+    async def create_dataset_template_handler(
+        body: DatasetTemplateCreate,
+        request: Request,
+        session: SessionDep,
+    ) -> Any:
+        user_id = _require_user_id(request)
+        return await dataset_templates.create_template(session, body, user_id=user_id)
+
+    @app.patch("/v1/dataset-templates/{id}", response_model=DatasetTemplateOut)
+    async def update_dataset_template_handler(
+        id: str,
+        body: DatasetTemplateUpdate,
+        request: Request,
+        session: SessionDep,
+    ) -> Any:
+        user_id = _require_user_id(request)
+        template = await dataset_templates.update_template(session, id, body, user_id=user_id)
+        if template is None:
+            raise HTTPException(status_code=404, detail="not_found_or_unauthorized")
+        return template
+
+    @app.delete("/v1/dataset-templates/{id}", status_code=204)
+    async def delete_dataset_template_handler(
+        id: str,
+        request: Request,
+        session: SessionDep,
+    ) -> None:
+        user_id = _require_user_id(request)
+        deleted = await dataset_templates.delete_template(session, id, user_id=user_id)
+        if deleted is None:
+            raise HTTPException(status_code=404, detail="not_found_or_unauthorized")
+
     # ── error handler ────────────────────────────────────────────────────────
 
     @app.exception_handler(Exception)
