@@ -546,6 +546,21 @@ class GeneratorProfileUpdate(BaseModel):
 
 # ── DatasetTemplate ───────────────────────────────────────────────────────
 
+# NOTE: this module uses `from __future__ import annotations`, so any new
+# pydantic model referenced by the DatasetTemplate schemas MUST be defined at
+# module scope (not nested/locally) or forward-ref resolution 422s at runtime.
+class CollageStage(BaseModel):
+    label: str
+    purpose: str | None = None
+    prompt: str
+    width: int
+    height: int
+    grid_x: int
+    grid_y: int
+    inset_pct: float = 0.015
+    reference_policy: str
+
+
 class DatasetTemplateOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -568,6 +583,8 @@ class DatasetTemplateOut(BaseModel):
     caption_vision_model: str | None = "google/gemini-2.5-flash"
     caption_format: str = "{{trigger_token}}, {{description}}"
     model_target: str = "sdxl"
+    collage_stages: list[CollageStage] | None = None
+    seed_reference_media_id: str | None = None
     is_default: bool = False
     created_at: datetime
     updated_at: datetime
@@ -592,6 +609,8 @@ class DatasetTemplateCreate(BaseModel):
     caption_vision_model: str = "google/gemini-2.5-flash"
     caption_format: str = "{{trigger_token}}, {{description}}"
     model_target: str = "sdxl"
+    collage_stages: list[CollageStage] | None = None
+    seed_reference_media_id: str | None = None
     is_default: bool = False
 
 
@@ -613,4 +632,6 @@ class DatasetTemplateUpdate(BaseModel):
     caption_vision_model: str | None = None
     caption_format: str | None = None
     model_target: str | None = None
+    collage_stages: list[CollageStage] | None = None
+    seed_reference_media_id: str | None = None
     is_default: bool | None = None

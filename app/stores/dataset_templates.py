@@ -71,6 +71,12 @@ async def create_template(
         caption_vision_model=body.caption_vision_model,
         caption_format=body.caption_format,
         model_target=body.model_target,
+        collage_stages=(
+            [s.model_dump() for s in body.collage_stages]
+            if body.collage_stages is not None
+            else None
+        ),
+        seed_reference_media_id=body.seed_reference_media_id,
         is_default=body.is_default,
     )
     session.add(row)
@@ -124,6 +130,10 @@ async def update_template(
         row.caption_format = body.caption_format
     if body.model_target is not None:
         row.model_target = body.model_target
+    if body.collage_stages is not None:
+        row.collage_stages = [s.model_dump() for s in body.collage_stages]
+    if body.seed_reference_media_id is not None:
+        row.seed_reference_media_id = body.seed_reference_media_id
     if body.is_default is not None:
         row.is_default = body.is_default
     await session.commit()

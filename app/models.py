@@ -587,6 +587,12 @@ class DatasetTemplate(Base):
     model_target: Mapped[str] = mapped_column(
         Text, nullable=False, default="sdxl", server_default="sdxl"
     )
+    # Multi-stage collage recipe (NULL => legacy single-prompt mode). Each element
+    # is a CollageStage dict (label/prompt/width/height/grid_x/grid_y/inset_pct/
+    # reference_policy). See migration 0022.
+    collage_stages: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # Seed/avatar reference media id chained forward for identity consistency.
+    seed_reference_media_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_default: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="FALSE"
     )
