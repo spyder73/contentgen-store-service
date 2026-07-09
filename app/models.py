@@ -584,6 +584,9 @@ class DatasetTemplate(Base):
         Text, nullable=False, default="{{trigger_token}}, {{description}}",
         server_default="{{trigger_token}}, {{description}}"
     )
+    model_target: Mapped[str] = mapped_column(
+        Text, nullable=False, default="sdxl", server_default="sdxl"
+    )
     is_default: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="FALSE"
     )

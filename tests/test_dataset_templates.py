@@ -14,19 +14,37 @@ assert on the prompt content itself, without touching a real database.
 from __future__ import annotations
 
 import importlib.util
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
-MIGRATION_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "alembic"
-    / "versions"
-    / "0020_dataset_templates_prompt_quality.py"
+import pytest
+
+from app.schemas import (
+    DatasetTemplateCreate,
+    DatasetTemplateOut,
+    DatasetTemplateUpdate,
 )
+from app.stores import dataset_templates
+
+VERSIONS_DIR = Path(__file__).resolve().parent.parent / "alembic" / "versions"
+MIGRATION_PATH = VERSIONS_DIR / "0020_dataset_templates_prompt_quality.py"
+MIGRATION_0021_PATH = VERSIONS_DIR / "0021_dataset_template_model_target.py"
 
 
 def _load_migration_module():
     spec = importlib.util.spec_from_file_location(
         "migration_0020_dataset_templates_prompt_quality", MIGRATION_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_migration_0021_module():
+    spec = importlib.util.spec_from_file_location(
+        "migration_0021_dataset_template_model_target", MIGRATION_0021_PATH
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -57,3 +75,163 @@ def test_improved_prompt_has_variety_markers():
     assert "DIFFERENT background" in prompt
     assert "FULL-BODY" in prompt
     assert "seamless 4x4 grid" in prompt
+
+
+# ── migration 0021: model_target column + backfill ────────────────────────
+
+
+def test_migration_0021_module_imports():
+    module = _load_migration_0021_module()
+    assert module.revision == "0021"
+    assert module.down_revision == "0020"
+    assert module.branch_labels is None
+    assert module.depends_on is None
+    assert hasattr(module, "upgrade")
+    assert hasattr(module, "downgrade")
+
+
+def test_migration_0021_adds_column_and_backfills():
+    """The migration must add a NOT NULL model_target column defaulting to
+    'sdxl' and flip the seeded Z-Image preset row to 'z-image'."""
+    src = MIGRATION_0021_PATH.read_text()
+    assert 'add_column' in src
+    assert '"model_target"' in src
+    assert "server_default=\"sdxl\"" in src
+    assert "nullable=False" in src
+    # backfill only the Z-Image preset (SDXL rows keep the server_default)
+    assert "model_target = 'z-image'" in src
+    assert "Identity Collage (16-tile) — Z-Image" in src
+    # downgrade drops the column
+    assert 'drop_column("dataset_templates", "model_target")' in src
+
+
+# ── schema + store round-trip: model_target on Out/Create/Update ──────────
+
+_ID = "00000000-0000-0000-0000-0000000000aa"
+_USER = "00000000-0000-0000-0000-000000000001"
+
+
+class _FakeTemplateRow:
+    """Stand-in for a DatasetTemplate ORM row with every column populated, so
+    ``DatasetTemplateOut.model_validate`` (from_attributes) round-trips it."""
+
+    def __init__(self, **over):
+        now = datetime.now(timezone.utc)
+        self.id = _ID
+        self.user_id = None
+        self.name = "T"
+        self.description = None
+        self.collage_prompt = "p"
+        self.collage_model = "openai:gpt-image@2"
+        self.collage_width = 3840
+        self.collage_height = 2160
+        self.collage_quality = "high"
+        self.split_grid_x = 4
+        self.split_grid_y = 4
+        self.upscale_enabled = True
+        self.upscale_model = "prunaai:p-image@upscale"
+        self.target_megapixels = 4
+        self.upscale_enhance_details = False
+        self.upscale_realism = False
+        self.caption_vision_model = "google/gemini-2.5-flash"
+        self.caption_format = "{{trigger_token}}, {{description}}"
+        self.model_target = "sdxl"
+        self.is_default = False
+        self.created_at = now
+        self.updated_at = now
+        for k, v in over.items():
+            setattr(self, k, v)
+
+
+async def _refresh_server_defaults(row):
+    """Emulate refresh() repopulating server-default id/timestamp columns."""
+    if getattr(row, "id", None) is None:
+        row.id = _ID
+    now = datetime.now(timezone.utc)
+    row.created_at = now
+    row.updated_at = now
+
+
+# schema-level defaults
+
+
+def test_out_defaults_model_target_sdxl():
+    now = datetime.now(timezone.utc)
+    out = DatasetTemplateOut(
+        id=_ID, name="n", collage_prompt="p", created_at=now, updated_at=now
+    )
+    assert out.model_target == "sdxl"
+
+
+def test_create_defaults_model_target_sdxl():
+    assert DatasetTemplateCreate(name="n", collage_prompt="p").model_target == "sdxl"
+
+
+def test_update_model_target_optional_none_by_default():
+    assert DatasetTemplateUpdate().model_target is None
+
+
+# store-level round-trip (mocked session, exercises the real store wiring)
+
+
+@pytest.mark.asyncio
+async def test_create_template_persists_model_target():
+    session = MagicMock()
+    session.commit = AsyncMock()
+    session.refresh = AsyncMock(side_effect=_refresh_server_defaults)
+    added = []
+    session.add = MagicMock(side_effect=lambda r: added.append(r))
+
+    body = DatasetTemplateCreate(name="n", collage_prompt="p", model_target="z-image")
+    out = await dataset_templates.create_template(session, body, user_id=_USER)
+
+    assert added[0].model_target == "z-image"
+    assert out.model_target == "z-image"
+
+
+@pytest.mark.asyncio
+async def test_create_template_defaults_model_target_sdxl():
+    session = MagicMock()
+    session.commit = AsyncMock()
+    session.refresh = AsyncMock(side_effect=_refresh_server_defaults)
+    added = []
+    session.add = MagicMock(side_effect=lambda r: added.append(r))
+
+    body = DatasetTemplateCreate(name="n", collage_prompt="p")
+    out = await dataset_templates.create_template(session, body, user_id=_USER)
+
+    assert added[0].model_target == "sdxl"
+    assert out.model_target == "sdxl"
+
+
+@pytest.mark.asyncio
+async def test_update_template_applies_model_target():
+    row = _FakeTemplateRow(model_target="sdxl")
+    session = MagicMock()
+    session.get = AsyncMock(return_value=row)
+    session.commit = AsyncMock()
+    session.refresh = AsyncMock()
+
+    out = await dataset_templates.update_template(
+        session, _ID, DatasetTemplateUpdate(model_target="z-image"), user_id=None
+    )
+
+    assert row.model_target == "z-image"
+    assert out.model_target == "z-image"
+
+
+@pytest.mark.asyncio
+async def test_update_template_leaves_model_target_when_absent():
+    row = _FakeTemplateRow(model_target="z-image")
+    session = MagicMock()
+    session.get = AsyncMock(return_value=row)
+    session.commit = AsyncMock()
+    session.refresh = AsyncMock()
+
+    # partial patch that does not include model_target must not clobber it
+    out = await dataset_templates.update_template(
+        session, _ID, DatasetTemplateUpdate(name="renamed"), user_id=None
+    )
+
+    assert row.model_target == "z-image"
+    assert out.model_target == "z-image"

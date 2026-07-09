@@ -567,6 +567,7 @@ class DatasetTemplateOut(BaseModel):
     upscale_realism: bool | None = False
     caption_vision_model: str | None = "google/gemini-2.5-flash"
     caption_format: str = "{{trigger_token}}, {{description}}"
+    model_target: str = "sdxl"
     is_default: bool = False
     created_at: datetime
     updated_at: datetime
@@ -590,6 +591,7 @@ class DatasetTemplateCreate(BaseModel):
     upscale_realism: bool = False
     caption_vision_model: str = "google/gemini-2.5-flash"
     caption_format: str = "{{trigger_token}}, {{description}}"
+    model_target: str = "sdxl"
     is_default: bool = False
 
 
@@ -610,4 +612,5 @@ class DatasetTemplateUpdate(BaseModel):
     upscale_realism: bool | None = None
     caption_vision_model: str | None = None
     caption_format: str | None = None
+    model_target: str | None = None
     is_default: bool | None = None

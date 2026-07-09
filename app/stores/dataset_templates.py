@@ -70,6 +70,7 @@ async def create_template(
         upscale_realism=body.upscale_realism,
         caption_vision_model=body.caption_vision_model,
         caption_format=body.caption_format,
+        model_target=body.model_target,
         is_default=body.is_default,
     )
     session.add(row)
@@ -121,6 +122,8 @@ async def update_template(
         row.caption_vision_model = body.caption_vision_model
     if body.caption_format is not None:
         row.caption_format = body.caption_format
+    if body.model_target is not None:
+        row.model_target = body.model_target
     if body.is_default is not None:
         row.is_default = body.is_default
     await session.commit()
