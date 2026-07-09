@@ -20,6 +20,9 @@ from .schemas import (
     ClipPromptIn,
     ClipPromptOut,
     ClipSummaryOut,
+    DatasetTemplateCreate,
+    DatasetTemplateOut,
+    DatasetTemplateUpdate,
     EpisodeIn,
     EpisodeOut,
     GeneratorProfileCreate,
@@ -1100,7 +1103,6 @@ def create_fastapi_app() -> FastAPI:
 
     # ── dataset templates ────────────────────────────────────────────────────────
 
-    from .schemas import DatasetTemplateCreate, DatasetTemplateOut, DatasetTemplateUpdate
     from .stores import dataset_templates
 
     @app.get("/v1/dataset-templates", response_model=list[DatasetTemplateOut])
