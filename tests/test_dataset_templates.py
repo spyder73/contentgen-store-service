@@ -32,6 +32,8 @@ VERSIONS_DIR = Path(__file__).resolve().parent.parent / "alembic" / "versions"
 MIGRATION_PATH = VERSIONS_DIR / "0020_dataset_templates_prompt_quality.py"
 MIGRATION_0021_PATH = VERSIONS_DIR / "0021_dataset_template_model_target.py"
 MIGRATION_0022_PATH = VERSIONS_DIR / "0022_dataset_template_collage_stages.py"
+MIGRATION_0023_PATH = VERSIONS_DIR / "0023_dataset_template_balanced_prompts.py"
+MIGRATION_0024_PATH = VERSIONS_DIR / "0024_dataset_template_fullbody_diversity.py"
 
 
 def _load_migration_module():
@@ -57,6 +59,26 @@ def _load_migration_0021_module():
 def _load_migration_0022_module():
     spec = importlib.util.spec_from_file_location(
         "migration_0022_dataset_template_collage_stages", MIGRATION_0022_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_migration_0023_module():
+    spec = importlib.util.spec_from_file_location(
+        "migration_0023_dataset_template_balanced_prompts", MIGRATION_0023_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_migration_0024_module():
+    spec = importlib.util.spec_from_file_location(
+        "migration_0024_dataset_template_fullbody_diversity", MIGRATION_0024_PATH
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -163,6 +185,101 @@ def test_migration_0022_adds_columns_and_seeds_both_system_rows():
     # downgrade drops both columns
     assert 'drop_column("dataset_templates", "seed_reference_media_id")' in src
     assert 'drop_column("dataset_templates", "collage_stages")' in src
+
+
+# ── migration 0024: full-body outfit/activity diversity (2 stages replace 1) ──
+
+
+def test_migration_0024_module_imports():
+    module = _load_migration_0024_module()
+    assert module.revision == "0024"
+    assert module.down_revision == "0023"
+    assert module.branch_labels is None
+    assert module.depends_on is None
+    assert hasattr(module, "upgrade")
+    assert hasattr(module, "downgrade")
+
+
+def test_migration_0024_stages_1_to_3_are_byte_identical_to_0023():
+    """User decision: stages 1-3 (face rotation, expressions, angles/upper-body/
+    wardrobe) are already good — 0024 must not touch their prompt text."""
+    prev = _load_migration_0023_module()
+    curr = _load_migration_0024_module()
+    assert curr.COLLAGE_STAGES[0:3] == prev.COLLAGE_STAGES[0:3]
+
+
+def test_migration_0024_has_five_stages():
+    module = _load_migration_0024_module()
+    stages = module.COLLAGE_STAGES
+    assert len(stages) == 5
+    json.dumps(stages)  # must be JSON-serialisable (written as JSONB)
+    for st in stages:
+        for key in (
+            "label", "prompt", "width", "height",
+            "grid_x", "grid_y", "inset_pct", "reference_policy",
+        ):
+            assert key in st, f"missing {key}"
+
+
+def test_migration_0024_fullbody_stages_keep_portrait_geometry():
+    """Stages 4 and 5 must keep the 0023 stage-4 portrait geometry: 2160x3840,
+    3 columns x 2 rows (6 tiles), inset 0.015, chained off collage 1."""
+    module = _load_migration_0024_module()
+    for stage in module.COLLAGE_STAGES[3:5]:
+        assert (stage["width"], stage["height"]) == (2160, 3840)
+        assert (stage["grid_x"], stage["grid_y"]) == (3, 2)
+        assert stage["grid_x"] * stage["grid_y"] == 6
+        assert stage["inset_pct"] == 0.015
+        assert stage["reference_policy"] == "collage_1"
+
+
+def test_migration_0024_stage4_covers_outfit_style_keywords():
+    module = _load_migration_0024_module()
+    stage4 = module.COLLAGE_STAGES[3]
+    assert "Outfit" in stage4["label"]
+    keywords = [
+        "classy formal",
+        "business casual",
+        "comfy casual",
+        "streetwear",
+        "sporty athleisure",
+        "summer casual",
+    ]
+    hits = [kw for kw in keywords if kw in stage4["prompt"]]
+    assert len(hits) >= 4, f"only matched {hits}"
+    assert "DIFFERENT outfit STYLE" in stage4["prompt"]
+
+
+def test_migration_0024_stage5_covers_activity_keywords():
+    module = _load_migration_0024_module()
+    stage5 = module.COLLAGE_STAGES[4]
+    assert stage5["label"] == "Full-body Activities (portrait)"
+    keywords = [
+        "walking mid-stride",
+        "jogging",
+        "yoga",
+        "cafe",
+        "shop or market",
+        "tending plants",
+    ]
+    hits = [kw for kw in keywords if kw in stage5["prompt"]]
+    assert len(hits) >= 4, f"only matched {hits}"
+    assert "DIFFERENT activity" in stage5["prompt"]
+    # ≥2 tiles left / ≥2 tiles right + varied camera height mandate
+    assert "at least 2" in stage5["prompt"]
+    assert "camera height" in stage5["prompt"]
+
+
+def test_migration_0024_upgrade_matches_0022_0023_precedent():
+    src = MIGRATION_0024_PATH.read_text()
+    assert "WHERE user_id IS NULL" in src
+    assert "CAST(:stages AS jsonb)" in src
+
+
+def test_migration_0024_downgrade_is_noop():
+    module = _load_migration_0024_module()
+    # must not raise and must not touch the database (no op.execute call)
+    assert module.downgrade() is None
 
 
 # ── schema + store round-trip: model_target on Out/Create/Update ──────────
