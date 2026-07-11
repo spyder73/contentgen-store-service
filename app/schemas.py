@@ -559,6 +559,7 @@ class CollageStage(BaseModel):
     grid_y: int
     inset_pct: float = 0.015
     reference_policy: str
+    model: str | None = None
 
 
 class DatasetTemplateOut(BaseModel):

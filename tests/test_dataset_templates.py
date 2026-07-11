@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.schemas import (
+    CollageStage,
     DatasetTemplateCreate,
     DatasetTemplateOut,
     DatasetTemplateUpdate,
@@ -35,6 +36,7 @@ MIGRATION_0022_PATH = VERSIONS_DIR / "0022_dataset_template_collage_stages.py"
 MIGRATION_0023_PATH = VERSIONS_DIR / "0023_dataset_template_balanced_prompts.py"
 MIGRATION_0024_PATH = VERSIONS_DIR / "0024_dataset_template_fullbody_diversity.py"
 MIGRATION_0025_PATH = VERSIONS_DIR / "0025_dataset_template_lean_prompts.py"
+MIGRATION_0026_PATH = VERSIONS_DIR / "0026_dataset_template_fullbody_singles.py"
 
 
 def _load_migration_module():
@@ -90,6 +92,16 @@ def _load_migration_0024_module():
 def _load_migration_0025_module():
     spec = importlib.util.spec_from_file_location(
         "migration_0025_dataset_template_lean_prompts", MIGRATION_0025_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_migration_0026_module():
+    spec = importlib.util.spec_from_file_location(
+        "migration_0026_dataset_template_fullbody_singles", MIGRATION_0026_PATH
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -396,6 +408,107 @@ def test_migration_0025_downgrade_is_noop():
     assert module.downgrade() is None
 
 
+# ── migration 0026: Identity Collages + Full-body Singles (Z-Image) preset ──
+
+
+def test_migration_0026_module_imports():
+    module = _load_migration_0026_module()
+    assert module.revision == "0026"
+    assert module.down_revision == "0025"
+    assert module.branch_labels is None
+    assert module.depends_on is None
+    assert hasattr(module, "upgrade")
+    assert hasattr(module, "downgrade")
+
+
+def test_migration_0026_has_eleven_stages():
+    module = _load_migration_0026_module()
+    stages = module.COLLAGE_STAGES
+    assert len(stages) == 11
+    json.dumps(stages)  # must be JSON-serialisable (written as JSONB)
+    for st in stages:
+        for key in (
+            "label", "prompt", "width", "height",
+            "grid_x", "grid_y", "inset_pct", "reference_policy",
+        ):
+            assert key in st, f"missing {key}"
+
+
+def test_migration_0026_stages_1_to_3_are_byte_identical_to_0025():
+    """Stages 1-3 (face rotation, expressions, angles/upper-body/wardrobe)
+    must be copied byte-for-byte from 0025 — same identity-locking grid
+    recipe, no per-stage model override."""
+    prev = _load_migration_0025_module()
+    curr = _load_migration_0026_module()
+    prev_stages = prev.COLLAGE_STAGES[0:3]
+    curr_stages = curr.COLLAGE_STAGES[0:3]
+    assert curr_stages == prev_stages
+    for st in curr_stages:
+        assert "model" not in st
+
+
+def test_migration_0026_single_stages_share_seedream_geometry():
+    """Stages 4-11 are single full-body photos: 2048x2048, 1x1 'grid' (one
+    frame, not a collage), no inset cropping, generated with the per-stage
+    Seedream model override."""
+    module = _load_migration_0026_module()
+    for stage in module.COLLAGE_STAGES[3:11]:
+        assert (stage["width"], stage["height"]) == (2048, 2048)
+        assert (stage["grid_x"], stage["grid_y"]) == (1, 1)
+        assert stage["inset_pct"] == 0.0
+        assert stage["model"] == "bytedance:seedream@5.0-pro"
+
+
+def test_migration_0026_single_stage_reference_policies():
+    """Stage 4 chains off the identity collage; stages 5-11 chain off every
+    prior collage/single so later poses can draw on the growing reference
+    set."""
+    module = _load_migration_0026_module()
+    stages = module.COLLAGE_STAGES
+    assert stages[3]["reference_policy"] == "collage_1"
+    for stage in stages[4:11]:
+        assert stage["reference_policy"] == "all_prior"
+
+
+def test_migration_0026_single_prompts_are_single_photo_not_grid():
+    module = _load_migration_0026_module()
+    for stage in module.COLLAGE_STAGES[3:11]:
+        assert "ONE single photo" in stage["prompt"], f"missing in {stage['label']}"
+        assert "grid of" not in stage["prompt"], f"unexpected in {stage['label']}"
+
+
+def test_migration_0026_single_prompts_cover_both_orientations():
+    """Orientation coverage: at least 3 prompts turn the subject toward the
+    RIGHT edge and at least 3 toward the LEFT edge."""
+    module = _load_migration_0026_module()
+    single_prompts = [st["prompt"] for st in module.COLLAGE_STAGES[3:11]]
+    right_hits = sum(1 for p in single_prompts if "RIGHT" in p)
+    left_hits = sum(1 for p in single_prompts if "LEFT" in p)
+    assert right_hits >= 3, f"only {right_hits} RIGHT-oriented prompts"
+    assert left_hits >= 3, f"only {left_hits} LEFT-oriented prompts"
+
+
+def test_migration_0026_collage_prompt_matches_0020_zimage_fallback():
+    """collage_prompt is only a fallback (stages take precedence); it must
+    match the legacy Z-Image prompt seeded by 0020."""
+    m0020 = _load_migration_module()
+    m0026 = _load_migration_0026_module()
+    assert m0026.COLLAGE_PROMPT == m0020.IMPROVED_COLLAGE_PROMPT
+
+
+def test_migration_0026_upgrade_is_idempotent_insert():
+    src = MIGRATION_0026_PATH.read_text()
+    assert "INSERT INTO dataset_templates" in src
+    assert "NOT EXISTS" in src
+    assert "Identity Collages + Full-body Singles — Z-Image" in src
+
+
+def test_migration_0026_downgrade_deletes_by_name():
+    src = MIGRATION_0026_PATH.read_text()
+    assert "DELETE FROM dataset_templates" in src
+    assert "def downgrade" in src
+
+
 # ── schema + store round-trip: model_target on Out/Create/Update ──────────
 
 _ID = "00000000-0000-0000-0000-0000000000aa"
@@ -532,7 +645,9 @@ async def test_update_template_leaves_model_target_when_absent():
 
 # ── schema + store round-trip: collage_stages + seed_reference_media_id ────
 
-# A single stage dict (purpose included so model_dump round-trips exactly).
+# A single stage dict (purpose/model included so model_dump round-trips
+# exactly — CollageStage.model is the optional per-stage image-generation
+# model override).
 _STAGE = {
     "label": "Identity — Face Rotation",
     "purpose": None,
@@ -542,6 +657,7 @@ _STAGE = {
     "grid_x": 4,
     "grid_y": 4,
     "inset_pct": 0.015,
+    "model": None,
     "reference_policy": "identity_seed",
 }
 
@@ -651,3 +767,37 @@ async def test_update_template_leaves_collage_fields_when_absent():
     assert row.seed_reference_media_id == "keep-me"
     assert out.collage_stages[0].label == "Identity — Face Rotation"
     assert out.seed_reference_media_id == "keep-me"
+
+
+# ── CollageStage.model: per-stage image-generation model override ─────────
+
+
+def test_collage_stage_model_defaults_none():
+    stage = CollageStage(
+        label="l", prompt="p", width=1, height=1, grid_x=1, grid_y=1,
+        reference_policy="collage_1",
+    )
+    assert stage.model is None
+
+
+@pytest.mark.asyncio
+async def test_create_template_persists_collage_stage_model_override():
+    """A CollageStage with a per-stage model override must survive a
+    create/read round-trip through the store (the Go backend prefers this
+    over the template's collage_model)."""
+    session = MagicMock()
+    session.commit = AsyncMock()
+    session.refresh = AsyncMock(side_effect=_refresh_server_defaults)
+    added = []
+    session.add = MagicMock(side_effect=lambda r: added.append(r))
+
+    stage_with_model = {**_STAGE, "model": "bytedance:seedream@5.0-pro"}
+    body = DatasetTemplateCreate(
+        name="n",
+        collage_prompt="p",
+        collage_stages=[CollageStage(**stage_with_model)],
+    )
+    out = await dataset_templates.create_template(session, body, user_id=_USER)
+
+    assert added[0].collage_stages == [stage_with_model]
+    assert out.collage_stages[0].model == "bytedance:seedream@5.0-pro"
