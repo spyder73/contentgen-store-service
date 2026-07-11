@@ -34,6 +34,7 @@ MIGRATION_0021_PATH = VERSIONS_DIR / "0021_dataset_template_model_target.py"
 MIGRATION_0022_PATH = VERSIONS_DIR / "0022_dataset_template_collage_stages.py"
 MIGRATION_0023_PATH = VERSIONS_DIR / "0023_dataset_template_balanced_prompts.py"
 MIGRATION_0024_PATH = VERSIONS_DIR / "0024_dataset_template_fullbody_diversity.py"
+MIGRATION_0025_PATH = VERSIONS_DIR / "0025_dataset_template_lean_prompts.py"
 
 
 def _load_migration_module():
@@ -79,6 +80,16 @@ def _load_migration_0023_module():
 def _load_migration_0024_module():
     spec = importlib.util.spec_from_file_location(
         "migration_0024_dataset_template_fullbody_diversity", MIGRATION_0024_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_migration_0025_module():
+    spec = importlib.util.spec_from_file_location(
+        "migration_0025_dataset_template_lean_prompts", MIGRATION_0025_PATH
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -278,6 +289,109 @@ def test_migration_0024_upgrade_matches_0022_0023_precedent():
 
 def test_migration_0024_downgrade_is_noop():
     module = _load_migration_0024_module()
+    # must not raise and must not touch the database (no op.execute call)
+    assert module.downgrade() is None
+
+
+# ── migration 0025: lean prompts, positional mirrored-pair orientation ──────
+
+
+def test_migration_0025_module_imports():
+    module = _load_migration_0025_module()
+    assert module.revision == "0025"
+    assert module.down_revision == "0024"
+    assert module.branch_labels is None
+    assert module.depends_on is None
+    assert hasattr(module, "upgrade")
+    assert hasattr(module, "downgrade")
+
+
+def test_migration_0025_has_five_stages_matching_0024_geometry():
+    """Labels and geometry (size/grid/inset/reference_policy) must be
+    identical to 0024 — only prompt text changes."""
+    prev = _load_migration_0024_module()
+    curr = _load_migration_0025_module()
+    prev_stages = prev.COLLAGE_STAGES
+    curr_stages = curr.COLLAGE_STAGES
+    assert len(curr_stages) == 5
+    json.dumps(curr_stages)  # must be JSON-serialisable (written as JSONB)
+    assert len(curr_stages) == len(prev_stages)
+    for prev_st, curr_st in zip(prev_stages, curr_stages):
+        assert curr_st["label"] == prev_st["label"]
+        assert curr_st["width"] == prev_st["width"]
+        assert curr_st["height"] == prev_st["height"]
+        assert curr_st["grid_x"] == prev_st["grid_x"]
+        assert curr_st["grid_y"] == prev_st["grid_y"]
+        assert curr_st["inset_pct"] == prev_st["inset_pct"]
+        assert curr_st["reference_policy"] == prev_st["reference_policy"]
+        # prompt text itself must actually have changed
+        assert curr_st["prompt"] != prev_st["prompt"]
+
+
+def test_migration_0025_prompts_drop_pipeline_meta_language():
+    module = _load_migration_0025_module()
+    for stage in module.COLLAGE_STAGES:
+        prompt = stage["prompt"]
+        assert "PRIMARY" not in prompt
+        assert "SECONDARY" not in prompt
+        assert "PRIORITY ORDER" not in prompt
+        assert "previous version" not in prompt
+
+
+def test_migration_0025_prompts_use_positional_mirrored_pairs():
+    module = _load_migration_0025_module()
+    for stage in module.COLLAGE_STAGES:
+        prompt = stage["prompt"]
+        assert "mirrored pairs" in prompt, f"missing in {stage['label']}"
+        assert "RIGHT" in prompt, f"missing in {stage['label']}"
+
+
+def test_migration_0025_prompts_have_grid_slicing_language():
+    module = _load_migration_0025_module()
+    for stage in module.COLLAGE_STAGES:
+        assert "sliced into" in stage["prompt"], f"missing in {stage['label']}"
+
+
+def test_migration_0025_stage4_covers_outfit_style_keywords():
+    module = _load_migration_0025_module()
+    stage4 = module.COLLAGE_STAGES[3]
+    assert "Outfit" in stage4["label"]
+    keywords = [
+        "classy formal",
+        "business casual",
+        "comfy casual",
+        "streetwear",
+        "sporty athleisure",
+        "summer casual",
+    ]
+    hits = [kw for kw in keywords if kw in stage4["prompt"]]
+    assert len(hits) >= 4, f"only matched {hits}"
+
+
+def test_migration_0025_stage5_covers_activity_keywords():
+    module = _load_migration_0025_module()
+    stage5 = module.COLLAGE_STAGES[4]
+    assert stage5["label"] == "Full-body Activities (portrait)"
+    keywords = [
+        "walking mid-stride",
+        "jogging",
+        "yoga",
+        "cafe",
+        "shop or market",
+        "tending plants",
+    ]
+    hits = [kw for kw in keywords if kw in stage5["prompt"]]
+    assert len(hits) >= 4, f"only matched {hits}"
+
+
+def test_migration_0025_upgrade_matches_precedent():
+    src = MIGRATION_0025_PATH.read_text()
+    assert "WHERE user_id IS NULL" in src
+    assert "CAST(:stages AS jsonb)" in src
+
+
+def test_migration_0025_downgrade_is_noop():
+    module = _load_migration_0025_module()
     # must not raise and must not touch the database (no op.execute call)
     assert module.downgrade() is None
 
