@@ -560,6 +560,12 @@ class CollageStage(BaseModel):
     inset_pct: float = 0.015
     reference_policy: str
     model: str | None = None
+    # Explicit list of 1-based stage indexes whose collages should be fed as
+    # references for this stage. When set (non-empty) it takes precedence over
+    # `reference_policy`; None/empty falls back to the policy string. Lets a
+    # stage wire specific prior collages (e.g. a face-rotation grid + a
+    # full-body reference collage) instead of the positional policy heuristics.
+    reference_stage_indexes: list[int] | None = None
 
 
 class DatasetTemplateOut(BaseModel):

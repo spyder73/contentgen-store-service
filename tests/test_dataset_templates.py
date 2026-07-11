@@ -37,6 +37,7 @@ MIGRATION_0023_PATH = VERSIONS_DIR / "0023_dataset_template_balanced_prompts.py"
 MIGRATION_0024_PATH = VERSIONS_DIR / "0024_dataset_template_fullbody_diversity.py"
 MIGRATION_0025_PATH = VERSIONS_DIR / "0025_dataset_template_lean_prompts.py"
 MIGRATION_0026_PATH = VERSIONS_DIR / "0026_dataset_template_fullbody_singles.py"
+MIGRATION_0027_PATH = VERSIONS_DIR / "0027_dataset_template_body_reference.py"
 
 
 def _load_migration_module():
@@ -102,6 +103,16 @@ def _load_migration_0025_module():
 def _load_migration_0026_module():
     spec = importlib.util.spec_from_file_location(
         "migration_0026_dataset_template_fullbody_singles", MIGRATION_0026_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_migration_0027_module():
+    spec = importlib.util.spec_from_file_location(
+        "migration_0027_dataset_template_body_reference", MIGRATION_0027_PATH
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -509,6 +520,98 @@ def test_migration_0026_downgrade_deletes_by_name():
     assert "def downgrade" in src
 
 
+# ── migration 0027: body-reference collage stage + explicit reference wiring ──
+
+
+def test_migration_0027_module_imports():
+    module = _load_migration_0027_module()
+    assert module.revision == "0027"
+    assert module.down_revision == "0026"
+    assert module.branch_labels is None
+    assert module.depends_on is None
+    assert hasattr(module, "upgrade")
+    assert hasattr(module, "downgrade")
+
+
+def test_migration_0027_has_twelve_stages():
+    module = _load_migration_0027_module()
+    stages = module.COLLAGE_STAGES
+    assert len(stages) == 12
+    json.dumps(stages)  # must be JSON-serialisable (written as JSONB)
+    for st in stages:
+        for key in (
+            "label", "prompt", "width", "height",
+            "grid_x", "grid_y", "inset_pct", "reference_policy",
+        ):
+            assert key in st, f"missing {key}"
+
+
+def test_migration_0027_stages_1_to_3_are_byte_identical_to_0025():
+    """Stages 1-3 (face rotation, expressions, angles/upper-body/wardrobe) are
+    the proven identity-locking grids — copied verbatim from 0025."""
+    prev = _load_migration_0025_module()
+    curr = _load_migration_0027_module()
+    assert curr.COLLAGE_STAGES[0:3] == prev.COLLAGE_STAGES[0:3]
+    for st in curr.COLLAGE_STAGES[0:3]:
+        assert "model" not in st
+        assert "reference_stage_indexes" not in st
+
+
+def test_migration_0027_stage4_is_body_reference_grid():
+    """Stage 4 is the NEW 2x2 body-reference grid: 2048x2048, 2x2, inset 0.015,
+    chained off the identity collage, default template model (no `model` key)."""
+    module = _load_migration_0027_module()
+    stage4 = module.COLLAGE_STAGES[3]
+    assert stage4["label"] == "Full-body Reference (2×2)"
+    assert (stage4["width"], stage4["height"]) == (2048, 2048)
+    assert (stage4["grid_x"], stage4["grid_y"]) == (2, 2)
+    assert stage4["inset_pct"] == 0.015
+    assert stage4["reference_policy"] == "collage_1"
+    # default template model → NO per-stage override
+    assert "model" not in stage4
+    prompt = stage4["prompt"]
+    for kw in ("sportswear", "BEHIND", "2x2 grid", "proportions"):
+        assert kw in prompt, f"stage 4 prompt missing {kw!r}"
+
+
+def test_migration_0027_singles_are_0026_plus_reference_indexes():
+    """Stages 5-12 are 0026's 8 single full-body shots verbatim (label, prompt,
+    geometry, per-stage model, and existing reference_policy all unchanged) with
+    ONLY `reference_stage_indexes = [1, 4]` added to each."""
+    m0026 = _load_migration_0026_module()
+    m0027 = _load_migration_0027_module()
+    singles_0026 = m0026.COLLAGE_STAGES[3:11]
+    singles_0027 = m0027.COLLAGE_STAGES[4:12]
+    assert len(singles_0026) == 8
+    assert len(singles_0027) == 8
+    for src, dst in zip(singles_0026, singles_0027):
+        assert dst["reference_stage_indexes"] == [1, 4]
+        assert {**src, "reference_stage_indexes": [1, 4]} == dst
+        # the fallback policy string is left intact (still the fallback)
+        assert dst["reference_policy"] == src["reference_policy"]
+        assert dst["model"] == "bytedance:seedream@5.0-pro"
+
+
+def test_migration_0027_upgrade_updates_system_row_only():
+    src = MIGRATION_0027_PATH.read_text()
+    assert "UPDATE dataset_templates" in src
+    assert "WHERE user_id IS NULL AND name = :name" in src
+    assert "CAST(:stages AS jsonb)" in src
+    assert "Identity Collages + Full-body Singles — Z-Image" in src
+
+
+def test_migration_0027_downgrade_restores_0026_recipe():
+    """Downgrade restores 0026's exact 11-stage recipe (a real UPDATE, not a
+    no-op)."""
+    m0026 = _load_migration_0026_module()
+    m0027 = _load_migration_0027_module()
+    assert m0027.COLLAGE_STAGES_0026 == m0026.COLLAGE_STAGES
+    assert len(m0027.COLLAGE_STAGES_0026) == 11
+    src = MIGRATION_0027_PATH.read_text()
+    # downgrade UPDATEs the same narrowed system row back to the 11-stage recipe
+    assert src.count("UPDATE dataset_templates") == 2
+
+
 # ── schema + store round-trip: model_target on Out/Create/Update ──────────
 
 _ID = "00000000-0000-0000-0000-0000000000aa"
@@ -659,6 +762,7 @@ _STAGE = {
     "inset_pct": 0.015,
     "model": None,
     "reference_policy": "identity_seed",
+    "reference_stage_indexes": None,
 }
 
 
@@ -801,3 +905,38 @@ async def test_create_template_persists_collage_stage_model_override():
 
     assert added[0].collage_stages == [stage_with_model]
     assert out.collage_stages[0].model == "bytedance:seedream@5.0-pro"
+
+
+# ── CollageStage.reference_stage_indexes: explicit per-stage reference wiring ──
+
+
+def test_collage_stage_reference_stage_indexes_defaults_none():
+    stage = CollageStage(
+        label="l", prompt="p", width=1, height=1, grid_x=1, grid_y=1,
+        reference_policy="collage_1",
+    )
+    assert stage.reference_stage_indexes is None
+
+
+@pytest.mark.asyncio
+async def test_create_template_persists_reference_stage_indexes():
+    """A CollageStage with explicit reference_stage_indexes must survive a
+    create/read round-trip through the store (the Go backend prefers this
+    wiring over the reference_policy string)."""
+    session = MagicMock()
+    session.commit = AsyncMock()
+    session.refresh = AsyncMock(side_effect=_refresh_server_defaults)
+    added = []
+    session.add = MagicMock(side_effect=lambda r: added.append(r))
+
+    stage_with_refs = {**_STAGE, "reference_stage_indexes": [1, 4]}
+    body = DatasetTemplateCreate(
+        name="n",
+        collage_prompt="p",
+        collage_stages=[CollageStage(**stage_with_refs)],
+    )
+    out = await dataset_templates.create_template(session, body, user_id=_USER)
+
+    # persisted as a plain JSON-safe dict carrying the explicit indexes
+    assert added[0].collage_stages == [stage_with_refs]
+    assert out.collage_stages[0].reference_stage_indexes == [1, 4]
