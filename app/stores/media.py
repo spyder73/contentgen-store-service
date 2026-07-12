@@ -75,6 +75,7 @@ async def list_media(
     scene_id: str | None = None,
     role: str | None = None,
     source: str | None = None,
+    generator_profile_id: str | None = None,
     page: int = 1,
     limit: int = 50,
     user_id: str | None = None,
@@ -127,6 +128,11 @@ async def list_media(
         filter_expr = _source_filter_expr(source)
         query = query.where(filter_expr)
         count_query = count_query.where(filter_expr)
+
+    if generator_profile_id:
+        gen_profile_filter = MediaItem.metadata_["generator_profile_id"].astext == generator_profile_id
+        query = query.where(gen_profile_filter)
+        count_query = count_query.where(gen_profile_filter)
 
     count_result = await session.execute(count_query)
     total = count_result.scalar_one()

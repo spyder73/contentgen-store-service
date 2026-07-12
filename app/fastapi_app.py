@@ -580,6 +580,7 @@ def create_fastapi_app() -> FastAPI:
         scene_id: str | None = Query(None),
         role: str | None = Query(None),
         source: str | None = Query(None),
+        generator_profile_id: str | None = Query(None),
         page: int = Query(1, ge=1),
         limit: int = Query(50, ge=1, le=200),
     ) -> Any:
@@ -594,6 +595,7 @@ def create_fastapi_app() -> FastAPI:
             scene_id=scene_id,
             role=role,
             source=source,
+            generator_profile_id=generator_profile_id,
             page=page,
             limit=limit,
             user_id=user_id,
