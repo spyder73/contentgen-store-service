@@ -156,6 +156,25 @@ async def _get_owned(session: AsyncSession, id: str, user_id: str) -> MediaItem 
     return row
 
 
+async def _get_by_id(session: AsyncSession, id: str, user_id: str | None) -> MediaItem | None:
+    """Fetch a media row by id, optionally scoped to ``user_id``.
+
+    Used by the byte-serving routes (file/thumbnail): those sit behind the
+    X-Internal-Secret gate and are reached via the go-backend's public,
+    unauthenticated embed path, which has no user context to forward. There
+    the UUID id itself is the access control, so ``user_id=None`` returns
+    the row unfiltered. When a caller DOES supply ``user_id`` it's still
+    honored as an extra ownership filter, preserving the scoped lookup used
+    by authenticated store callers (e.g. `_get_owned`).
+    """
+    row = await session.get(MediaItem, id)
+    if row is None:
+        return None
+    if user_id and row.user_id is not None and row.user_id != user_id:
+        return None
+    return row
+
+
 async def get_media(
     session: AsyncSession, id: str, user_id: str | None = None
 ) -> MediaItemOut | None:
@@ -339,14 +358,18 @@ async def get_thumbnail(
 ) -> tuple[bytes, str] | None:
     """Return ``(bytes, content_type)`` for the item's grid thumbnail.
 
+    ``user_id`` is optional here (unlike most other media accessors): this
+    backs a byte-serving route reached via the go-backend's public embed
+    path with no user context, where the id itself is the access gate. When
+    ``user_id`` is supplied it's still enforced as an ownership filter — see
+    `_get_by_id`.
+
     Lazy backfill: if no derivative exists yet but the row is an image with
     stored bytes, generate the thumbnail on this first GET and persist it so the
     next request is served from the column. Returns None when no thumbnail can
     be produced (caller falls back to the original).
     """
-    if not user_id:
-        raise ValueError("get_thumbnail requires user_id")
-    row = await _get_owned(session, id, user_id)
+    row = await _get_by_id(session, id, user_id)
     if row is None:
         return None
     if row.thumbnail_data is not None and row.thumbnail_content_type:
@@ -382,9 +405,13 @@ async def get_thumbnail(
 async def get_file_data(
     session: AsyncSession, id: str, user_id: str | None = None
 ) -> tuple[bytes, str] | None:
-    if not user_id:
-        raise ValueError("get_file_data requires user_id")
-    row = await _get_owned(session, id, user_id)
+    """Return ``(bytes, mime_type)`` for the item's stored original.
+
+    ``user_id`` is optional — see `get_thumbnail` / `_get_by_id` for why this
+    byte-serving accessor is not ownership-required like the rest of the
+    media store.
+    """
+    row = await _get_by_id(session, id, user_id)
     if row is None or row.file_data is None:
         return None
     return row.file_data, (row.file_mime_type or "application/octet-stream")

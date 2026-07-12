@@ -3,8 +3,17 @@ from __future__ import annotations
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import Character
+from ..models import Character, Series
 from ..schemas import CharacterIn, CharacterOut, PagedResponse
+
+
+def _owned_series_ids(user_id: str):
+    """Subquery of the series ids the user owns (legacy rows with no owner
+    included). Characters have no user_id, so ownership is scoped through the
+    parent series."""
+    return select(Series.id).where(
+        (Series.user_id == user_id) | (Series.user_id.is_(None))
+    )
 
 
 async def list_characters(
@@ -25,8 +34,16 @@ async def list_characters(
     return PagedResponse(items=items, total=total, page=page, limit=limit)
 
 
-async def get_character(session: AsyncSession, id: str) -> CharacterOut | None:
-    row = await session.get(Character, id)
+async def get_character(
+    session: AsyncSession, id: str, user_id: str | None = None
+) -> CharacterOut | None:
+    if not user_id:
+        raise ValueError("get_character requires user_id")
+    stmt = (
+        select(Character)
+        .where(Character.id == id, Character.series_id.in_(_owned_series_ids(user_id)))
+    )
+    row = (await session.execute(stmt)).scalar_one_or_none()
     if row is None:
         return None
     return CharacterOut.from_orm_row(row)
@@ -49,7 +66,16 @@ async def upsert_character(session: AsyncSession, body: CharacterIn) -> Characte
     return CharacterOut.from_orm_row(row)
 
 
-async def delete_character(session: AsyncSession, id: str) -> bool:
-    result = await session.execute(delete(Character).where(Character.id == id))
+async def delete_character(
+    session: AsyncSession, id: str, user_id: str | None = None
+) -> bool:
+    if not user_id:
+        raise ValueError("delete_character requires user_id")
+    result = await session.execute(
+        delete(Character).where(
+            Character.id == id,
+            Character.series_id.in_(_owned_series_ids(user_id)),
+        )
+    )
     await session.commit()
     return result.rowcount > 0

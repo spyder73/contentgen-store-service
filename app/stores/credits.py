@@ -253,8 +253,7 @@ async def settle(
 
     if hold >= actual_credits:
         slack = hold - actual_credits
-        new_balance = bv.balance + slack
-        new_reserved = bv.reserved - hold
+        balance_delta = slack
         debited_delta = -actual_credits
         extra_rows = []
         if slack > 0:
@@ -272,14 +271,12 @@ async def settle(
     else:
         shortfall = actual_credits - hold
         if bv.balance >= shortfall:
-            new_balance = bv.balance - shortfall
-            new_reserved = bv.reserved - hold
+            balance_delta = -shortfall
             debited_delta = -actual_credits
             extra_rows = []
         else:
             covered_extra = bv.balance
-            new_balance = 0
-            new_reserved = bv.reserved - hold
+            balance_delta = -covered_extra
             debited_delta = -(hold + covered_extra)
             uncovered = actual_credits - hold - covered_extra
             extra_rows = [
@@ -295,12 +292,25 @@ async def settle(
             ]
             balance_exhausted = True
 
-    await session.execute(
+    # Relative, race-safe mutation: two concurrent settles for the same user
+    # each read the same snapshot, but the deltas compose in SQL so neither
+    # clobbers the other's balance refund or reserved release. RETURNING gives
+    # the authoritative post-write totals for the response.
+    updated = await session.execute(
         text(
-            "UPDATE users SET credits_balance = :b, credits_reserved = :r WHERE id = :uid"
+            """
+            UPDATE users
+               SET credits_balance  = credits_balance + :balance_delta,
+                   credits_reserved = credits_reserved - :hold
+             WHERE id = :uid
+            RETURNING credits_balance, credits_reserved
+            """
         ),
-        {"b": new_balance, "r": new_reserved, "uid": user_id},
+        {"balance_delta": balance_delta, "hold": hold, "uid": user_id},
     )
+    new_row = updated.first()
+    new_balance = int(new_row[0])
+    new_reserved = int(new_row[1])
 
     session.add(
         CreditsLedger(
