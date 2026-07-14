@@ -92,6 +92,48 @@ class TestGetForwardsUserId:
         assert resp.status_code == 404
 
 
+class TestPatchForwardsUserId:
+    def test_patch_includes_user_id_and_targeted_fields(self, client):
+        uid = str(uuid.uuid4())
+        mid = str(uuid.uuid4())
+        out = _media_out(mid, uid)
+        with patch("app.stores.media.patch_media", new=AsyncMock(return_value=out)) as mocked:
+            resp = client.patch(
+                f"/v1/media/{mid}",
+                headers=_headers(uid),
+                json={
+                    "file_url": f"/media/uploads/{mid}.png",
+                    "metadata_merge": {"persistence_status": "ready"},
+                },
+            )
+
+        assert resp.status_code == 200
+        assert mocked.call_args.kwargs["user_id"] == uid
+        body = mocked.call_args.args[2]
+        assert body.file_url == f"/media/uploads/{mid}.png"
+        assert body.metadata_merge == {"persistence_status": "ready"}
+
+    def test_patch_returns_404_when_not_owned(self, client):
+        uid = str(uuid.uuid4())
+        mid = str(uuid.uuid4())
+        with patch("app.stores.media.patch_media", new=AsyncMock(return_value=None)):
+            resp = client.patch(
+                f"/v1/media/{mid}",
+                headers=_headers(uid),
+                json={"metadata_merge": {"persistence_status": "ready"}},
+            )
+        assert resp.status_code == 404
+
+    def test_patch_requires_user_id(self, client):
+        mid = str(uuid.uuid4())
+        resp = client.patch(
+            f"/v1/media/{mid}",
+            headers={"X-Internal-Secret": INTERNAL_SECRET},
+            json={"metadata_merge": {"persistence_status": "ready"}},
+        )
+        assert resp.status_code == 401
+
+
 class TestDeleteForwardsUserId:
     def test_delete_includes_user_id(self, client):
         uid = str(uuid.uuid4())

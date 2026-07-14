@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from sqlalchemy import cast, delete, func, select, text, Text
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import cast, delete, func, select, text, Text, update
+from sqlalchemy.dialects.postgresql import JSONB, insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
@@ -10,6 +10,7 @@ from ..models import MediaItem
 from ..schemas import (
     MediaItemIn,
     MediaItemOut,
+    MediaItemPatch,
     MediaStatsOut,
     PagedResponse,
     RelatedMediaOut,
@@ -283,6 +284,52 @@ async def upsert_media(
     await session.execute(stmt)
     await session.commit()
     row = await session.get(MediaItem, body.id, populate_existing=True)
+    return MediaItemOut.from_orm_row(row)
+
+
+async def patch_media(
+    session: AsyncSession,
+    id: str,
+    body: MediaItemPatch,
+    user_id: str | None = None,
+) -> MediaItemOut | None:
+    """Atomically patch one owned media row without replacing unrelated data."""
+    if not user_id:
+        raise ValueError("patch_media requires user_id")
+
+    values: dict[object, object] = {}
+    if body.file_url is not None:
+        values[MediaItem.file_url] = body.file_url
+    if body.metadata_merge:
+        # PostgreSQL JSONB || performs a shallow key merge in the same UPDATE as
+        # file_url. coalesce protects legacy NULL metadata rows. This is the
+        # concurrency boundary required by the independent byte-persistence and
+        # credit-settlement goroutines in the Go backend.
+        values[MediaItem.metadata_] = func.coalesce(
+            MediaItem.metadata_,
+            cast({}, JSONB),
+        ).op("||")(cast(body.metadata_merge, JSONB))
+
+    if not values:
+        return await get_media(session, id, user_id=user_id)
+
+    stmt = (
+        update(MediaItem)
+        .where(
+            MediaItem.id == id,
+            (MediaItem.user_id == user_id) | (MediaItem.user_id.is_(None)),
+        )
+        .values(values)
+        .returning(MediaItem.id)
+    )
+    result = await session.execute(stmt)
+    if result.scalar_one_or_none() is None:
+        await session.rollback()
+        return None
+    await session.commit()
+    row = await session.get(MediaItem, id, populate_existing=True)
+    if row is None:
+        return None
     return MediaItemOut.from_orm_row(row)
 
 

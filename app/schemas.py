@@ -322,6 +322,18 @@ class MediaItemIn(BaseModel):
     role: str | None = None
 
 
+class MediaItemPatch(BaseModel):
+    """Targeted media update used by asynchronous persistence workers.
+
+    ``metadata_merge`` is shallow-merged atomically into the existing JSONB
+    object; omitted keys remain untouched, so concurrent cost and persistence
+    updates cannot overwrite each other.
+    """
+
+    file_url: str | None = Field(default=None, max_length=2048)
+    metadata_merge: dict[str, Any] = Field(default_factory=dict)
+
+
 class ToggleFavouriteBody(BaseModel):
     is_favourite: bool
 
