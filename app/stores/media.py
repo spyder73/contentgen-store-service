@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from sqlalchemy import cast, delete, func, select, text, Text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -312,6 +314,56 @@ async def toggle_favourite(
     await session.commit()
     await session.refresh(row)
     return MediaItemOut.from_orm_row(row)
+
+
+async def patch_media(
+    session: AsyncSession,
+    id: str,
+    user_id: str | None = None,
+    *,
+    file_url: str | None = None,
+    metadata_merge: dict | None = None,
+) -> MediaItemOut | None:
+    """Partial, race-safe update of a media row.
+
+    Only the supplied fields are touched: ``file_url`` is a plain column set,
+    and ``metadata_merge`` is applied as a JSONB shallow-merge (``metadata ||
+    patch``) at the SQL level so it composes with a concurrent writer touching a
+    *different* concern (e.g. the bytes-fetch goroutine setting ``file_url``)
+    without either clobbering the other. Nothing here reads-then-writes in
+    Python, so there is no TOCTOU window.
+    """
+    if not user_id:
+        raise ValueError("patch_media requires user_id")
+    if file_url is None and not metadata_merge:
+        # Nothing to change — behave like a plain fetch so callers get the row.
+        return await get_media(session, id, user_id=user_id)
+
+    assignments = ["metadata = COALESCE(metadata, '{}'::jsonb) || CAST(:patch AS jsonb)"]
+    params: dict = {
+        "id": id,
+        "uid": user_id,
+        "patch": json.dumps(metadata_merge or {}),
+    }
+    if file_url is not None:
+        assignments.append("file_url = :file_url")
+        params["file_url"] = file_url
+
+    stmt = text(
+        f"""
+        UPDATE media_items
+           SET {", ".join(assignments)}
+         WHERE id = :id AND (user_id = :uid OR user_id IS NULL)
+        RETURNING id
+        """
+    )
+    result = await session.execute(stmt, params)
+    if result.first() is None:
+        await session.rollback()
+        return None
+    await session.commit()
+    row = await session.get(MediaItem, id, populate_existing=True)
+    return MediaItemOut.from_orm_row(row) if row is not None else None
 
 
 async def rename_media(

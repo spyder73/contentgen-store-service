@@ -29,6 +29,7 @@ from .schemas import (
     GeneratorProfileOut,
     GeneratorProfileUpdate,
     MediaItemIn,
+    MediaPatchBody,
     MediaItemOut,
     MediaStatsOut,
     PagedResponse,
@@ -623,6 +624,22 @@ def create_fastapi_app() -> FastAPI:
         user_id = _require_user_id(request)
         body.id = id
         return await media.upsert_media(session, body, user_id=user_id)
+
+    @app.patch("/v1/media/{id}", response_model=MediaItemOut)
+    async def patch_media_handler(
+        id: str, body: MediaPatchBody, request: Request, session: SessionDep
+    ) -> Any:
+        user_id = _require_user_id(request)
+        result = await media.patch_media(
+            session,
+            id,
+            user_id=user_id,
+            file_url=body.file_url,
+            metadata_merge=body.metadata_merge,
+        )
+        if result is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return result
 
     @app.delete("/v1/media/{id}", status_code=204)
     async def delete_media_handler(id: str, request: Request, session: SessionDep) -> None:

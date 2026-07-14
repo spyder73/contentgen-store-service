@@ -349,7 +349,16 @@ async def settle(
             extra={"debited": -debited_delta, "uncovered": actual_credits + debited_delta},
         )
 
-    return {"status": "settled", "balance": new_balance, "reserved": new_reserved}
+    # `credits`/`cost_usd` are ADDITIVE, informational fields (the authoritative
+    # settled amount): they let callers attach the real cost to the produced
+    # artifact for UI display. They do not affect any balance/ledger math above.
+    return {
+        "status": "settled",
+        "balance": new_balance,
+        "reserved": new_reserved,
+        "credits": int(actual_credits),
+        "cost_usd": float(actual_cost_decimal),
+    }
 
 
 # ── Release ─────────────────────────────────────────────────────────────────

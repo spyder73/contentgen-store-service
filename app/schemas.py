@@ -336,6 +336,15 @@ class RenameMediaBody(BaseModel):
     name: str
 
 
+class MediaPatchBody(BaseModel):
+    """Partial update for a media row. Every field is optional; only the ones
+    supplied are applied. ``metadata_merge`` is JSONB-merged onto the existing
+    metadata (existing keys not present in the patch are preserved)."""
+
+    file_url: str | None = None
+    metadata_merge: dict[str, Any] = {}
+
+
 class ClipSummaryOut(BaseModel):
     id: str
     name: str
