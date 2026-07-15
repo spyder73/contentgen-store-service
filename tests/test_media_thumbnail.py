@@ -311,6 +311,7 @@ def test_list_media_surfaces_has_thumbnail_for_image_with_bytes():
             async with factory() as s:
                 resp = await media_store.list_media(s, user_id=uid, page=1, limit=50)
             assert resp.total == 1
+            assert resp.items[0].has_file is True
             assert resp.items[0].has_thumbnail is True
         finally:
             await engine.dispose()
@@ -326,6 +327,7 @@ def test_list_media_has_thumbnail_false_for_image_without_bytes():
             await _seed_image_row(factory, uid, with_bytes=None)
             async with factory() as s:
                 resp = await media_store.list_media(s, user_id=uid, page=1, limit=50)
+            assert resp.items[0].has_file is False
             assert resp.items[0].has_thumbnail is False
         finally:
             await engine.dispose()

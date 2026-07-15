@@ -254,6 +254,10 @@ class MediaItemOut(BaseModel):
     scene_id: str | None = None
     parent_media_id: str | None = None
     role: str | None = None
+    # The original byte payload is stored in a deferred BLOB. file_mime_type is
+    # written in the same transaction and is therefore a cheap durable-presence
+    # marker for list responses without de-toasting the original.
+    has_file: bool = False
     # Whether a grid thumbnail can be served for this item (a derivative already
     # exists, or it is an image whose bytes can be lazily thumbnailed). Lets the
     # Go list handler advertise a thumbnail URL only when one will resolve.
@@ -286,6 +290,7 @@ class MediaItemOut(BaseModel):
             scene_id=row.scene_id,
             parent_media_id=row.parent_media_id,
             role=row.role,
+            has_file=bool(getattr(row, "file_mime_type", None)),
             has_thumbnail=has_thumbnail,
             # micro_thumbnail is a small TEXT column (not deferred) — reading it
             # adds no BLOB I/O. getattr guards pre-0018 rows / test fixtures.

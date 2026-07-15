@@ -84,6 +84,7 @@ def test_list_media_returns_rows_without_file_data():
             assert [it.prompt for it in resp.items] == ["p0", "p1", "p2"]
             for item in resp.items:
                 assert "file_data" not in item.model_dump()
+                assert item.has_file is True
         finally:
             await engine.dispose()
 
