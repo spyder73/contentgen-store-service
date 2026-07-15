@@ -28,6 +28,9 @@ from .schemas import (
     GeneratorProfileCreate,
     GeneratorProfileOut,
     GeneratorProfileUpdate,
+    PuppetPosePresetCreate,
+    PuppetPosePresetOut,
+    PuppetPosePresetUpdate,
     MediaItemIn,
     MediaItemOut,
     MediaItemPatch,
@@ -68,6 +71,7 @@ from .stores import (
     credits,
     episodes,
     generator_profiles,
+    puppet_pose_presets,
     media,
     pipelines,
     prompts,
@@ -855,6 +859,45 @@ def create_fastapi_app() -> FastAPI:
         except generator_profiles.GeneratorProfileError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message)
         if deleted is None:
+            raise HTTPException(status_code=404, detail="not_found")
+
+    # ── user Puppet pose library ────────────────────────────────────────────
+
+    @app.get("/v1/puppet-poses", response_model=list[PuppetPosePresetOut])
+    async def list_puppet_poses_handler(request: Request, session: SessionDep) -> Any:
+        return await puppet_pose_presets.list_presets(session, _require_user_id(request))
+
+    @app.get("/v1/puppet-poses/{id}", response_model=PuppetPosePresetOut)
+    async def get_puppet_pose_handler(id: str, request: Request, session: SessionDep) -> Any:
+        row = await puppet_pose_presets.get_preset(session, id, _require_user_id(request))
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
+
+    @app.post("/v1/puppet-poses", response_model=PuppetPosePresetOut)
+    async def create_puppet_pose_handler(
+        body: PuppetPosePresetCreate, request: Request, session: SessionDep
+    ) -> Any:
+        try:
+            return await puppet_pose_presets.create_preset(session, _require_user_id(request), body)
+        except puppet_pose_presets.PuppetPosePresetConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+
+    @app.put("/v1/puppet-poses/{id}", response_model=PuppetPosePresetOut)
+    async def update_puppet_pose_handler(
+        id: str, body: PuppetPosePresetUpdate, request: Request, session: SessionDep
+    ) -> Any:
+        try:
+            row = await puppet_pose_presets.update_preset(session, id, _require_user_id(request), body)
+        except puppet_pose_presets.PuppetPosePresetConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
+
+    @app.delete("/v1/puppet-poses/{id}", status_code=204)
+    async def delete_puppet_pose_handler(id: str, request: Request, session: SessionDep) -> None:
+        if not await puppet_pose_presets.delete_preset(session, id, _require_user_id(request)):
             raise HTTPException(status_code=404, detail="not_found")
 
     # ── credits ──────────────────────────────────────────────────────────────

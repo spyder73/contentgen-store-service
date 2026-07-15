@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class PipelineTemplateOut(BaseModel):
@@ -554,6 +554,40 @@ class GeneratorProfileCreate(BaseModel):
 class GeneratorProfileUpdate(BaseModel):
     name: str | None = None
     spec: dict[str, Any] | None = None
+
+
+class PuppetPosePresetOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_id: str
+    name: str
+    prompt_hint: str
+    config: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+
+
+class PuppetPosePresetCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    prompt_hint: str = Field(min_length=1, max_length=180)
+    config: dict[str, Any]
+
+    @field_validator("name", "prompt_hint")
+    @classmethod
+    def normalize_text(cls, value: str) -> str:
+        return " ".join(value.split())
+
+
+class PuppetPosePresetUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    prompt_hint: str | None = Field(default=None, min_length=1, max_length=180)
+    config: dict[str, Any] | None = None
+
+    @field_validator("name", "prompt_hint")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        return " ".join(value.split()) if value is not None else None
 
 
 # ── DatasetTemplate ───────────────────────────────────────────────────────
