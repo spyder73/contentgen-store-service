@@ -461,6 +461,33 @@ class GeneratorProfile(Base):
     )
 
 
+class PuppetPosePreset(Base):
+    """A reusable Puppet pose owned by one user."""
+
+    __tablename__ = "puppet_pose_presets"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), primary_key=True, server_default=func.gen_random_uuid()
+    )
+    user_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt_hint: Mapped[str] = mapped_column(Text, nullable=False)
+    config: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_puppet_pose_presets_user_name"),
+        Index("ix_puppet_pose_presets_user_id", "user_id"),
+    )
+
+
 class Episode(Base):
     __tablename__ = "episodes"
 
