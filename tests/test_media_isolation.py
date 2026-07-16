@@ -70,6 +70,29 @@ class TestListForwardsUserId:
         resp = client.get("/v1/media", headers={"X-Internal-Secret": INTERNAL_SECRET})
         assert resp.status_code == 401
 
+    def test_list_forwards_query_upgrades(self, client):
+        uid = str(uuid.uuid4())
+        paged = PagedResponse(items=[], total=0, page=2, limit=100)
+        with patch("app.stores.media.list_media", new=AsyncMock(return_value=paged)) as m:
+            resp = client.get(
+                "/v1/media",
+                params={
+                    "sort": "name",
+                    "created_after": "2026-07-10T00:00:00Z",
+                    "has_controlnet": "true",
+                    "page": 2,
+                    "limit": 100,
+                },
+                headers=_headers(uid),
+            )
+        assert resp.status_code == 200
+        kwargs = m.call_args.kwargs
+        assert kwargs["sort"] == "name"
+        assert kwargs["created_after"] == datetime(2026, 7, 10, tzinfo=timezone.utc)
+        assert kwargs["has_controlnet"] is True
+        assert kwargs["page"] == 2
+        assert kwargs["limit"] == 100
+
 
 class TestGetForwardsUserId:
     def test_get_includes_user_id(self, client):

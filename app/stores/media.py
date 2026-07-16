@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from sqlalchemy import cast, delete, func, select, text, Text, update
+from datetime import datetime
+
+from sqlalchemy import case, cast, delete, func, select, text, Text, update
 from sqlalchemy.dialects.postgresql import JSONB, insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
@@ -66,6 +68,39 @@ def _source_filter_expr(source: str):
     return src == source
 
 
+def _has_controlnet_filter_expr():
+    """Match generated rows whose persisted recipe contains ControlNet inputs.
+
+    Newer generation paths persist ``metadata.controls`` directly while older
+    rows may only carry ``metadata.generation_recipe.controls``. Supporting both
+    keeps the saved ControlNet preset useful across rolling deployments.
+    """
+    direct = MediaItem.metadata_["controls"].astext
+    recipe = MediaItem.metadata_["generation_recipe"]["controls"].astext
+    meaningful = lambda value: value.is_not(None) & value.notin_(("null", "[]", "{}", ""))
+    return meaningful(direct) | meaningful(recipe)
+
+
+def _order_by(sort: str):
+    """Return a deterministic global ordering for a paged media query."""
+    if sort == "oldest":
+        return (MediaItem.created_at.asc(), MediaItem.id.asc())
+    if sort == "favourite":
+        return (
+            MediaItem.is_favourite.desc(),
+            MediaItem.created_at.desc(),
+            MediaItem.id.desc(),
+        )
+    if sort == "name":
+        return (
+            case((MediaItem.name.is_(None), 1), else_=0).asc(),
+            func.lower(MediaItem.name).asc(),
+            MediaItem.created_at.desc(),
+            MediaItem.id.desc(),
+        )
+    return (MediaItem.created_at.desc(), MediaItem.id.desc())
+
+
 async def list_media(
     session: AsyncSession,
     clip_id: str | None = None,
@@ -77,6 +112,9 @@ async def list_media(
     role: str | None = None,
     source: str | None = None,
     generator_profile_id: str | None = None,
+    sort: str = "newest",
+    created_after: datetime | None = None,
+    has_controlnet: bool | None = None,
     page: int = 1,
     limit: int = 50,
     user_id: str | None = None,
@@ -135,6 +173,17 @@ async def list_media(
         query = query.where(gen_profile_filter)
         count_query = count_query.where(gen_profile_filter)
 
+    if created_after is not None:
+        query = query.where(MediaItem.created_at >= created_after)
+        count_query = count_query.where(MediaItem.created_at >= created_after)
+
+    if has_controlnet is not None:
+        controlnet_filter = _has_controlnet_filter_expr()
+        if not has_controlnet:
+            controlnet_filter = ~controlnet_filter
+        query = query.where(controlnet_filter)
+        count_query = count_query.where(controlnet_filter)
+
     count_result = await session.execute(count_query)
     total = count_result.scalar_one()
     # The secondary `id` key makes the order TOTAL: ``created_at DESC`` alone is
@@ -146,7 +195,7 @@ async def list_media(
     # duplicates. (See ix_media_items_user_created_desc — the index is on
     # user_id + created_at; id is appended in the sort, not the index.)
     result = await session.execute(
-        query.order_by(MediaItem.created_at.desc(), MediaItem.id.desc())
+        query.order_by(*_order_by(sort))
         .offset(offset)
         .limit(limit)
     )
