@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Annotated, Any
+from datetime import datetime
+from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
@@ -586,6 +587,9 @@ def create_fastapi_app() -> FastAPI:
         role: str | None = Query(None),
         source: str | None = Query(None),
         generator_profile_id: str | None = Query(None),
+        sort: Literal["newest", "oldest", "favourite", "name"] = Query("newest"),
+        created_after: datetime | None = Query(None),
+        has_controlnet: bool | None = Query(None),
         page: int = Query(1, ge=1),
         limit: int = Query(50, ge=1, le=200),
     ) -> Any:
@@ -601,6 +605,9 @@ def create_fastapi_app() -> FastAPI:
             role=role,
             source=source,
             generator_profile_id=generator_profile_id,
+            sort=sort,
+            created_after=created_after,
+            has_controlnet=has_controlnet,
             page=page,
             limit=limit,
             user_id=user_id,

@@ -339,3 +339,104 @@ def test_media_stats_reports_uploaded_and_generated_counts():
             await engine.dispose()
 
     asyncio.run(run())
+
+
+# ── Server-side sorting and saved-preset filters ─────────────────────────────
+
+def test_server_sort_applies_before_pagination():
+    async def run():
+        uid = str(uuid.uuid4())
+        engine, factory = await _make_engine_factory()
+        try:
+            base = datetime(2026, 6, 13, 10, 0, 0, tzinfo=timezone.utc)
+            rows = [
+                ("Zulu", False, base),
+                ("alpha", False, base.replace(hour=11)),
+                ("Bravo", True, base.replace(hour=12)),
+            ]
+            await _seed(
+                factory,
+                [
+                    dict(
+                        id=str(uuid.uuid4()),
+                        user_id=uid,
+                        type="image",
+                        name=name,
+                        file_url=f"/m/{index}.png",
+                        metadata_={},
+                        is_favourite=favourite,
+                        created_at=created_at,
+                    )
+                    for index, (name, favourite, created_at) in enumerate(rows)
+                ],
+            )
+            async with factory() as s:
+                names = await media_store.list_media(
+                    s, user_id=uid, sort="name", page=1, limit=2
+                )
+                oldest = await media_store.list_media(
+                    s, user_id=uid, sort="oldest", page=1, limit=2
+                )
+                favourite = await media_store.list_media(
+                    s, user_id=uid, sort="favourite", page=1, limit=2
+                )
+            assert [item.name for item in names.items] == ["alpha", "Bravo"]
+            assert [item.name for item in oldest.items] == ["Zulu", "alpha"]
+            assert favourite.items[0].name == "Bravo"
+            assert favourite.items[0].is_favourite is True
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_controlnet_and_created_after_filters_cover_both_recipe_shapes():
+    async def run():
+        uid = str(uuid.uuid4())
+        engine, factory = await _make_engine_factory()
+        try:
+            cutoff = datetime(2026, 6, 10, 0, 0, 0, tzinfo=timezone.utc)
+            specs = [
+                ("direct", {"controls": [{"type": "openpose"}]}, cutoff),
+                (
+                    "nested",
+                    {"generation_recipe": {"controls": [{"type": "openpose"}]}},
+                    cutoff.replace(day=11),
+                ),
+                ("plain", {}, cutoff.replace(day=12)),
+                ("old-control", {"controls": [{"type": "openpose"}]}, cutoff.replace(day=1)),
+            ]
+            await _seed(
+                factory,
+                [
+                    dict(
+                        id=str(uuid.uuid4()),
+                        user_id=uid,
+                        type="image",
+                        name=name,
+                        file_url=f"/m/{name}.png",
+                        metadata_=metadata,
+                        created_at=created_at,
+                    )
+                    for name, metadata, created_at in specs
+                ],
+            )
+            async with factory() as s:
+                controls = await media_store.list_media(
+                    s,
+                    user_id=uid,
+                    has_controlnet=True,
+                    created_after=cutoff,
+                    page=1,
+                    limit=50,
+                )
+                without_controls = await media_store.list_media(
+                    s, user_id=uid, has_controlnet=False, page=1, limit=50
+                )
+            assert {item.name for item in controls.items} == {"direct", "nested"}
+            assert controls.total == 2
+            assert {item.name for item in without_controls.items} == {"plain"}
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
