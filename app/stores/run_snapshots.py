@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import PipelineRunSnapshot
@@ -43,3 +43,15 @@ async def upsert_snapshot(
     await session.commit()
     await session.refresh(row)
     return PipelineRunSnapshotOut.model_validate(row)
+
+
+async def delete_snapshot(session: AsyncSession, id: str) -> bool:
+    result = await session.execute(delete(PipelineRunSnapshot).where(PipelineRunSnapshot.id == id))
+    await session.commit()
+    return result.rowcount > 0
+
+
+async def delete_all_snapshots(session: AsyncSession) -> int:
+    result = await session.execute(delete(PipelineRunSnapshot))
+    await session.commit()
+    return result.rowcount

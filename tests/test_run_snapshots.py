@@ -133,3 +133,65 @@ class TestListRunSnapshots:
         body = resp.json()
         assert [s["id"] for s in body] == [_id(301), _id(302)]
         assert mock_list.call_args[1]["user_id"] == uid
+
+
+class TestDeleteRunSnapshot:
+    def test_delete_existing_removes_row(self, client):
+        rid = _id(401)
+        with patch(
+            "app.stores.run_snapshots.delete_snapshot",
+            new=AsyncMock(return_value=True),
+        ) as mock_delete:
+            resp = client.delete(f"/v1/run-snapshots/{rid}", headers=_headers(_id(1)))
+        assert resp.status_code == 204
+        assert mock_delete.call_args[0][1] == rid
+
+        # Subsequent GET reflects the row is gone.
+        with patch(
+            "app.stores.run_snapshots.get_snapshot",
+            new=AsyncMock(return_value=None),
+        ):
+            resp = client.get(f"/v1/run-snapshots/{rid}", headers=_headers(_id(1)))
+        assert resp.status_code == 404
+
+    def test_delete_missing_is_idempotent(self, client):
+        rid = _id(402)
+        with patch(
+            "app.stores.run_snapshots.delete_snapshot",
+            new=AsyncMock(return_value=False),
+        ):
+            resp = client.delete(f"/v1/run-snapshots/{rid}", headers=_headers(_id(1)))
+        assert resp.status_code == 204
+
+    def test_delete_twice_is_idempotent(self, client):
+        rid = _id(403)
+        with patch(
+            "app.stores.run_snapshots.delete_snapshot",
+            new=AsyncMock(side_effect=[True, False]),
+        ) as mock_delete:
+            first = client.delete(f"/v1/run-snapshots/{rid}", headers=_headers(_id(1)))
+            second = client.delete(f"/v1/run-snapshots/{rid}", headers=_headers(_id(1)))
+        assert first.status_code == 204
+        assert second.status_code == 204
+        assert mock_delete.call_count == 2
+
+
+class TestBulkDeleteRunSnapshots:
+    def test_bulk_delete_returns_count(self, client):
+        with patch(
+            "app.stores.run_snapshots.delete_all_snapshots",
+            new=AsyncMock(return_value=7),
+        ) as mock_delete_all:
+            resp = client.delete("/v1/run-snapshots", headers=_headers(_id(1)))
+        assert resp.status_code == 200
+        assert resp.json() == {"deleted": 7}
+        mock_delete_all.assert_awaited_once()
+
+    def test_bulk_delete_when_empty_returns_zero(self, client):
+        with patch(
+            "app.stores.run_snapshots.delete_all_snapshots",
+            new=AsyncMock(return_value=0),
+        ):
+            resp = client.delete("/v1/run-snapshots", headers=_headers(_id(1)))
+        assert resp.status_code == 200
+        assert resp.json() == {"deleted": 0}

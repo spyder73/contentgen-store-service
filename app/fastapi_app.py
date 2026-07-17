@@ -264,6 +264,15 @@ def create_fastapi_app() -> FastAPI:
         body.id = id
         return await run_snapshots.upsert_snapshot(session, body, user_id=_get_user_id(request))
 
+    @app.delete("/v1/run-snapshots/{id}", status_code=204)
+    async def delete_run_snapshot_handler(id: str, session: SessionDep) -> None:
+        await run_snapshots.delete_snapshot(session, id)
+
+    @app.delete("/v1/run-snapshots")
+    async def delete_all_run_snapshots_handler(session: SessionDep) -> Any:
+        deleted = await run_snapshots.delete_all_snapshots(session)
+        return {"deleted": deleted}
+
     # ── prompt templates ────────────────────────────────────────────────────
 
     @app.get("/v1/prompts", response_model=list[PromptTemplateOut])
