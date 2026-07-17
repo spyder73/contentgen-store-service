@@ -300,20 +300,6 @@ def create_fastapi_app() -> FastAPI:
         deleted = await prompts.delete_prompt(session, id, user_id=user_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="not_found")
-        return row
-
-    @app.put("/v1/prompts/{id}", response_model=PromptTemplateOut)
-    async def upsert_prompt_handler(id: str, body: PromptTemplateIn, request: Request, session: SessionDep) -> Any:
-        user_id = _require_user_id(request)
-        body.id = id
-        return await prompts.upsert_prompt(session, body, user_id=user_id)
-
-    @app.delete("/v1/prompts/{id}", status_code=204)
-    async def delete_prompt_handler(id: str, request: Request, session: SessionDep) -> None:
-        user_id = _require_user_id(request)
-        deleted = await prompts.delete_prompt(session, id, user_id=user_id)
-        if not deleted:
-            raise HTTPException(status_code=404, detail="not_found")
 
     # ── system prompts ──────────────────────────────────────────────────────
 
