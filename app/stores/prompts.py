@@ -17,8 +17,16 @@ async def list_prompts(session: AsyncSession, user_id: str | None = None, admin:
         stmt = stmt.where(
             or_(PromptTemplate.user_id == user_id, PromptTemplate.visibility == "global")
         )
-    else:
+    elif user_id is not None:
+        # Empty-but-present user id (e.g. "") is a real, un-owned caller: globals only.
         stmt = stmt.where(PromptTemplate.visibility == "global")
+    # user_id is None -> no caller context. This is the Go backend's unscoped
+    # boot-load (GET /v1/prompts with no X-User-ID), which rehydrates the whole
+    # in-memory PromptStore that pipeline save-validation resolves against.
+    # Return ALL rows (private included) so user-owned templates survive a
+    # restart, matching list_pipelines' unscoped behavior. Without this, a
+    # redeploy silently drops every private prompt template and any pipeline
+    # referencing one fails with "unknown prompt_template_id".
     stmt = stmt.order_by(PromptTemplate.name)
     result = await session.execute(stmt)
     return [PromptTemplateOut.from_orm_row(row) for row in result.scalars()]
