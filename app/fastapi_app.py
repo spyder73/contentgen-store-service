@@ -232,7 +232,10 @@ def create_fastapi_app() -> FastAPI:
     async def upsert_pipeline_handler(id: str, body: PipelineTemplateIn, request: Request, session: SessionDep) -> Any:
         user_id = _require_user_id(request)
         body.id = id
-        return await pipelines.upsert_pipeline(session, body, user_id=user_id)
+        try:
+            return await pipelines.upsert_pipeline(session, body, user_id=user_id)
+        except pipelines.PipelineTemplateError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
 
     @app.delete("/v1/pipelines/{id}", status_code=204)
     async def delete_pipeline_handler(id: str, request: Request, session: SessionDep) -> None:
@@ -292,7 +295,10 @@ def create_fastapi_app() -> FastAPI:
     async def upsert_prompt_handler(id: str, body: PromptTemplateIn, request: Request, session: SessionDep) -> Any:
         user_id = _require_user_id(request)
         body.id = id
-        return await prompts.upsert_prompt(session, body, user_id=user_id)
+        try:
+            return await prompts.upsert_prompt(session, body, user_id=user_id)
+        except prompts.PromptTemplateError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
 
     @app.delete("/v1/prompts/{id}", status_code=204)
     async def delete_prompt_handler(id: str, request: Request, session: SessionDep) -> None:

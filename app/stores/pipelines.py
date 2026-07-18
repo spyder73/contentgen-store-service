@@ -10,6 +10,22 @@ from ..schemas import PipelineTemplateIn, PipelineTemplateOut
 VALID_VISIBILITY = {"private", "assigned", "global"}
 
 
+class PipelineTemplateError(Exception):
+    """Domain error carrying an HTTP status and a clear message.
+
+    Raised instead of silently no-opping when a non-admin caller attempts to
+    upsert a pipeline template they do not own -- previously ``upsert_pipeline``
+    returned the existing row unchanged in that case, so the caller got a 200
+    and believed the write had succeeded. Routes translate this into an
+    HTTPException.
+    """
+
+    def __init__(self, status_code: int, message: str):
+        super().__init__(message)
+        self.status_code = status_code
+        self.message = message
+
+
 async def _assigned_user_ids(session: AsyncSession, template_id: str) -> list[str]:
     result = await session.execute(
         select(PipelineTemplateAssignment.user_id)
@@ -81,9 +97,9 @@ async def upsert_pipeline(
         session.add(row)
     else:
         if not admin and row.user_id is not None and (user_id is None or row.user_id != user_id):
-            return await _out(session, row)
+            raise PipelineTemplateError(403, "pipeline template is owned by another user")
         if not admin and row.user_id is None and row.visibility != "global":
-            return await _out(session, row)
+            raise PipelineTemplateError(403, "pipeline template is not available for this user to modify")
     row.name = body.name
     row.data = body.data
     row.version = body.version

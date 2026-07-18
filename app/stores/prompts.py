@@ -9,6 +9,22 @@ from ..schemas import PromptTemplateIn, PromptTemplateOut
 VALID_VISIBILITY = {"private", "global"}
 
 
+class PromptTemplateError(Exception):
+    """Domain error carrying an HTTP status and a clear message.
+
+    Raised instead of silently no-opping when a non-admin caller attempts to
+    upsert a prompt template they do not own -- previously ``upsert_prompt``
+    returned the existing row unchanged in that case, so the caller got a 200
+    and believed the write had succeeded. Routes translate this into an
+    HTTPException.
+    """
+
+    def __init__(self, status_code: int, message: str):
+        super().__init__(message)
+        self.status_code = status_code
+        self.message = message
+
+
 async def list_prompts(session: AsyncSession, user_id: str | None = None, admin: bool = False) -> list[PromptTemplateOut]:
     stmt = select(PromptTemplate)
     if admin:
@@ -53,7 +69,7 @@ async def upsert_prompt(
         session.add(row)
     else:
         if not admin and row.user_id != user_id:
-            return PromptTemplateOut.from_orm_row(row)
+            raise PromptTemplateError(403, "prompt template is owned by another user")
     row.name = body.name
     row.content = body.content
     row.metadata_ = body.metadata
