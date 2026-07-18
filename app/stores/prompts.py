@@ -9,6 +9,22 @@ from ..schemas import PromptTemplateIn, PromptTemplateOut
 VALID_VISIBILITY = {"private", "global"}
 
 
+class PromptTemplateError(Exception):
+    """Domain error carrying an HTTP status and a clear message.
+
+    Raised instead of silently no-opping when a non-admin caller attempts to
+    upsert a prompt template they do not own -- previously ``upsert_prompt``
+    returned the existing row unchanged in that case, so the caller got a 200
+    and believed the write had succeeded. Routes translate this into an
+    HTTPException.
+    """
+
+    def __init__(self, status_code: int, message: str):
+        super().__init__(message)
+        self.status_code = status_code
+        self.message = message
+
+
 async def list_prompts(session: AsyncSession, user_id: str | None = None, admin: bool = False) -> list[PromptTemplateOut]:
     stmt = select(PromptTemplate)
     if admin:
@@ -17,8 +33,16 @@ async def list_prompts(session: AsyncSession, user_id: str | None = None, admin:
         stmt = stmt.where(
             or_(PromptTemplate.user_id == user_id, PromptTemplate.visibility == "global")
         )
-    else:
+    elif user_id is not None:
+        # Empty-but-present user id (e.g. "") is a real, un-owned caller: globals only.
         stmt = stmt.where(PromptTemplate.visibility == "global")
+    # user_id is None -> no caller context. This is the Go backend's unscoped
+    # boot-load (GET /v1/prompts with no X-User-ID), which rehydrates the whole
+    # in-memory PromptStore that pipeline save-validation resolves against.
+    # Return ALL rows (private included) so user-owned templates survive a
+    # restart, matching list_pipelines' unscoped behavior. Without this, a
+    # redeploy silently drops every private prompt template and any pipeline
+    # referencing one fails with "unknown prompt_template_id".
     stmt = stmt.order_by(PromptTemplate.name)
     result = await session.execute(stmt)
     return [PromptTemplateOut.from_orm_row(row) for row in result.scalars()]
@@ -45,7 +69,7 @@ async def upsert_prompt(
         session.add(row)
     else:
         if not admin and row.user_id != user_id:
-            return PromptTemplateOut.from_orm_row(row)
+            raise PromptTemplateError(403, "prompt template is owned by another user")
     row.name = body.name
     row.content = body.content
     row.metadata_ = body.metadata
