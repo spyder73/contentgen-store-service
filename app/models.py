@@ -93,6 +93,13 @@ class PipelineTemplate(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
+    __table_args__ = (
+        CheckConstraint(
+            "visibility IN ('private','assigned','global')",
+            name="pipeline_templates_visibility_valid",
+        ),
+    )
+
 
 class PipelineTemplateAssignment(Base):
     __tablename__ = "pipeline_template_assignments"
@@ -128,6 +135,13 @@ class PromptTemplate(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "visibility IN ('private','assigned','global')",
+            name="prompt_templates_visibility_valid",
+        ),
     )
 
 
