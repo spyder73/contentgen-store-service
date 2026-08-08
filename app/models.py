@@ -344,6 +344,14 @@ class MediaItem(Base):
     # the real thumbnail loads, with zero extra HTTP requests. Nullable/additive
     # (migration 0018): NULL falls back to the existing neutral cell.
     micro_thumbnail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 480p transcoded proxy derivative (video only), used by the Go backend's
+    # `/media/proxy/:filename` route so the editor timeline never streams the
+    # full-resolution original. Generated on-demand by the Go side (ffmpeg) and
+    # persisted here for cross-instance/cache-miss reuse. Both nullable/additive
+    # (migration 0030): a NULL proxy means "not generated yet" — the caller
+    # falls back to the original. See D5 in the video-editor plan.
+    proxy_bytes: Mapped[bytes | None] = mapped_column(LargeBinary(), nullable=True)
+    proxy_mime: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

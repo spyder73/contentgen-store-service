@@ -504,6 +504,44 @@ async def get_thumbnail(
     return thumb
 
 
+async def store_proxy_data(
+    session: AsyncSession, id: str, data: bytes, mime_type: str, user_id: str | None = None
+) -> bool:
+    """Persist the 480p transcoded proxy derivative (video editor, D5).
+
+    Mirrors `store_file_data`'s persistence shape but has no derivation step —
+    the Go backend does the ffmpeg transcode and PUTs the finished bytes here
+    as a best-effort cache-fill so other instances / restarts can reuse it.
+    `user_id` is optional here (unlike `store_file_data`): the Go side may
+    upload from a background singleflight fill with no request-scoped user
+    context, mirroring `get_thumbnail`/`_get_by_id`'s optional-ownership
+    semantics for byte-serving routes.
+    """
+    row = await _get_by_id(session, id, user_id)
+    if row is None:
+        return False
+    row.proxy_bytes = data
+    row.proxy_mime = mime_type
+    await session.commit()
+    return True
+
+
+async def get_proxy(
+    session: AsyncSession, id: str, user_id: str | None = None
+) -> tuple[bytes, str] | None:
+    """Return ``(bytes, content_type)`` for the item's 480p proxy derivative.
+
+    ``user_id`` is optional — see `get_thumbnail` / `_get_by_id` for why this
+    byte-serving accessor is not ownership-required like the rest of the
+    media store. Returns None when no proxy has been generated yet (caller
+    falls back to the original / triggers on-demand generation).
+    """
+    row = await _get_by_id(session, id, user_id)
+    if row is None or row.proxy_bytes is None:
+        return None
+    return row.proxy_bytes, (row.proxy_mime or "video/mp4")
+
+
 async def get_file_data(
     session: AsyncSession, id: str, user_id: str | None = None
 ) -> tuple[bytes, str] | None:

@@ -569,6 +569,42 @@ def create_fastapi_app() -> FastAPI:
             },
         )
 
+    # NOTE: /v1/media/{id}/proxy must be registered before /v1/media/{id}
+    @app.put("/v1/media/{id}/proxy", status_code=204)
+    async def upload_media_proxy_handler(id: str, request: Request, session: SessionDep) -> None:
+        # No _require_user_id: the Go backend uploads the transcoded proxy as a
+        # best-effort cache-fill (see download_media_proxy_handler / D5), which
+        # may run from a background singleflight fill with no request-scoped
+        # user context. X-User-ID, when present, is still honored as an extra
+        # ownership filter (see media.store_proxy_data).
+        user_id = _get_user_id(request)
+        data = await request.body()
+        if not data:
+            raise HTTPException(status_code=400, detail="empty body")
+        mime_type = request.headers.get("Content-Type", "video/mp4")
+        ok = await media.store_proxy_data(session, id, data, mime_type, user_id=user_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="not_found")
+
+    @app.get("/v1/media/{id}/proxy")
+    async def download_media_proxy_handler(id: str, request: Request, session: SessionDep) -> Response:
+        # See download_media_thumbnail_handler: no _require_user_id — this
+        # route is reached via the go-backend's public embed path with no
+        # X-User-ID, gated by X-Internal-Secret instead.
+        user_id = _get_user_id(request)
+        result = await media.get_proxy(session, id, user_id=user_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="no_proxy")
+        data, content_type = result
+        return Response(
+            content=data,
+            media_type=content_type,
+            headers={
+                "Cache-Control": "public, max-age=86400",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
     # NOTE: /v1/media/stats must be registered before /v1/media/{id}
     @app.get("/v1/media/stats", response_model=MediaStatsOut)
     async def get_media_stats_handler(request: Request, session: SessionDep) -> Any:
