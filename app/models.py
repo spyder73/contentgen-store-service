@@ -504,6 +504,28 @@ class PuppetPosePreset(Base):
     )
 
 
+class UserSetting(Base):
+    """Per-user preference blob (one row per user, arbitrary JSON object).
+
+    Additive and schema-free on purpose: sections (e.g. ``reviewer``) are
+    top-level keys inside ``settings`` so new features can persist their own
+    defaults without a migration. Writers replace the whole object (PUT) or
+    merge top-level keys (PATCH); a missing row reads as ``{}``.
+    """
+
+    __tablename__ = "user_settings"
+
+    user_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    settings: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class Episode(Base):
     __tablename__ = "episodes"
 

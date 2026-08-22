@@ -5,7 +5,7 @@ import os
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -80,6 +80,7 @@ from .stores import (
     run_snapshots,
     series,
     system_prompts,
+    user_settings,
     users,
     voice_snippets,
 )
@@ -1072,6 +1073,36 @@ def create_fastapi_app() -> FastAPI:
             raise HTTPException(status_code=403, detail="not_admin")
         username = username.strip().lstrip("@") if username else None
         return await credits.ledger(session, user_id=user_id, username=username, since=since, limit=limit)
+
+    # ── user settings ────────────────────────────────────────────────────────
+    #
+    # A free-form per-user JSON object (sections keyed at the top level, e.g.
+    # "reviewer"). The path user_id is authoritative: like the rest of /v1 the
+    # gate is the X-Internal-Secret middleware plus the Go backend, which only
+    # ever passes the authenticated caller's own id.
+
+    @app.get("/v1/user-settings/{user_id}")
+    async def get_user_settings_handler(user_id: str, session: SessionDep) -> Any:
+        # No row yet is not an error -- the user simply has no settings.
+        return await user_settings.get_user_settings(session, user_id)
+
+    @app.put("/v1/user-settings/{user_id}")
+    async def put_user_settings_handler(
+        user_id: str, session: SessionDep, body: Any = Body(default=None)
+    ) -> Any:
+        try:
+            return await user_settings.put_user_settings(session, user_id, body)
+        except user_settings.UserSettingsError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+
+    @app.patch("/v1/user-settings/{user_id}")
+    async def patch_user_settings_handler(
+        user_id: str, session: SessionDep, body: Any = Body(default=None)
+    ) -> Any:
+        try:
+            return await user_settings.patch_user_settings(session, user_id, body)
+        except user_settings.UserSettingsError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
 
     # ── internal admin: users, access, templates ────────────────────────────
 
