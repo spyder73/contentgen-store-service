@@ -1034,6 +1034,15 @@ def create_fastapi_app() -> FastAPI:
         except credits.CreditsError as e:
             return _credits_error_response(e)
 
+    @app.patch("/v1/users/{user_id}/limits")
+    async def set_user_daily_limit_handler(
+        user_id: str, session: SessionDep, body: Any = Body(default=None)
+    ) -> Any:
+        try:
+            return await users.set_daily_spend_limit(session, user_id, body)
+        except users.DailyLimitError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+
     @app.post("/v1/internal/admin/credits/grant")
     async def admin_grant_credits_handler(
         body: CreditsGrantBody,

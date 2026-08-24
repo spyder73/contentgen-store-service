@@ -162,6 +162,7 @@ class UserOut(BaseModel):
     display_name: str = ""
     is_active: bool = True
     is_admin: bool = False
+    daily_spend_limit: int = 5000
     created_at: datetime
 
 
