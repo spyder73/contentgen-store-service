@@ -363,6 +363,10 @@ class ClipSummaryOut(BaseModel):
     thumbnail_url: str | None = None
     is_dirty: bool = False
     media_count: dict[str, int] = {"images": 0, "ai_videos": 0, "audios": 0}
+    # Carried so a caller can render a summary row (style label, finished
+    # outputs) without fetching the whole clip.
+    style: dict = {}
+    render_output_urls: list[str] = []
 
 
 class ClipFullOut(BaseModel):
