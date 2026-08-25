@@ -9,6 +9,7 @@ from sqlalchemy.orm import defer
 
 from ..derivatives import is_image_content_type, make_micro_thumbnail, make_thumbnail
 from ..models import MediaItem
+from ..provenance import stamp_ai_provenance
 from ..schemas import (
     MediaItemIn,
     MediaItemOut,
@@ -432,6 +433,12 @@ async def store_file_data(
     row = await _get_owned(session, id, user_id)
     if row is None:
         return False
+    # AI-generated images (the backend stamps ai_generated into the row's
+    # metadata before uploading bytes) get the XMP provenance packet embedded
+    # in the file itself; everything else — uploads included — passes through
+    # untouched. Gated inside by magic bytes, not mime, because generated
+    # uploads may arrive as octet-stream.
+    data = stamp_ai_provenance(data, row.metadata_)
     row.file_data = data
     row.file_mime_type = mime_type
     # Eagerly derive the grid thumbnail for images so the library never has to
