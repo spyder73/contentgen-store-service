@@ -35,6 +35,8 @@ from .schemas import (
     MediaItemIn,
     MediaItemOut,
     MediaItemPatch,
+    MediaRetentionIn,
+    MediaRetentionOut,
     MediaStatsOut,
     PagedResponse,
     RelatedMediaOut,
@@ -726,6 +728,37 @@ def create_fastapi_app() -> FastAPI:
         if result is None:
             raise HTTPException(status_code=404, detail="not_found")
         return result
+
+    # ── maintenance ──────────────────────────────────────────────────────────
+
+    @app.post("/v1/maintenance/media-retention", response_model=MediaRetentionOut)
+    async def media_retention_handler(
+        session: SessionDep,
+        body: MediaRetentionIn | None = None,
+        older_than_days: int | None = Query(default=None, ge=1),
+        dry_run: bool | None = Query(default=None),
+    ) -> Any:
+        """Drop the reproducible bytes of rendered clips older than the window.
+
+        Accepts the window either as a JSON body or as query params so the
+        nightly Go caller can POST with no payload; an explicit query param wins
+        over the body. No user scoping: this is a host-wide maintenance sweep
+        run by the backend, behind the same X-Internal-Secret gate as every
+        other /v1 route.
+        """
+        days = older_than_days if older_than_days is not None else (
+            body.older_than_days if body is not None else None
+        )
+        # Both entry points constrain the value to >= 1; only its absence is
+        # left to check here.
+        if days is None:
+            raise HTTPException(status_code=422, detail="older_than_days_required")
+        # Absent everywhere => dry run, so a call that forgets the flag reports
+        # instead of erasing.
+        is_dry = dry_run if dry_run is not None else (body.dry_run if body is not None else True)
+        return await media.sweep_media_retention(
+            session, older_than_days=days, dry_run=is_dry
+        )
 
     # ── series ───────────────────────────────────────────────────────────────
 

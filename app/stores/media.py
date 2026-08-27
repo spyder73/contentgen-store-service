@@ -1,19 +1,20 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import case, cast, delete, func, select, text, Text, update
+from sqlalchemy import and_, bindparam, case, cast, delete, func, or_, select, text, Text, update
 from sqlalchemy.dialects.postgresql import JSONB, insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import defer
+from sqlalchemy.orm import aliased, defer
 
 from ..derivatives import is_image_content_type, make_micro_thumbnail, make_thumbnail
-from ..models import MediaItem
+from ..models import Character, DatasetTemplate, MediaItem
 from ..provenance import stamp_ai_provenance
 from ..schemas import (
     MediaItemIn,
     MediaItemOut,
     MediaItemPatch,
+    MediaRetentionOut,
     MediaStatsOut,
     PagedResponse,
     RelatedMediaOut,
@@ -598,4 +599,223 @@ async def get_media_stats(session: AsyncSession, user_id: str | None = None) -> 
         audio=type_counts.get("audio", 0),
         uploaded=uploaded,
         generated=generated,
+    )
+
+
+# ── retention (disk hygiene) ─────────────────────────────────────────────────
+
+# A finished clip render is the ONE media class whose bytes are reproducible:
+# the scene images, the prompts and the render template that produced it all
+# stay in the database, so the clip can simply be re-rendered. Every other row
+# is an original whose bytes exist nowhere else. Rendered clips are written with
+# metadata.source = "render_output"; nothing else is eligible.
+_RENDER_OUTPUT_SOURCE = "render_output"
+
+
+def _uuid_text(expr):
+    """Normalise an id expression for text comparison (lowercase, no hyphens)."""
+    return func.replace(func.lower(expr), "-", "")
+
+
+def _retention_protected_clause():
+    """Rows whose bytes must survive the sweep even if they look like old renders.
+
+    Each clause guards a reference that resolves a media id with nothing to fall
+    back on. What breaks if one is dropped:
+
+    * ``is_favourite`` — the user's explicit "keep this" flag. Stripping it
+      empties the one shelf they curate by hand, with no way to tell which items
+      were lost.
+    * ``characters.reference_image_media_id`` — a real FK, but ``ON DELETE SET
+      NULL`` only protects the row from DELETE; it does nothing about an UPDATE
+      that nulls the bytes. Losing them leaves the character with an id that
+      resolves to an empty item, so every later generation loses its identity
+      reference.
+    * ``dataset_templates.seed_reference_media_id`` — a plain Text column with
+      NO foreign key and no index, so nothing in the schema marks it as a media
+      reference. It is the identity anchor chained through every collage stage
+      of a LoRA dataset; strip it and that dataset can never be regenerated
+      consistently again.
+    * being another row's ``parent_media_id`` — the parent is the original a
+      variation/edit was derived from. Children point back at it for lineage and
+      for re-deriving; strip the parent and the whole branch loses its source.
+
+    Written as NOT EXISTS rather than NOT IN on purpose: two of these columns are
+    nullable, and a single NULL inside a ``NOT IN`` subquery makes the predicate
+    NULL for EVERY row — silently turning the sweep into a no-op (or, with the
+    operands the other way round, into a sweep that strips protected rows).
+    NOT EXISTS has no such NULL trap.
+    """
+    child = aliased(MediaItem)
+    return and_(
+        # is_not(True) rather than == False so legacy NULL rows count as
+        # protected rather than as "not favourited".
+        MediaItem.is_favourite.is_not(True),
+        ~select(1).where(Character.reference_image_media_id == MediaItem.id).exists(),
+        # seed_reference_media_id is untyped Text while media_items.id is a UUID,
+        # so the comparison has to happen as text. Both sides are normalised
+        # (lowercase, hyphens removed) because nothing constrains what shape of
+        # id that column holds — and here a false match merely over-protects a
+        # row, while a missed match destroys a dataset's identity anchor.
+        ~select(1)
+        .where(
+            _uuid_text(DatasetTemplate.seed_reference_media_id)
+            == _uuid_text(cast(MediaItem.id, Text))
+        )
+        .exists(),
+        ~select(1).where(child.parent_media_id == MediaItem.id).exists(),
+    )
+
+
+def _expired_render_clause(cutoff: datetime):
+    """Render outputs older than ``cutoff`` that still hold bytes and are unprotected.
+
+    The "still holds bytes" term is what makes the sweep idempotent: once a row
+    has been stripped it no longer matches, so a re-run neither rewrites it nor
+    counts it again.
+    """
+    return and_(
+        MediaItem.metadata_["source"].astext == _RENDER_OUTPUT_SOURCE,
+        MediaItem.created_at < cutoff,
+        or_(
+            MediaItem.file_data.is_not(None),
+            MediaItem.thumbnail_data.is_not(None),
+            MediaItem.micro_thumbnail.is_not(None),
+        ),
+        _retention_protected_clause(),
+    )
+
+
+def _stripped_bytes_expr():
+    """Bytes reclaimed per stripped row.
+
+    ``length()`` over a bytea counts bytes; over ``micro_thumbnail`` (a base64
+    ``data:`` URI, so ASCII) characters and bytes coincide. It is an estimate of
+    logical size, not of the on-disk footprint TOAST actually releases.
+    """
+    return (
+        func.coalesce(func.length(MediaItem.file_data), 0)
+        + func.coalesce(func.length(MediaItem.thumbnail_data), 0)
+        + func.coalesce(func.length(MediaItem.micro_thumbnail), 0)
+    )
+
+
+async def sweep_media_retention(
+    session: AsyncSession, *, older_than_days: int, dry_run: bool = True
+) -> MediaRetentionOut:
+    """Drop reproducible bytes from media rows older than ``older_than_days``.
+
+    Two independent effects, both in one transaction:
+
+    1. Rendered clips past the cutoff lose ``file_data`` / ``thumbnail_data`` /
+       ``micro_thumbnail`` and get ``bytes_evicted: true`` merged into their
+       metadata, so the UI can offer "re-render" instead of a dead player.
+    2. ``proxy_bytes`` is cleared on ANY row past the cutoff, protected or not:
+       the proxy is a pure cache the Go backend regenerates on demand (it serves
+       a redirect to the original on a miss — see
+       ``internal/api/media/serveProxy.go``), so nothing is lost by dropping it.
+
+    Rows are never deleted. Dozens of places hold loose media ids with no
+    foreign key (``clip_prompts.media_refs``, ``render_output_urls``,
+    ``review_variants``, ``variant_of``, thumbnails); a DELETE would dangle all
+    of them, while a nulled byte column leaves every reference resolvable.
+
+    Safe to run repeatedly and concurrently: the eligibility predicate excludes
+    already-stripped rows, and the row lock is taken with SKIP LOCKED so a
+    second concurrent sweep works on the rows the first one has not claimed
+    instead of blocking on them. Two overlapping sweeps can still contend on the
+    proxy UPDATE; the loser aborts and loses nothing, since the next run finds
+    exactly the same work.
+    """
+    if older_than_days < 1:
+        raise ValueError("older_than_days must be >= 1")
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+    strip_where = _expired_render_clause(cutoff)
+    proxy_where = and_(MediaItem.created_at < cutoff, MediaItem.proxy_bytes.is_not(None))
+
+    proxies_cleared, proxy_bytes_freed = (
+        await session.execute(
+            select(
+                func.count(),
+                func.coalesce(func.sum(func.length(MediaItem.proxy_bytes)), 0),
+            ).where(proxy_where)
+        )
+    ).one()
+
+    if dry_run:
+        stripped_rows, stripped_bytes = (
+            await session.execute(
+                select(
+                    func.count(),
+                    func.coalesce(func.sum(_stripped_bytes_expr()), 0),
+                ).where(strip_where)
+            )
+        ).one()
+        # Nothing above wrote, but end the transaction explicitly so a dry run
+        # can never leave an idle-in-transaction connection holding snapshots.
+        await session.rollback()
+        return MediaRetentionOut(
+            dry_run=True,
+            older_than_days=older_than_days,
+            cutoff=cutoff,
+            stripped_rows=stripped_rows,
+            stripped_bytes=int(stripped_bytes),
+            proxies_cleared=proxies_cleared,
+            proxy_bytes_freed=int(proxy_bytes_freed),
+        )
+
+    # Selecting id/metadata/size (never the blobs themselves) keeps a sweep over
+    # a 20 GB table off the Python heap, and gives the exact metadata to merge
+    # into. FOR UPDATE holds the claimed rows for the rest of the transaction so
+    # a concurrent writer cannot land a metadata change we would then overwrite.
+    candidates = (
+        await session.execute(
+            select(MediaItem.id, MediaItem.metadata_, _stripped_bytes_expr().label("freed"))
+            .where(strip_where)
+            .order_by(MediaItem.id)
+            .with_for_update(of=MediaItem, skip_locked=True)
+        )
+    ).all()
+
+    stripped_bytes = sum(int(row.freed or 0) for row in candidates)
+    if candidates:
+        # Addressed at the Table rather than the mapped class: a per-row bound
+        # WHERE is a plain executemany, which the ORM update path rejects.
+        table = MediaItem.__table__
+        await session.execute(
+            update(table)
+            .where(table.c.id == bindparam("b_id"))
+            .values(
+                {
+                    table.c.file_data: None,
+                    table.c.thumbnail_data: None,
+                    table.c.micro_thumbnail: None,
+                    table.c["metadata"]: bindparam("b_metadata", type_=JSONB),
+                }
+            ),
+            [
+                {
+                    "b_id": row.id,
+                    # Merge, never replace: the row's provenance, source and
+                    # generation recipe are all that survives the eviction.
+                    "b_metadata": {**(row.metadata_ or {}), "bytes_evicted": True},
+                }
+                for row in candidates
+            ],
+        )
+
+    # proxy_mime is left in place: it is a few bytes of text, and get_proxy keys
+    # off proxy_bytes being NULL, so a stale mime is inert.
+    await session.execute(update(MediaItem).where(proxy_where).values(proxy_bytes=None))
+    await session.commit()
+
+    return MediaRetentionOut(
+        dry_run=False,
+        older_than_days=older_than_days,
+        cutoff=cutoff,
+        stripped_rows=len(candidates),
+        stripped_bytes=stripped_bytes,
+        proxies_cleared=proxies_cleared,
+        proxy_bytes_freed=int(proxy_bytes_freed),
     )

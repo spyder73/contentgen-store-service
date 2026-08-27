@@ -386,6 +386,29 @@ class MediaStatsOut(BaseModel):
     generated: int = 0
 
 
+class MediaRetentionIn(BaseModel):
+    """Window for the media-retention sweep.
+
+    ``dry_run`` defaults to true so a mis-typed call reports instead of erasing.
+    """
+
+    older_than_days: int = Field(ge=1)
+    dry_run: bool = True
+
+
+class MediaRetentionOut(BaseModel):
+    dry_run: bool
+    older_than_days: int
+    cutoff: datetime
+    # Rows that lost file/thumbnail/micro-thumbnail bytes (rendered clips only).
+    stripped_rows: int
+    stripped_bytes: int
+    # Rows that lost their cached 480p proxy — counted separately because the
+    # proxy is dropped from ANY row past the cutoff, not just rendered clips.
+    proxies_cleared: int
+    proxy_bytes_freed: int
+
+
 class PagedResponse(BaseModel):
     items: list[Any]
     total: int
