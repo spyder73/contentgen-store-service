@@ -35,6 +35,7 @@ from .schemas import (
     MediaItemIn,
     MediaItemOut,
     MediaItemPatch,
+    LegacyAssetMediaOut,
     MediaRetentionIn,
     MediaRetentionOut,
     MediaStatsOut,
@@ -730,6 +731,18 @@ def create_fastapi_app() -> FastAPI:
         return result
 
     # ── maintenance ──────────────────────────────────────────────────────────
+
+    @app.get("/v1/maintenance/legacy-asset-media", response_model=list[LegacyAssetMediaOut])
+    async def legacy_asset_media_handler(
+        session: SessionDep,
+        limit: int = Query(default=500, ge=1, le=2000),
+    ) -> Any:
+        """Media rows whose bytes still live only in the backend's scratch dir.
+
+        Cross-user on purpose: the backend migrates these into the durable
+        upload path at boot, before its own sweep can delete the files.
+        """
+        return await media.list_legacy_asset_media(session, limit=limit)
 
     @app.post("/v1/maintenance/media-retention", response_model=MediaRetentionOut)
     async def media_retention_handler(

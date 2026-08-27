@@ -386,6 +386,21 @@ class MediaStatsOut(BaseModel):
     generated: int = 0
 
 
+class LegacyAssetMediaOut(BaseModel):
+    """A media row still pointing at the backend's scratch directory.
+
+    Those files predate routing lip-sync and animate output through the durable
+    upload path: the bytes exist only on one container's volume, so nothing else
+    can serve them and a lost volume loses them. The backend migrates them on
+    boot; this is how it finds them.
+    """
+
+    id: str
+    user_id: str | None = None
+    file_url: str
+    type: str
+
+
 class MediaRetentionIn(BaseModel):
     """Window for the media-retention sweep.
 

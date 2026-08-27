@@ -539,3 +539,66 @@ class TestMediaRetentionRoute:
     def test_zero_window_is_rejected(self, client):
         resp = client.post(ENDPOINT, json={"older_than_days": 0}, headers=AUTH_HEADERS)
         assert resp.status_code == 422
+
+# ── legacy asset migration source ────────────────────────────────────────────
+
+
+async def _add_with_url(factory, *, mid: str, file_url: str, user_id: str | None = None):
+    async with factory() as s:
+        s.add(
+            MediaItem(
+                id=mid,
+                user_id=user_id or str(uuid.uuid4()),
+                type="ai_video",
+                prompt="p",
+                file_url=file_url,
+                metadata_={},
+                created_at=_days_ago(1),
+            )
+        )
+        await s.commit()
+
+
+def test_lists_only_media_still_pointing_into_assets():
+    async def scenario():
+        engine, factory = await _make_factory()
+        try:
+            legacy = str(uuid.uuid4())
+            await _add_with_url(factory, mid=legacy, file_url=f"/assets/{legacy}.mp4")
+            await _add_with_url(
+                factory, mid=str(uuid.uuid4()), file_url="/media/uploads/x.mp4"
+            )
+            # Placeholders are shipped with the image, not media to migrate.
+            await _add_with_url(factory, mid=str(uuid.uuid4()), file_url="/assets/_waiting.png")
+            await _add_with_url(factory, mid=str(uuid.uuid4()), file_url="/assets/_failed.mp4")
+
+            async with factory() as s:
+                rows = await media_store.list_legacy_asset_media(s)
+
+            assert [row.id for row in rows] == [legacy]
+        finally:
+            await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_legacy_listing_is_cross_user():
+    async def scenario():
+        engine, factory = await _make_factory()
+        try:
+            mine, theirs = str(uuid.uuid4()), str(uuid.uuid4())
+            owner_a, owner_b = str(uuid.uuid4()), str(uuid.uuid4())
+            await _add_with_url(factory, mid=mine, file_url=f"/assets/{mine}.mp4", user_id=owner_a)
+            await _add_with_url(
+                factory, mid=theirs, file_url=f"/assets/{theirs}.mp4", user_id=owner_b
+            )
+
+            async with factory() as s:
+                rows = await media_store.list_legacy_asset_media(s)
+
+            assert {row.id for row in rows} == {mine, theirs}
+            assert {row.user_id for row in rows} == {owner_a, owner_b}
+        finally:
+            await engine.dispose()
+
+    asyncio.run(scenario())

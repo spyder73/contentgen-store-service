@@ -11,6 +11,7 @@ from ..derivatives import is_image_content_type, make_micro_thumbnail, make_thum
 from ..models import Character, DatasetTemplate, MediaItem
 from ..provenance import stamp_ai_provenance
 from ..schemas import (
+    LegacyAssetMediaOut,
     MediaItemIn,
     MediaItemOut,
     MediaItemPatch,
@@ -600,6 +601,40 @@ async def get_media_stats(session: AsyncSession, user_id: str | None = None) -> 
         uploaded=uploaded,
         generated=generated,
     )
+
+
+async def list_legacy_asset_media(
+    session: AsyncSession, *, limit: int = 500
+) -> list[LegacyAssetMediaOut]:
+    """Media rows whose bytes still live in the backend's scratch directory.
+
+    Lip-sync and animate used to write their output into ``assets/`` and point
+    the row straight at it, so those bytes were never uploaded here: only one
+    container can serve them, and the backend's boot sweep would delete them.
+    The backend calls this to migrate them into the durable upload path, so it
+    is deliberately cross-user — a maintenance task, not a user-facing list.
+
+    The placeholders every pending or failed generation points at are excluded;
+    they are shipped with the image and are not media.
+    """
+    rows = (
+        await session.execute(
+            select(MediaItem.id, MediaItem.user_id, MediaItem.file_url, MediaItem.type)
+            .where(
+                MediaItem.file_url.like("%assets/%"),
+                MediaItem.file_url.not_like("%_waiting%"),
+                MediaItem.file_url.not_like("%_failed%"),
+            )
+            .order_by(MediaItem.created_at)
+            .limit(limit)
+        )
+    ).all()
+    return [
+        LegacyAssetMediaOut(
+            id=row.id, user_id=row.user_id, file_url=row.file_url, type=row.type
+        )
+        for row in rows
+    ]
 
 
 # ── retention (disk hygiene) ─────────────────────────────────────────────────
