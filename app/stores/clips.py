@@ -98,6 +98,15 @@ async def get_clip(session: AsyncSession, id: str) -> ClipPromptOut | None:
 
 
 async def get_full_clip(session: AsyncSession, id: str) -> ClipFullOut | None:
+    # NOTE: deliberately no ORDER BY on the `id.in_(all_ids)` query below —
+    # Postgres does not guarantee IN-list order, so a caller computing a
+    # POSITIONAL media_index off this response's array can drift from
+    # media_refs' own bucket order (this was a live hazard: swap_clip_media
+    # was positional-only). Fixing the query's ordering was consciously
+    # skipped here: it is a wide-blast-radius change (every consumer of this
+    # endpoint), and SwapClipMediaBody.old_media_id below removes the
+    # load-bearing need for order to matter — a slot resolved BY ID cannot be
+    # the wrong one regardless of what order this array comes back in.
     row = await session.get(ClipPrompt, id)
     if row is None:
         return None
@@ -139,6 +148,22 @@ async def upsert_clip(
     return ClipPromptOut.from_orm_row(row)
 
 
+# A bucket's kind must agree with the TYPE of the media item being swapped
+# into it: "ai_video" is stored as "ai_video" going forward but "video" on
+# legacy rows (see app/stores/media.py's own _TYPE_BUCKETS note on the same
+# split), so ai_video tolerates both; image/audio are exact. Enforced
+# unconditionally in swap_clip_media, on both the id-based and positional
+# paths — kills the latent hazard where ClipFullDTOToClipPrompt (the Go
+# backend's viewModel.go) re-buckets by media TYPE rather than by which
+# media_refs bucket an id lives in: a wrong-typed id in a bucket would
+# silently re-bucket to a different slide kind on the next read.
+_KIND_TYPE_ALIASES: dict[str, tuple[str, ...]] = {
+    "image": ("image",),
+    "ai_video": ("ai_video", "video"),
+    "audio": ("audio",),
+}
+
+
 async def swap_clip_media(
     session: AsyncSession, clip_id: str, body: SwapClipMediaBody
 ) -> ClipFullOut | None:
@@ -155,20 +180,44 @@ async def swap_clip_media(
     media_refs = dict(row.media_refs or {"images": [], "ai_videos": [], "audios": []})
     bucket: list = list(media_refs.get(kind_key, []))
 
-    if body.media_index < 0 or body.media_index >= len(bucket):
-        raise IndexError(
-            f"media_index {body.media_index} out of range for '{kind_key}' (len={len(bucket)})"
-        )
+    # Resolve WHICH slot swaps: by id when the caller names the row it means
+    # to replace, positionally otherwise (the legacy fallback). Id-based
+    # resolution is immune to get_full_clip's lack of an ORDER BY (see that
+    # function's own comment): a media_index computed off a differently- or
+    # non-deterministically-ordered read can name the wrong slot; an id
+    # cannot, because bucket.index() searches the store's OWN current order
+    # rather than trusting the caller's.
+    old_media_id = (body.old_media_id or "").strip()
+    if old_media_id:
+        try:
+            media_index = bucket.index(old_media_id)
+        except ValueError:
+            raise ValueError(
+                f"old_media_id '{old_media_id}' not found in '{kind_key}' bucket for clip {clip_id}"
+            ) from None
+    else:
+        media_index = body.media_index
+        if media_index < 0 or media_index >= len(bucket):
+            raise IndexError(
+                f"media_index {media_index} out of range for '{kind_key}' (len={len(bucket)})"
+            )
 
     new_item = await session.get(MediaItem, body.new_media_id)
     if new_item is None:
         logger.warning(
             "swap_clip_media: media_item=%s not found in DB (clip=%s, kind=%s, index=%d)",
-            body.new_media_id, clip_id, body.kind, body.media_index,
+            body.new_media_id, clip_id, body.kind, media_index,
         )
         raise LookupError(f"media item '{body.new_media_id}' not found")
 
-    bucket[body.media_index] = body.new_media_id
+    allowed_types = _KIND_TYPE_ALIASES.get(body.kind, ())
+    if new_item.type not in allowed_types:
+        raise ValueError(
+            f"media item '{body.new_media_id}' has type '{new_item.type}', which does not "
+            f"match kind '{body.kind}' ('{kind_key}' bucket)"
+        )
+
+    bucket[media_index] = body.new_media_id
     media_refs[kind_key] = bucket
     row.media_refs = media_refs
     row.is_dirty = True

@@ -348,6 +348,15 @@ class SwapClipMediaBody(BaseModel):
     kind: str  # "image" | "ai_video" | "audio"
     media_index: int
     new_media_id: str
+    # Optional: when set, swap_clip_media resolves the slot to replace by
+    # FINDING this id in the bucket rather than by trusting media_index's
+    # position. get_full_clip's media array has no guaranteed order (see its
+    # own comment in stores/clips.py), so an index a caller computed off an
+    # earlier fetch of that array can drift from the store's current
+    # media_refs order; naming the id a caller means to replace cannot drift
+    # the same way. media_index stays required and is used as the positional
+    # fallback when this is absent.
+    old_media_id: str | None = None
 
 
 class RenameMediaBody(BaseModel):
