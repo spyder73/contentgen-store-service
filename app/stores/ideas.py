@@ -18,12 +18,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models import ClipRating, Idea
 from ..schemas import IdeaIn
 
-# Fetch ceiling before Python-side min_score filtering; far above any real
-# library today, revisit if a library ever outgrows it.
+# Fetch ceiling before Python-side min_score filtering. For the Layer-3 call
+# the cap applies PER TEMPLATE (template_id is filtered in SQL first), and one
+# idea row is minted per run, so it is far above any real library today;
+# revisit if a library ever outgrows it.
 LIST_FETCH_CAP = 500
 
 
 async def create_idea(session: AsyncSession, user_id: str, payload: IdeaIn) -> Idea:
+    # One run == one idea: a duplicate create (retry, double-fire at run start)
+    # returns the row already minted rather than forking the run's history
+    # across two ideas. The unique index on (user_id, run_id) from 0032 is what
+    # actually enforces this; the read just keeps the happy path idempotent.
+    existing = (
+        await session.execute(
+            select(Idea).where(Idea.user_id == user_id, Idea.run_id == payload.run_id)
+        )
+    ).scalars().first()
+    if existing is not None:
+        return existing
+
     row = Idea(
         id=str(uuidlib.uuid4()),
         user_id=user_id,
@@ -102,7 +116,9 @@ async def list_ideas(
         if own:
             latest = max(own, key=lambda r: (r.updated_at or r.created_at, r.id))
             note = latest.note or None
-        if min_score is not None and (score is None or score < min_score):
+        # 0 is not a score (the UI's "any score" default sends it), so
+        # min_score <= 0 must not hide every unrated idea.
+        if min_score is not None and min_score > 0 and (score is None or score < min_score):
             continue
         merged.append(
             {

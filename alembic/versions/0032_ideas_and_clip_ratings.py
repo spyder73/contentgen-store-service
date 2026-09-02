@@ -45,7 +45,11 @@ def upgrade() -> None:
     )
     op.create_index("ix_ideas_user_id", "ideas", ["user_id"])
     op.create_index("ix_ideas_user_template", "ideas", ["user_id", "template_id"])
-    op.create_index("ix_ideas_run_id", "ideas", ["run_id"])
+    # One idea per run, enforced by the DB: a duplicate create would otherwise
+    # fork the run's history across two rows and the run→idea lookup, the
+    # refined patch and the rating link could each land on a different one.
+    # Also serves the by-run lookup, so no separate run_id index is needed.
+    op.create_index("ux_ideas_user_run", "ideas", ["user_id", "run_id"], unique=True)
 
     op.create_table(
         "clip_ratings",
@@ -77,6 +81,9 @@ def upgrade() -> None:
             sa.DateTime(timezone=True),
             server_default=sa.func.now(),
         ),
+        # 1-5 stars: the route's pydantic bound only covers the route, and a
+        # bad value here would poison the library's AVG for good.
+        sa.CheckConstraint("score >= 1 AND score <= 5", name="ck_clip_ratings_score_range"),
     )
     op.create_index("ix_clip_ratings_user_id", "clip_ratings", ["user_id"])
     op.create_index("ix_clip_ratings_idea_id", "clip_ratings", ["idea_id"])

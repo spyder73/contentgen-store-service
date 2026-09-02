@@ -11,6 +11,7 @@ import uuid as uuidlib
 from datetime import datetime, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import ClipPrompt, ClipRating, Idea
@@ -37,8 +38,12 @@ async def upsert_rating(session: AsyncSession, user_id: str, payload: ClipRating
     # The store defends itself even though the Go backend owner-checks first:
     # clip_id is UNIQUE across all users, so a rating forged against someone
     # else's clip would permanently block the real owner from rating it.
+    # An EMPTY owner is accessible, matching the backend's convention: 0007
+    # added clip_prompts.user_id without a backfill, so pre-multi-tenancy
+    # clips have NULL and only a DIFFERENT non-empty owner is refused.
     clip = await session.get(ClipPrompt, payload.clip_id)
-    if clip is None or (clip.user_id or "") != user_id:
+    owner = ((clip.user_id if clip is not None else "") or "").strip()
+    if clip is None or (owner and owner != user_id):
         raise ClipRatingError(404, "clip_not_found")
 
     # A link may only point at the caller's own idea; anything else is stored
@@ -54,6 +59,14 @@ async def upsert_rating(session: AsyncSession, user_id: str, payload: ClipRating
     # second-granular on sqlite, and "latest note wins" in the library list
     # needs a total order even for ratings created in the same second.
     now = datetime.now(timezone.utc)
+
+    def _apply(target: ClipRating) -> None:
+        target.score = payload.score
+        target.note = payload.note or ""
+        target.updated_at = now
+        if idea_id:
+            target.idea_id = idea_id
+
     if row is None:
         row = ClipRating(
             id=str(uuidlib.uuid4()),
@@ -67,11 +80,20 @@ async def upsert_rating(session: AsyncSession, user_id: str, payload: ClipRating
         )
         session.add(row)
     else:
-        row.score = payload.score
-        row.note = payload.note or ""
-        row.updated_at = now
-        if idea_id:
-            row.idea_id = idea_id
-    await session.commit()
+        _apply(row)
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Read-then-insert loses the UNIQUE(clip_id) race when two upserts for
+        # one clip overlap (star click + note blur): roll our INSERT back and
+        # update the row that won instead of 500-ing. A missing winner means
+        # the conflict was not ours to resolve, so it propagates.
+        await session.rollback()
+        winner = await get_rating(session, user_id, payload.clip_id)
+        if winner is None:
+            raise
+        row = winner
+        _apply(row)
+        await session.commit()
     await session.refresh(row)
     return row

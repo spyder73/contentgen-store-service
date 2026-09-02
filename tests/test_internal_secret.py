@@ -33,6 +33,9 @@ def _keep_secret(monkeypatch):
     monkeypatch.setenv("INTERNAL_API_SECRET", INTERNAL_SECRET)
 
 
+IDEA_ID = "00000000-0000-0000-0000-0000000000a1"
+CLIP_ID = "00000000-0000-0000-0000-0000000000c1"
+
 # Representative sample covering every resource family + verb. If the gate
 # regresses, these tests light up before any business-logic test does.
 SAMPLE_ROUTES = [
@@ -47,6 +50,12 @@ SAMPLE_ROUTES = [
     ("get", "/v1/characters"),
     ("get", "/v1/episodes"),
     ("get", "/v1/voice-snippets"),
+    ("post", "/v1/ideas"),
+    ("get", "/v1/ideas"),
+    ("get", f"/v1/ideas/{IDEA_ID}"),
+    ("patch", f"/v1/ideas/{IDEA_ID}"),
+    ("post", "/v1/clip-ratings"),
+    ("get", "/v1/clip-ratings?clip_id=" + CLIP_ID),
 ]
 
 

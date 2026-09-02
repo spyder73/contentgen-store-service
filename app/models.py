@@ -320,12 +320,20 @@ class Idea(Base):
     )
     seed: Mapped[str] = mapped_column(Text, nullable=False)
     refined: Mapped[str | None] = mapped_column(Text, nullable=True)
-    template_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    template_id: Mapped[str] = mapped_column(Text, nullable=False)
     template_name: Mapped[str] = mapped_column(Text, default="")
     params: Mapped[dict] = mapped_column(JSONB, default=dict)
-    run_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False, index=True)
+    run_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+
+    # Mirrors 0032 exactly (an autogenerate that "fixes" a drift here would
+    # rewrite production indexes): the Layer-3 lookup is (user_id, template_id)
+    # and the unique (user_id, run_id) is what guarantees one idea per run.
+    __table_args__ = (
+        Index("ix_ideas_user_template", "user_id", "template_id"),
+        Index("ux_ideas_user_run", "user_id", "run_id", unique=True),
     )
 
 
@@ -359,6 +367,12 @@ class ClipRating(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # 1-5 stars, enforced at the DB too (the route's pydantic bound only
+    # covers requests that come through the route).
+    __table_args__ = (
+        CheckConstraint("score >= 1 AND score <= 5", name="ck_clip_ratings_score_range"),
     )
 
 

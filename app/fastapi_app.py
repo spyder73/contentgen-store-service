@@ -1143,14 +1143,11 @@ def create_fastapi_app() -> FastAPI:
         username = username.strip().lstrip("@") if username else None
         return await credits.ledger(session, user_id=user_id, username=username, since=since, limit=limit)
 
-    # ── user settings ────────────────────────────────────────────────────────
+    # ── idea library ─────────────────────────────────────────────────────────
     #
-    # A free-form per-user JSON object (sections keyed at the top level, e.g.
-    # "reviewer"). The path user_id is authoritative: like the rest of /v1 the
-    # gate is the X-Internal-Secret middleware plus the Go backend, which only
-    # ever passes the authenticated caller's own id.
-
-    # ---- Idea library (silent capture at run start; verdicts on clips) ----
+    # Ideas are captured silently at run start (seed) and patched at finalize
+    # (refined); the verdict lives on the clip, where judgment happens, and
+    # links back via a nullable idea_id resolved at rating time.
 
     @app.post("/v1/ideas", response_model=IdeaOut)
     async def create_idea_handler(payload: IdeaIn, request: Request, session: SessionDep) -> Any:
@@ -1207,6 +1204,13 @@ def create_fastapi_app() -> FastAPI:
         user_id = _require_user_id(request)
         row = await clip_ratings.get_rating(session, user_id, clip_id)
         return ClipRatingOut.model_validate(row) if row is not None else None
+
+    # ── user settings ────────────────────────────────────────────────────────
+    #
+    # A free-form per-user JSON object (sections keyed at the top level, e.g.
+    # "reviewer"). The path user_id is authoritative: like the rest of /v1 the
+    # gate is the X-Internal-Secret middleware plus the Go backend, which only
+    # ever passes the authenticated caller's own id.
 
     @app.get("/v1/user-settings/{user_id}")
     async def get_user_settings_handler(user_id: str, session: SessionDep) -> Any:
