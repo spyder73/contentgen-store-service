@@ -66,6 +66,11 @@ from .schemas import (
     UserFeatureUpdate,
     UserOut,
     VoiceSnippetOut,
+    ClipRatingIn,
+    ClipRatingOut,
+    IdeaIn,
+    IdeaOut,
+    IdeaPatch,
 )
 
 from .stores import (
@@ -77,6 +82,8 @@ from .stores import (
     generator_profiles,
     puppet_pose_presets,
     media,
+    clip_ratings,
+    ideas,
     pipelines,
     prompts,
     render_templates,
@@ -1142,6 +1149,62 @@ def create_fastapi_app() -> FastAPI:
     # "reviewer"). The path user_id is authoritative: like the rest of /v1 the
     # gate is the X-Internal-Secret middleware plus the Go backend, which only
     # ever passes the authenticated caller's own id.
+
+    # ---- Idea library (silent capture at run start; verdicts on clips) ----
+
+    @app.post("/v1/ideas", response_model=IdeaOut)
+    async def create_idea_handler(payload: IdeaIn, request: Request, session: SessionDep) -> Any:
+        user_id = _require_user_id(request)
+        row = await ideas.create_idea(session, user_id, payload)
+        return IdeaOut.model_validate(row)
+
+    @app.get("/v1/ideas", response_model=list[IdeaOut])
+    async def list_ideas_handler(
+        request: Request,
+        session: SessionDep,
+        template_id: str | None = None,
+        run_id: str | None = None,
+        min_score: float | None = None,
+        limit: int = 50,
+    ) -> Any:
+        user_id = _require_user_id(request)
+        return await ideas.list_ideas(
+            session, user_id, template_id=template_id, run_id=run_id,
+            min_score=min_score, limit=max(1, min(limit, 200)),
+        )
+
+    @app.get("/v1/ideas/{idea_id}", response_model=IdeaOut)
+    async def get_idea_handler(idea_id: str, request: Request, session: SessionDep) -> Any:
+        user_id = _require_user_id(request)
+        row = await ideas.get_idea(session, idea_id, user_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="idea_not_found")
+        return IdeaOut.model_validate(row)
+
+    @app.patch("/v1/ideas/{idea_id}", response_model=IdeaOut)
+    async def patch_idea_handler(
+        idea_id: str, payload: IdeaPatch, request: Request, session: SessionDep
+    ) -> Any:
+        user_id = _require_user_id(request)
+        row = await ideas.patch_refined(session, idea_id, user_id, payload.refined)
+        if row is None:
+            raise HTTPException(status_code=404, detail="idea_not_found")
+        return IdeaOut.model_validate(row)
+
+    @app.post("/v1/clip-ratings", response_model=ClipRatingOut)
+    async def upsert_clip_rating_handler(
+        payload: ClipRatingIn, request: Request, session: SessionDep
+    ) -> Any:
+        user_id = _require_user_id(request)
+        return ClipRatingOut.model_validate(
+            await clip_ratings.upsert_rating(session, user_id, payload)
+        )
+
+    @app.get("/v1/clip-ratings", response_model=ClipRatingOut | None)
+    async def get_clip_rating_handler(clip_id: str, request: Request, session: SessionDep) -> Any:
+        user_id = _require_user_id(request)
+        row = await clip_ratings.get_rating(session, user_id, clip_id)
+        return ClipRatingOut.model_validate(row) if row is not None else None
 
     @app.get("/v1/user-settings/{user_id}")
     async def get_user_settings_handler(user_id: str, session: SessionDep) -> Any:

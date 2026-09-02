@@ -302,6 +302,66 @@ class ClipPrompt(Base):
     )
 
 
+class Idea(Base):
+    """One idea the user ran a pipeline from — the library's unit.
+
+    ``seed`` is the raw typed input captured silently at run start; ``refined``
+    is the discussion's approved brief, patched in at finalize (NULL for runs
+    without a discussion). ``run_id`` is the FIRST run started from this idea:
+    "Run again" reuses the idea id (stamped onto the new run) instead of
+    minting a second row, so one idea never fragments across reruns.
+    """
+
+    __tablename__ = "ideas"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    seed: Mapped[str] = mapped_column(Text, nullable=False)
+    refined: Mapped[str | None] = mapped_column(Text, nullable=True)
+    template_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    template_name: Mapped[str] = mapped_column(Text, default="")
+    params: Mapped[dict] = mapped_column(JSONB, default=dict)
+    run_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class ClipRating(Base):
+    """The verdict on a finished clip — exactly one per clip (upserted).
+
+    ``idea_id`` is resolved from the clip's pipeline run at rating time and is
+    NULLABLE on purpose: a transient resolution failure stores the rating
+    anyway, and every re-rate re-resolves, so the link self-repairs.
+    """
+
+    __tablename__ = "clip_ratings"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    clip_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("clip_prompts.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    idea_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("ideas.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    score: Mapped[int] = mapped_column(Integer, nullable=False)
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class MediaItem(Base):
     __tablename__ = "media_items"
 

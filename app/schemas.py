@@ -82,6 +82,58 @@ class PromptTemplateIn(BaseModel):
     visibility: str = "private"
 
 
+class IdeaIn(BaseModel):
+    id: str | None = None
+    seed: str
+    template_id: str
+    template_name: str = ""
+    params: dict[str, Any] = {}
+    run_id: str
+
+
+class IdeaPatch(BaseModel):
+    refined: str
+
+
+class IdeaOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_id: str
+    seed: str
+    refined: str | None = None
+    template_id: str
+    template_name: str = ""
+    params: dict[str, Any] = {}
+    run_id: str
+    created_at: datetime
+    # Filled by the list join over clip_ratings; None until a clip is rated.
+    # With single-shot ideas this is simply the clip's rating; a rerun's
+    # second rated clip degrades it to a mean instead of corrupting anything.
+    score: float | None = None
+    note: str | None = None
+
+
+class ClipRatingIn(BaseModel):
+    clip_id: str
+    score: int = Field(ge=1, le=5)
+    note: str = ""
+    idea_id: str | None = None
+
+
+class ClipRatingOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_id: str
+    clip_id: str
+    idea_id: str | None = None
+    score: int
+    note: str = ""
+    created_at: datetime
+    updated_at: datetime
+
+
 class RenderTemplateOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
