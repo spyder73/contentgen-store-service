@@ -83,7 +83,6 @@ class PromptTemplateIn(BaseModel):
 
 
 class IdeaIn(BaseModel):
-    id: str | None = None
     seed: str
     template_id: str
     template_name: str = ""

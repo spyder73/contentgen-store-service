@@ -13,8 +13,17 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import ClipRating
+from ..models import ClipPrompt, ClipRating, Idea
 from ..schemas import ClipRatingIn
+
+
+class ClipRatingError(Exception):
+    """Domain error carrying an HTTP status; routes translate it."""
+
+    def __init__(self, status_code: int, message: str):
+        super().__init__(message)
+        self.status_code = status_code
+        self.message = message
 
 
 async def get_rating(session: AsyncSession, user_id: str, clip_id: str) -> ClipRating | None:
@@ -25,6 +34,21 @@ async def get_rating(session: AsyncSession, user_id: str, clip_id: str) -> ClipR
 
 
 async def upsert_rating(session: AsyncSession, user_id: str, payload: ClipRatingIn) -> ClipRating:
+    # The store defends itself even though the Go backend owner-checks first:
+    # clip_id is UNIQUE across all users, so a rating forged against someone
+    # else's clip would permanently block the real owner from rating it.
+    clip = await session.get(ClipPrompt, payload.clip_id)
+    if clip is None or (clip.user_id or "") != user_id:
+        raise ClipRatingError(404, "clip_not_found")
+
+    # A link may only point at the caller's own idea; anything else is stored
+    # as unlinked rather than rejected (the caller re-resolves on re-rate).
+    idea_id = payload.idea_id
+    if idea_id:
+        idea = await session.get(Idea, idea_id)
+        if idea is None or idea.user_id != user_id:
+            idea_id = None
+
     row = await get_rating(session, user_id, payload.clip_id)
     # Client-side microsecond timestamps: the DB server_default is
     # second-granular on sqlite, and "latest note wins" in the library list
@@ -35,7 +59,7 @@ async def upsert_rating(session: AsyncSession, user_id: str, payload: ClipRating
             id=str(uuidlib.uuid4()),
             user_id=user_id,
             clip_id=payload.clip_id,
-            idea_id=payload.idea_id,
+            idea_id=idea_id,
             score=payload.score,
             note=payload.note or "",
             created_at=now,
@@ -46,8 +70,8 @@ async def upsert_rating(session: AsyncSession, user_id: str, payload: ClipRating
         row.score = payload.score
         row.note = payload.note or ""
         row.updated_at = now
-        if payload.idea_id:
-            row.idea_id = payload.idea_id
+        if idea_id:
+            row.idea_id = idea_id
     await session.commit()
     await session.refresh(row)
     return row

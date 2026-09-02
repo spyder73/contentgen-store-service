@@ -25,7 +25,7 @@ LIST_FETCH_CAP = 500
 
 async def create_idea(session: AsyncSession, user_id: str, payload: IdeaIn) -> Idea:
     row = Idea(
-        id=payload.id or str(uuidlib.uuid4()),
+        id=str(uuidlib.uuid4()),
         user_id=user_id,
         seed=payload.seed,
         refined=None,
@@ -75,10 +75,16 @@ async def list_ideas(
     if not ideas:
         return []
 
+    # Scoped to the SAME user on purpose: an idea's user owns its verdicts,
+    # and a rating another account managed to point at this idea must never
+    # surface in this list (cross-tenant leak).
     ratings = (
         (
             await session.execute(
-                select(ClipRating).where(ClipRating.idea_id.in_([i.id for i in ideas]))
+                select(ClipRating).where(
+                    ClipRating.idea_id.in_([i.id for i in ideas]),
+                    ClipRating.user_id == user_id,
+                )
             )
         )
         .scalars()

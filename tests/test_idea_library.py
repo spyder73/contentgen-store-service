@@ -168,3 +168,51 @@ def test_rerun_average_degrades_gracefully():
         await engine.dispose()
 
     asyncio.run(run())
+
+
+def test_rating_someone_elses_clip_is_rejected():
+    """clip_id is globally unique — a forged rating would permanently block
+    the real owner from rating their own clip, so the store fails closed."""
+
+    async def run():
+        engine, factory = await _make_factory()
+        clip_id = await _clip(factory, USER_A)
+        async with factory() as s:
+            try:
+                await ratings_store.upsert_rating(
+                    s, USER_B, ClipRatingIn(clip_id=clip_id, score=5, note="not mine")
+                )
+                raise AssertionError("expected ClipRatingError")
+            except ratings_store.ClipRatingError as exc:
+                assert exc.status_code == 404
+        # And the real owner can still rate it.
+        async with factory() as s:
+            mine = await ratings_store.upsert_rating(
+                s, USER_A, ClipRatingIn(clip_id=clip_id, score=4, note="mine")
+            )
+            assert mine.score == 4
+        await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_forged_idea_link_is_dropped_and_never_leaks():
+    """A rating pointed at another user's idea is stored UNLINKED, and the
+    idea owner's list never surfaces a foreign rating."""
+
+    async def run():
+        engine, factory = await _make_factory()
+        async with factory() as s:
+            ideas_of_a = await ideas_store.create_idea(s, USER_A, _idea())
+        clip_of_b = await _clip(factory, USER_B)
+        async with factory() as s:
+            forged = await ratings_store.upsert_rating(
+                s, USER_B, ClipRatingIn(clip_id=clip_of_b, score=1, note="sabotage", idea_id=ideas_of_a.id)
+            )
+            assert forged.idea_id is None  # the link was dropped, not stored
+        async with factory() as s:
+            rows = await ideas_store.list_ideas(s, USER_A)
+            assert rows[0]["score"] is None and rows[0]["note"] is None
+        await engine.dispose()
+
+    asyncio.run(run())

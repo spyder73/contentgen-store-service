@@ -1196,9 +1196,11 @@ def create_fastapi_app() -> FastAPI:
         payload: ClipRatingIn, request: Request, session: SessionDep
     ) -> Any:
         user_id = _require_user_id(request)
-        return ClipRatingOut.model_validate(
-            await clip_ratings.upsert_rating(session, user_id, payload)
-        )
+        try:
+            row = await clip_ratings.upsert_rating(session, user_id, payload)
+        except clip_ratings.ClipRatingError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
+        return ClipRatingOut.model_validate(row)
 
     @app.get("/v1/clip-ratings", response_model=ClipRatingOut | None)
     async def get_clip_rating_handler(clip_id: str, request: Request, session: SessionDep) -> Any:
