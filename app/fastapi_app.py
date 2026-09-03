@@ -71,6 +71,10 @@ from .schemas import (
     IdeaIn,
     IdeaOut,
     IdeaPatch,
+    ReviewCorrectionIn,
+    ReviewCorrectionOut,
+    ReviewTraceIn,
+    ReviewTraceOut,
 )
 
 from .stores import (
@@ -87,6 +91,8 @@ from .stores import (
     pipelines,
     prompts,
     render_templates,
+    review_corrections,
+    review_traces,
     run_snapshots,
     series,
     system_prompts,
@@ -1204,6 +1210,52 @@ def create_fastapi_app() -> FastAPI:
         user_id = _require_user_id(request)
         row = await clip_ratings.get_rating(session, user_id, clip_id)
         return ClipRatingOut.model_validate(row) if row is not None else None
+
+    # ── reviewer trace log + corrections ────────────────────────────────────
+    #
+    # review_traces is an append-only log of every check-tier call the
+    # reviewer made (id minted by the Go backend so a retried POST is
+    # idempotent); review_corrections is the much smaller table of human
+    # rulings on a verdict, upserted on (user_id, verdict_id).
+
+    @app.post("/v1/review-traces", response_model=ReviewTraceOut)
+    async def create_review_trace_handler(
+        payload: ReviewTraceIn, request: Request, session: SessionDep
+    ) -> Any:
+        user_id = _require_user_id(request)
+        row = await review_traces.create_trace(session, user_id, payload)
+        return ReviewTraceOut.model_validate(row)
+
+    @app.get("/v1/review-traces", response_model=list[ReviewTraceOut])
+    async def list_review_traces_handler(
+        request: Request, session: SessionDep, run_id: str, limit: int = 200
+    ) -> Any:
+        user_id = _require_user_id(request)
+        return await review_traces.list_traces(
+            session, user_id, run_id=run_id, limit=max(1, min(limit, 200))
+        )
+
+    @app.post("/v1/review-corrections", response_model=ReviewCorrectionOut)
+    async def upsert_review_correction_handler(
+        payload: ReviewCorrectionIn, request: Request, session: SessionDep
+    ) -> Any:
+        user_id = _require_user_id(request)
+        row = await review_corrections.upsert_correction(session, user_id, payload)
+        return ReviewCorrectionOut.model_validate(row)
+
+    @app.get("/v1/review-corrections", response_model=list[ReviewCorrectionOut])
+    async def list_review_corrections_handler(
+        request: Request,
+        session: SessionDep,
+        template_id: str | None = None,
+        label: str | None = None,
+        limit: int = 50,
+    ) -> Any:
+        user_id = _require_user_id(request)
+        return await review_corrections.list_corrections(
+            session, user_id, template_id=template_id, label=label,
+            limit=max(1, min(limit, 200)),
+        )
 
     # ── user settings ────────────────────────────────────────────────────────
     #

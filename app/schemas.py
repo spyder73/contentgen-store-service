@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -129,6 +129,89 @@ class ClipRatingOut(BaseModel):
     idea_id: str | None = None
     score: int
     note: str = ""
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReviewTraceIn(BaseModel):
+    id: str
+    run_id: str
+    template_id: str = ""
+    checkpoint_id: str
+    checkpoint_index: int
+    verdict_id: str | None = None
+    attempt: int = 0
+    tier: str
+    frame: str = ""
+    candidate_id: str = ""
+    provider: str = ""
+    model: str = ""
+    system_prompt: str = ""
+    raw_output: str = ""
+    images: list[dict[str, Any]] = []
+    prompt_chars: int = 0
+    prompt_hash: str = ""
+    latency_ms: int = 0
+    outcome: str = ""
+    created_at: datetime | None = None
+
+
+class ReviewTraceOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_id: str
+    run_id: str
+    template_id: str = ""
+    checkpoint_id: str
+    checkpoint_index: int
+    verdict_id: str | None = None
+    attempt: int = 0
+    tier: str
+    frame: str = ""
+    candidate_id: str = ""
+    provider: str = ""
+    model: str = ""
+    system_prompt: str = ""
+    raw_output: str = ""
+    images: list[dict[str, Any]] = []
+    prompt_chars: int = 0
+    prompt_hash: str = ""
+    latency_ms: int = 0
+    outcome: str = ""
+    created_at: datetime
+
+
+class ReviewCorrectionIn(BaseModel):
+    run_id: str
+    verdict_id: str
+    trace_id: str | None = None
+    template_id: str
+    checkpoint_id: str
+    tier: str = ""
+    frame: str = ""
+    label: Literal["false_pass", "false_fail", "correct"]
+    reason: str = Field(default="", max_length=500)
+    scope: Literal["this_pipeline", "all"] = "this_pipeline"
+    source: Literal["user", "ask_human", "inferred"] = "user"
+
+
+class ReviewCorrectionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_id: str
+    run_id: str
+    verdict_id: str
+    trace_id: str | None = None
+    template_id: str
+    checkpoint_id: str
+    tier: str = ""
+    frame: str = ""
+    label: str
+    reason: str = ""
+    scope: str = "this_pipeline"
+    source: str = "user"
     created_at: datetime
     updated_at: datetime
 

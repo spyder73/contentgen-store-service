@@ -376,6 +376,91 @@ class ClipRating(Base):
     )
 
 
+class ReviewTrace(Base):
+    """One check-tier call the reviewer made — an append-only log, one row
+    per attempt. ``id`` is caller-minted (the Go backend mints the trace id
+    before the call) so a retried POST is idempotent rather than forking the
+    log. ``verdict_id`` links back to the human-visible verdict this attempt
+    produced and is nullable: a trace can be recorded before a verdict is
+    finalized.
+    """
+
+    __tablename__ = "review_traces"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    run_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
+    template_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    checkpoint_id: Mapped[str] = mapped_column(Text, nullable=False)
+    checkpoint_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    verdict_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), nullable=True)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tier: Mapped[str] = mapped_column(Text, nullable=False)
+    frame: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    candidate_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    provider: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    model: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    system_prompt: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    raw_output: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    images: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    prompt_chars: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    prompt_hash: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    latency_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    # Mirrors 0033 exactly (an autogenerate that "fixes" a drift here would
+    # rewrite production indexes).
+    __table_args__ = (
+        Index("ix_review_traces_run", "run_id"),
+        Index("ix_review_traces_user_created", "user_id", "created_at"),
+        Index("ix_review_traces_verdict", "verdict_id"),
+    )
+
+
+class ReviewCorrection(Base):
+    """A human's ruling on one verdict — exactly one per (user, verdict),
+    upserted in place. Re-judging a verdict updates the existing row rather
+    than forking history, matching how ``ClipRating`` upserts on clip_id.
+    """
+
+    __tablename__ = "review_corrections"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    run_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
+    verdict_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
+    trace_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), nullable=True)
+    template_id: Mapped[str] = mapped_column(Text, nullable=False)
+    checkpoint_id: Mapped[str] = mapped_column(Text, nullable=False)
+    tier: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    frame: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    scope: Mapped[str] = mapped_column(Text, nullable=False, default="this_pipeline")
+    source: Mapped[str] = mapped_column(Text, nullable=False, default="user")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    # Mirrors 0033 exactly (an autogenerate that "fixes" a drift here would
+    # rewrite production indexes/constraints).
+    __table_args__ = (
+        Index("ux_review_corrections_user_verdict", "user_id", "verdict_id", unique=True),
+        Index("ix_review_corrections_user_template_created", "user_id", "template_id", "created_at"),
+        CheckConstraint("label IN ('false_pass','false_fail','correct')", name="ck_review_corrections_label"),
+    )
+
+
 class MediaItem(Base):
     __tablename__ = "media_items"
 
