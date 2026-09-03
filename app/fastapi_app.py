@@ -1223,7 +1223,10 @@ def create_fastapi_app() -> FastAPI:
         payload: ReviewTraceIn, request: Request, session: SessionDep
     ) -> Any:
         user_id = _require_user_id(request)
-        row = await review_traces.create_trace(session, user_id, payload)
+        try:
+            row = await review_traces.create_trace(session, user_id, payload)
+        except review_traces.ReviewTraceError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
         return ReviewTraceOut.model_validate(row)
 
     @app.get("/v1/review-traces", response_model=list[ReviewTraceOut])

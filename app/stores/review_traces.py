@@ -19,6 +19,15 @@ LIST_LIMIT_DEFAULT = 200
 LIST_LIMIT_MAX = 200
 
 
+class ReviewTraceError(Exception):
+    """Domain error carrying an HTTP status; routes translate it."""
+
+    def __init__(self, status_code: int, message: str):
+        super().__init__(message)
+        self.status_code = status_code
+        self.message = message
+
+
 def _row_from_payload(user_id: str, payload: ReviewTraceIn) -> ReviewTrace:
     return ReviewTrace(
         id=payload.id,
@@ -46,11 +55,15 @@ def _row_from_payload(user_id: str, payload: ReviewTraceIn) -> ReviewTrace:
 
 async def create_trace(session: AsyncSession, user_id: str, payload: ReviewTraceIn) -> ReviewTrace:
     # Idempotent on id: a retried POST (network hiccup, at-least-once
-    # delivery) must return the row already stored rather than 409/500, and
-    # must never let a different user "adopt" someone else's trace id.
+    # delivery) must return the row already stored rather than 409/500. The
+    # PK is id alone, so a collision with a DIFFERENT user's trace is a
+    # conflict, never a read of that row: both the pre-check below and the
+    # post-IntegrityError re-read are scoped by user_id.
     existing = await session.get(ReviewTrace, payload.id)
-    if existing is not None and existing.user_id == user_id:
-        return existing
+    if existing is not None:
+        if existing.user_id == user_id:
+            return existing
+        raise ReviewTraceError(409, "trace_id_taken")
 
     row = _row_from_payload(user_id, payload)
     session.add(row)
@@ -59,12 +72,23 @@ async def create_trace(session: AsyncSession, user_id: str, payload: ReviewTrace
     except IntegrityError:
         # Two concurrent POSTs with the same caller-minted id: the loser's
         # INSERT lost the primary-key race, so roll back and read the
-        # winner instead of failing the request.
+        # winner instead of failing the request -- but only if the winner
+        # is OUR row (the same-user retry case). A winner owned by a
+        # different user is a real conflict, not a row to hand back.
         await session.rollback()
-        winner = await session.get(ReviewTrace, payload.id)
-        if winner is None:
-            raise
-        return winner
+        winner = (
+            await session.execute(
+                select(ReviewTrace).where(
+                    ReviewTrace.id == payload.id, ReviewTrace.user_id == user_id
+                )
+            )
+        ).scalars().first()
+        if winner is not None:
+            return winner
+        other = await session.get(ReviewTrace, payload.id)
+        if other is not None:
+            raise ReviewTraceError(409, "trace_id_taken")
+        raise
     await session.refresh(row)
     return row
 

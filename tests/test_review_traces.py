@@ -17,7 +17,7 @@ from pydantic import ValidationError
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.ext.compiler import compiles
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 @compiles(JSONB, "sqlite")
@@ -97,6 +97,42 @@ def test_correction_rejects_bad_label():
         ReviewCorrectionIn(run_id="r", verdict_id="v", template_id="t", checkpoint_id="c", label="meh", reason="", scope="this_pipeline", source="user")
 
 
+def test_trace_id_collision_across_users_is_a_conflict_not_a_leak():
+    """review_traces' PK is id alone. A collision with a DIFFERENT user's
+    trace id must never hand that row back to the colliding caller — it is a
+    conflict (409), and the colliding user's own list stays empty."""
+
+    async def run():
+        engine, factory = await _make_factory()
+        run_id = str(uuid.uuid4())
+        trace_id = str(uuid.uuid4())
+        payload = ReviewTraceIn(
+            id=trace_id, run_id=run_id, checkpoint_id="gen", checkpoint_index=0,
+            attempt=1, tier="check", system_prompt="owned by A", raw_output="{}", outcome="pass",
+        )
+        async with factory() as s:
+            owned = await review_traces.create_trace(s, USER_A, payload)
+            assert owned.user_id == USER_A
+
+        forged = payload.model_copy(update={"system_prompt": "forged by B"})
+        async with factory() as s:
+            try:
+                await review_traces.create_trace(s, USER_B, forged)
+                raise AssertionError("expected ReviewTraceError")
+            except review_traces.ReviewTraceError as exc:
+                assert exc.status_code == 409
+
+        async with factory() as s:
+            # Never leaked into B's own view, and A's row is untouched.
+            assert await review_traces.list_traces(s, USER_B, run_id=run_id) == []
+            rows = await review_traces.list_traces(s, USER_A, run_id=run_id)
+            assert [r.id for r in rows] == [trace_id]
+            assert rows[0].system_prompt == "owned by A"
+        await engine.dispose()
+
+    asyncio.run(run())
+
+
 # ── routes ──────────────────────────────────────────────────────────────────
 #
 # Same harness as the other route tests: a TestClient over the real FastAPI
@@ -122,3 +158,27 @@ def client(monkeypatch):
 def test_http_routes_require_user_and_secret(client):
     r = client.post("/v1/review-traces", json={}, headers={"X-Internal-Secret": SECRET})
     assert r.status_code in (401, 422)
+
+
+def test_create_trace_route_maps_id_conflict_to_409(client):
+    """The store raises ReviewTraceError(409, ...) on a cross-user id
+    collision; the route must translate that to a 409, not a 500 or a
+    silently-serialized foreign row."""
+    body = {
+        "id": str(uuid.uuid4()),
+        "run_id": str(uuid.uuid4()),
+        "checkpoint_id": "gen",
+        "checkpoint_index": 0,
+        "tier": "check",
+    }
+    with patch(
+        "app.stores.review_traces.create_trace",
+        new=AsyncMock(side_effect=review_traces.ReviewTraceError(409, "trace_id_taken")),
+    ):
+        response = client.post(
+            "/v1/review-traces",
+            headers={"X-Internal-Secret": SECRET, "X-User-ID": USER_B},
+            json=body,
+        )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "trace_id_taken"
