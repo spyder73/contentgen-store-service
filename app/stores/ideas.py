@@ -71,6 +71,20 @@ async def patch_refined(session: AsyncSession, idea_id: str, user_id: str, refin
     return row
 
 
+async def delete_idea(session: AsyncSession, idea_id: str, user_id: str) -> bool:
+    """Delete an idea owned by user_id. Returns False when missing or foreign
+    (the route turns that into 404). Clip ratings pointing at this idea are
+    unlinked, not deleted — 0032's clip_ratings.idea_id FK is ON DELETE SET
+    NULL, so the DB does that for free in the same transaction as the delete.
+    """
+    row = await get_idea(session, idea_id, user_id)
+    if row is None:
+        return False
+    await session.delete(row)
+    await session.commit()
+    return True
+
+
 async def list_ideas(
     session: AsyncSession,
     user_id: str,

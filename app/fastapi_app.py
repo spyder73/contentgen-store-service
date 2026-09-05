@@ -1194,6 +1194,14 @@ def create_fastapi_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="idea_not_found")
         return IdeaOut.model_validate(row)
 
+    @app.delete("/v1/ideas/{idea_id}", status_code=204)
+    async def delete_idea_handler(idea_id: str, request: Request, session: SessionDep) -> Response:
+        user_id = _require_user_id(request)
+        deleted = await ideas.delete_idea(session, idea_id, user_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="idea_not_found")
+        return Response(status_code=204)
+
     @app.post("/v1/clip-ratings", response_model=ClipRatingOut)
     async def upsert_clip_rating_handler(
         payload: ClipRatingIn, request: Request, session: SessionDep

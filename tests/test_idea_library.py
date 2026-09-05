@@ -431,6 +431,47 @@ def test_cascade_on_user_delete():
     asyncio.run(run())
 
 
+def test_delete_idea_owner_scoping_and_rating_survives_unlinked():
+    """Delete only succeeds for the owner; a surviving clip rating loses its
+    idea_id (0032's FK is ON DELETE SET NULL) rather than being deleted."""
+
+    async def run():
+        engine, factory = await _make_factory()
+        async with factory() as s:
+            idea = await ideas_store.create_idea(s, USER_A, _idea())
+        clip_id = await _clip(factory, USER_A)
+        async with factory() as s:
+            rating = await ratings_store.upsert_rating(
+                s, USER_A, ClipRatingIn(clip_id=clip_id, score=5, note="payoff landed", idea_id=idea.id)
+            )
+        async with factory() as s:
+            # Foreign delete is a no-op: 404 upstream, row untouched.
+            assert await ideas_store.delete_idea(s, idea.id, USER_B) is False
+        async with factory() as s:
+            assert await ideas_store.get_idea(s, idea.id, USER_A) is not None
+
+        async with factory() as s:
+            assert await ideas_store.delete_idea(s, idea.id, USER_A) is True
+        async with factory() as s:
+            assert await ideas_store.get_idea(s, idea.id, USER_A) is None
+            refreshed = await s.get(ClipRating, rating.id)
+            assert refreshed is not None
+            assert refreshed.idea_id is None
+        await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_delete_idea_nonexistent_is_a_no_op():
+    async def run():
+        engine, factory = await _make_factory()
+        async with factory() as s:
+            assert await ideas_store.delete_idea(s, str(uuid.uuid4()), USER_A) is False
+        await engine.dispose()
+
+    asyncio.run(run())
+
+
 def test_min_score_zero_is_not_a_filter():
     """0 stars is not a rating - the "any score" default sends 0, which must
     not hide every unrated idea."""
@@ -603,6 +644,29 @@ def test_patch_refined_route(client):
             f"/v1/ideas/{uuid.uuid4()}", headers=_headers(), json={"refined": "x"}
         )
     assert missing.status_code == 404
+
+
+def test_delete_idea_route(client):
+    idea_id = str(uuid.uuid4())
+    with patch("app.stores.ideas.delete_idea", new=AsyncMock(return_value=True)) as call:
+        response = client.delete(f"/v1/ideas/{idea_id}", headers=_headers())
+    assert response.status_code == 204
+    assert response.content == b""
+    assert call.call_args.args[1:] == (idea_id, USER_A)
+
+    with patch("app.stores.ideas.delete_idea", new=AsyncMock(return_value=False)):
+        missing = client.delete(f"/v1/ideas/{idea_id}", headers=_headers())
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == "idea_not_found"
+
+
+def test_delete_idea_route_requires_the_internal_secret_and_user_id(client):
+    idea_id = str(uuid.uuid4())
+    assert client.delete(f"/v1/ideas/{idea_id}").status_code == 401
+    assert (
+        client.delete(f"/v1/ideas/{idea_id}", headers={"X-Internal-Secret": SECRET}).status_code
+        == 401
+    )
 
 
 def test_clip_rating_routes(client):
