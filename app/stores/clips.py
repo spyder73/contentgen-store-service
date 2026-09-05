@@ -148,6 +148,26 @@ async def upsert_clip(
     return ClipPromptOut.from_orm_row(row)
 
 
+async def patch_clip(session: AsyncSession, id: str, fields: dict) -> ClipPromptOut | None:
+    """Write only the keys present in ``fields`` (from ``model_dump(exclude_unset=True)``
+    on ``ClipPromptPatch``). Unlike ``upsert_clip``, an omitted key leaves its column
+    untouched — that is the whole point: a metadata-only patch must never default
+    finished_at/thumbnail_url/render_output_urls back to None/[] the way the PUT's
+    unconditional upsert does. ``metadata`` is remapped to the ORM's ``metadata_``
+    attribute (the model column is named "metadata" in Postgres but "metadata" is a
+    reserved attribute name on the Declarative base).
+    """
+    row = await session.get(ClipPrompt, id)
+    if row is None:
+        return None
+    for key, value in fields.items():
+        attr = "metadata_" if key == "metadata" else key
+        setattr(row, attr, value)
+    await session.commit()
+    await session.refresh(row)
+    return ClipPromptOut.from_orm_row(row)
+
+
 # A bucket's kind must agree with the TYPE of the media item being swapped
 # into it: "ai_video" is stored as "ai_video" going forward but "video" on
 # legacy rows (see app/stores/media.py's own _TYPE_BUCKETS note on the same

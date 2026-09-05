@@ -20,6 +20,7 @@ from .schemas import (
     ClipFullOut,
     ClipPromptIn,
     ClipPromptOut,
+    ClipPromptPatch,
     ClipSummaryOut,
     DatasetTemplateCreate,
     DatasetTemplateOut,
@@ -500,6 +501,20 @@ def create_fastapi_app() -> FastAPI:
     async def upsert_clip_handler(id: str, body: ClipPromptIn, request: Request, session: SessionDep) -> Any:
         body.id = id
         return await clips.upsert_clip(session, body, user_id=_get_user_id(request))
+
+    @app.patch("/v1/clips/{id}", response_model=ClipPromptOut)
+    async def patch_clip_handler(id: str, body: ClipPromptPatch, session: SessionDep) -> Any:
+        # exclude_unset, not the model's values: an absent key must leave its
+        # column untouched (unlike the PUT above, which assigns every column
+        # unconditionally). An explicit `null` in the body still clears a
+        # column — it IS present in model_fields_set, just with value None.
+        fields = body.model_dump(exclude_unset=True)
+        if not fields:
+            raise HTTPException(status_code=400, detail="empty_body")
+        row = await clips.patch_clip(session, id, fields)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
 
     @app.delete("/v1/clips/{id}", status_code=204)
     async def delete_clip_handler(id: str, session: SessionDep) -> None:

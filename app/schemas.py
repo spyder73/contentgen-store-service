@@ -378,6 +378,31 @@ class ClipPromptIn(BaseModel):
     thumbnail_url: str | None = None
 
 
+class ClipPromptPatch(BaseModel):
+    """Partial clip update: only keys PRESENT in the request body are written.
+
+    Every field defaults to None so an absent key round-trips as "not set" —
+    the route reads ``model_dump(exclude_unset=True)`` rather than this
+    model's values directly, so an explicit ``null`` (present, value None)
+    still clears a column while a key the caller never sent leaves it alone.
+    This is what lets the Go backend PATCH metadata edits (name/style/
+    metadata/media_refs/is_dirty) without a GET-then-PUT round trip that can
+    race a render-completion write and wipe finished_at/thumbnail_url/
+    render_output_urls. Those render-owned columns are still patchable here
+    (an explicit caller who means to clear them can), just never touched by
+    an omitted key the way the old full-row PUT unconditionally did.
+    """
+
+    name: str | None = None
+    metadata: dict[str, Any] | None = None
+    style: dict[str, Any] | None = None
+    media_refs: dict[str, Any] | None = None
+    render_output_urls: list[Any] | None = None
+    is_dirty: bool | None = None
+    finished_at: datetime | None = None
+    thumbnail_url: str | None = None
+
+
 class MediaItemOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
