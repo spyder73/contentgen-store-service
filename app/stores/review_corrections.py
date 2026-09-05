@@ -102,7 +102,10 @@ async def upsert_correction(
         # Read-then-insert loses the UNIQUE(user_id, verdict_id) race when
         # two upserts for one verdict overlap: roll our INSERT back and
         # update the row that won instead of 500-ing. The rollback also
-        # discards any reinforcement weight bump attempted above.
+        # discards any reinforcement weight bump attempted above — if this
+        # insert carried reinforces_id, that reinforcement is silently
+        # dropped on this race (the caller gets a 200, not an error; the
+        # weight bump just never lands). Known, accepted gap.
         await session.rollback()
         winner = await get_correction(session, user_id, payload.verdict_id)
         if winner is None:

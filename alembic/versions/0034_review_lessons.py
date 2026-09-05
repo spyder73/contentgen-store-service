@@ -45,6 +45,11 @@ def upgrade() -> None:
         "review_corrections",
         sa.Column("weight", sa.Integer(), nullable=False, server_default="1"),
     )
+    # scope's old enum value "all" was live before this round; the application
+    # layer now speaks "all_pipelines" for the same cross-template meaning, so
+    # legacy rows must be rewritten or they silently stop matching the
+    # all_pipelines OR-clause in list_corrections (app/stores/review_corrections.py).
+    op.execute("UPDATE review_corrections SET scope='all_pipelines' WHERE scope='all'")
 
 
 def downgrade() -> None:
