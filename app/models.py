@@ -445,6 +445,11 @@ class ReviewCorrection(Base):
     reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
     scope: Mapped[str] = mapped_column(Text, nullable=False, default="this_pipeline")
     source: Mapped[str] = mapped_column(Text, nullable=False, default="user")
+    lesson: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    reinforces_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("review_corrections.id", ondelete="SET NULL"), nullable=True
+    )
+    weight: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -452,8 +457,8 @@ class ReviewCorrection(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    # Mirrors 0033 exactly (an autogenerate that "fixes" a drift here would
-    # rewrite production indexes/constraints).
+    # Mirrors 0033 + 0034 exactly (an autogenerate that "fixes" a drift here
+    # would rewrite production indexes/constraints).
     __table_args__ = (
         Index("ux_review_corrections_user_verdict", "user_id", "verdict_id", unique=True),
         Index("ix_review_corrections_user_template_created", "user_id", "template_id", "created_at"),

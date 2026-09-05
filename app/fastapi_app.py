@@ -1251,7 +1251,10 @@ def create_fastapi_app() -> FastAPI:
         payload: ReviewCorrectionIn, request: Request, session: SessionDep
     ) -> Any:
         user_id = _require_user_id(request)
-        row = await review_corrections.upsert_correction(session, user_id, payload)
+        try:
+            row = await review_corrections.upsert_correction(session, user_id, payload)
+        except review_corrections.ReviewCorrectionError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
         return ReviewCorrectionOut.model_validate(row)
 
     @app.get("/v1/review-corrections", response_model=list[ReviewCorrectionOut])

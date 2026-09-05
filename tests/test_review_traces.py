@@ -97,6 +97,110 @@ def test_correction_rejects_bad_label():
         ReviewCorrectionIn(run_id="r", verdict_id="v", template_id="t", checkpoint_id="c", label="meh", reason="", scope="this_pipeline", source="user")
 
 
+def test_correction_upsert_stores_and_returns_lesson_and_scope():
+    async def run():
+        engine, factory = await _make_factory()
+        payload = ReviewCorrectionIn(
+            run_id=str(uuid.uuid4()), verdict_id=str(uuid.uuid4()), template_id="tpl", checkpoint_id="gen",
+            label="false_pass", reason="raw note", lesson="never trust a blurry hand", scope="this_checkpoint",
+            source="user",
+        )
+        async with factory() as s:
+            row = await review_corrections.upsert_correction(s, USER_A, payload)
+            assert row.lesson == "never trust a blurry hand"
+            assert row.scope == "this_checkpoint"
+            assert row.weight == 1
+            assert row.reinforces_id is None
+        await engine.dispose()
+    asyncio.run(run())
+
+
+def test_correction_reinforce_increments_target_weight():
+    async def run():
+        engine, factory = await _make_factory()
+        original_payload = ReviewCorrectionIn(
+            run_id=str(uuid.uuid4()), verdict_id=str(uuid.uuid4()), template_id="tpl", checkpoint_id="gen",
+            label="false_pass", reason="", lesson="six fingers is a fail", scope="this_pipeline", source="user",
+        )
+        async with factory() as s:
+            original = await review_corrections.upsert_correction(s, USER_A, original_payload)
+            assert original.weight == 1
+
+        reinforcing_payload = original_payload.model_copy(update={
+            "verdict_id": str(uuid.uuid4()), "reinforces_id": original.id,
+        })
+        async with factory() as s:
+            reinforcing = await review_corrections.upsert_correction(s, USER_A, reinforcing_payload)
+            assert reinforcing.reinforces_id == original.id
+            assert reinforcing.weight == 1  # the reinforcing row itself starts fresh
+
+        async with factory() as s:
+            refreshed = await review_corrections.get_correction_by_id(s, USER_A, original.id)
+            assert refreshed.weight == 2
+        await engine.dispose()
+    asyncio.run(run())
+
+
+def test_correction_reinforce_foreign_target_is_404_and_not_persisted():
+    async def run():
+        engine, factory = await _make_factory()
+        original_payload = ReviewCorrectionIn(
+            run_id=str(uuid.uuid4()), verdict_id=str(uuid.uuid4()), template_id="tpl", checkpoint_id="gen",
+            label="false_pass", reason="", lesson="owned by A", scope="this_pipeline", source="user",
+        )
+        async with factory() as s:
+            original = await review_corrections.upsert_correction(s, USER_A, original_payload)
+
+        forged_verdict = str(uuid.uuid4())
+        forged_payload = original_payload.model_copy(update={
+            "verdict_id": forged_verdict, "reinforces_id": original.id,
+        })
+        async with factory() as s:
+            try:
+                await review_corrections.upsert_correction(s, USER_B, forged_payload)
+                raise AssertionError("expected ReviewCorrectionError")
+            except review_corrections.ReviewCorrectionError as exc:
+                assert exc.status_code == 404
+
+        async with factory() as s:
+            # Neither the rejected reinforcing row nor a weight bump on A's row landed.
+            assert await review_corrections.get_correction(s, USER_B, forged_verdict) is None
+            untouched = await review_corrections.get_correction_by_id(s, USER_A, original.id)
+            assert untouched.weight == 1
+        await engine.dispose()
+    asyncio.run(run())
+
+
+def test_list_corrections_includes_all_pipelines_scope_across_templates():
+    async def run():
+        engine, factory = await _make_factory()
+        scoped_to_tpl = ReviewCorrectionIn(
+            run_id=str(uuid.uuid4()), verdict_id=str(uuid.uuid4()), template_id="tpl-a", checkpoint_id="gen",
+            label="false_pass", reason="", scope="this_pipeline", source="user",
+        )
+        global_lesson = ReviewCorrectionIn(
+            run_id=str(uuid.uuid4()), verdict_id=str(uuid.uuid4()), template_id="tpl-b", checkpoint_id="gen",
+            label="false_fail", reason="", scope="all_pipelines", source="user",
+        )
+        unrelated = ReviewCorrectionIn(
+            run_id=str(uuid.uuid4()), verdict_id=str(uuid.uuid4()), template_id="tpl-c", checkpoint_id="gen",
+            label="false_fail", reason="", scope="this_pipeline", source="user",
+        )
+        async with factory() as s:
+            a = await review_corrections.upsert_correction(s, USER_A, scoped_to_tpl)
+            g = await review_corrections.upsert_correction(s, USER_A, global_lesson)
+            await review_corrections.upsert_correction(s, USER_A, unrelated)
+            # Same rows for another user must never leak into USER_A's list.
+            await review_corrections.upsert_correction(s, USER_B, global_lesson.model_copy(update={"verdict_id": str(uuid.uuid4())}))
+
+        async with factory() as s:
+            rows = await review_corrections.list_corrections(s, USER_A, template_id="tpl-a", limit=10)
+            ids = {r.id for r in rows}
+            assert ids == {a.id, g.id}
+        await engine.dispose()
+    asyncio.run(run())
+
+
 def test_trace_id_collision_across_users_is_a_conflict_not_a_leak():
     """review_traces' PK is id alone. A collision with a DIFFERENT user's
     trace id must never hand that row back to the colliding caller — it is a

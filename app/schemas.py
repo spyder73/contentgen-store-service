@@ -192,8 +192,10 @@ class ReviewCorrectionIn(BaseModel):
     frame: str = ""
     label: Literal["false_pass", "false_fail", "correct"]
     reason: str = Field(default="", max_length=500)
-    scope: Literal["this_pipeline", "all"] = "this_pipeline"
+    scope: Literal["this_checkpoint", "this_pipeline", "all_pipelines"] = "this_pipeline"
     source: Literal["user", "ask_human", "inferred"] = "user"
+    lesson: str = Field(default="", max_length=500)
+    reinforces_id: str | None = None
 
 
 class ReviewCorrectionOut(BaseModel):
@@ -212,6 +214,9 @@ class ReviewCorrectionOut(BaseModel):
     reason: str = ""
     scope: str = "this_pipeline"
     source: str = "user"
+    lesson: str = ""
+    reinforces_id: str | None = None
+    weight: int = 1
     created_at: datetime
     updated_at: datetime
 
