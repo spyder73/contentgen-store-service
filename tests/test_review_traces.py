@@ -33,7 +33,7 @@ def _uuid_sqlite(element, compiler, **kw):  # pragma: no cover - trivial
 from app.db import get_session  # noqa: E402
 from app.fastapi_app import create_fastapi_app  # noqa: E402
 from app.models import ReviewCorrection, ReviewTrace, User  # noqa: E402
-from app.schemas import ReviewCorrectionIn, ReviewTraceIn  # noqa: E402
+from app.schemas import ReviewCorrectionIn, ReviewCorrectionOut, ReviewTraceIn  # noqa: E402
 from app.stores import review_corrections  # noqa: E402
 from app.stores import review_traces  # noqa: E402
 
@@ -201,6 +201,85 @@ def test_list_corrections_includes_all_pipelines_scope_across_templates():
     asyncio.run(run())
 
 
+def test_correction_this_model_scope_round_trips_trimmed_model_id():
+    """scope="this_model" pins a lesson to one generator model. The model id
+    is stored trimmed, survives a re-judge of the same verdict, and is carried
+    back out on the read schema so the Go side can filter on it."""
+
+    async def run():
+        engine, factory = await _make_factory()
+        payload = ReviewCorrectionIn(
+            run_id=str(uuid.uuid4()), verdict_id=str(uuid.uuid4()), template_id="tpl-a", checkpoint_id="gen",
+            label="false_pass", reason="", lesson="this model flattens faces", scope="this_model",
+            model_id="  runware:107@1  ", source="user",
+        )
+        assert payload.model_id == "runware:107@1"  # trimmed at the schema edge
+
+        async with factory() as s:
+            row = await review_corrections.upsert_correction(s, USER_A, payload)
+            assert row.scope == "this_model" and row.model_id == "runware:107@1"
+            # Re-judging the same verdict must move the model id too, not strand the old one.
+            again = await review_corrections.upsert_correction(
+                s, USER_A, payload.model_copy(update={"model_id": "google:veo-3"})
+            )
+            assert again.id == row.id and again.model_id == "google:veo-3"
+
+        async with factory() as s:
+            stored = await review_corrections.get_correction(s, USER_A, payload.verdict_id)
+            assert ReviewCorrectionOut.model_validate(stored).model_id == "google:veo-3"
+        await engine.dispose()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("model_id", ["", "   "])
+def test_correction_this_model_without_model_id_is_rejected(model_id):
+    with pytest.raises(ValidationError):
+        ReviewCorrectionIn(run_id="r", verdict_id="v", template_id="t", checkpoint_id="c", label="false_pass",
+                           reason="", scope="this_model", model_id=model_id, source="user")
+
+
+def test_correction_other_scopes_do_not_require_model_id():
+    row = ReviewCorrectionIn(run_id="r", verdict_id="v", template_id="t", checkpoint_id="c", label="false_pass",
+                             reason="", scope="all_pipelines", source="user")
+    assert row.model_id == ""
+
+
+def test_list_corrections_includes_this_model_scope_across_templates():
+    """A this_model lesson minted under one template applies to every pipeline
+    that uses that model, so the store returns all of the user's this_model
+    rows and lets the Go side filter them by model — but never another
+    user's."""
+
+    async def run():
+        engine, factory = await _make_factory()
+        scoped_to_tpl = ReviewCorrectionIn(
+            run_id=str(uuid.uuid4()), verdict_id=str(uuid.uuid4()), template_id="tpl-a", checkpoint_id="gen",
+            label="false_pass", reason="", scope="this_pipeline", source="user",
+        )
+        model_lesson = ReviewCorrectionIn(
+            run_id=str(uuid.uuid4()), verdict_id=str(uuid.uuid4()), template_id="tpl-b", checkpoint_id="gen",
+            label="false_fail", reason="", scope="this_model", model_id="runware:107@1", source="user",
+        )
+        other_pipeline = ReviewCorrectionIn(
+            run_id=str(uuid.uuid4()), verdict_id=str(uuid.uuid4()), template_id="tpl-c", checkpoint_id="gen",
+            label="false_fail", reason="", scope="this_pipeline", source="user",
+        )
+        async with factory() as s:
+            a = await review_corrections.upsert_correction(s, USER_A, scoped_to_tpl)
+            m = await review_corrections.upsert_correction(s, USER_A, model_lesson)
+            await review_corrections.upsert_correction(s, USER_A, other_pipeline)
+            await review_corrections.upsert_correction(s, USER_B, model_lesson.model_copy(update={"verdict_id": str(uuid.uuid4())}))
+
+        async with factory() as s:
+            rows = await review_corrections.list_corrections(s, USER_A, template_id="tpl-a", limit=10)
+            assert {r.id for r in rows} == {a.id, m.id}
+            assert next(r.model_id for r in rows if r.id == m.id) == "runware:107@1"
+        await engine.dispose()
+
+    asyncio.run(run())
+
+
 def test_trace_id_collision_across_users_is_a_conflict_not_a_leak():
     """review_traces' PK is id alone. A collision with a DIFFERENT user's
     trace id must never hand that row back to the colliding caller — it is a
@@ -286,3 +365,22 @@ def test_create_trace_route_maps_id_conflict_to_409(client):
         )
     assert response.status_code == 409
     assert response.json()["detail"] == "trace_id_taken"
+
+
+def test_this_model_without_model_id_is_422_over_http(client):
+    """The schema rule is the HTTP contract: the Go client gets a 422, not a
+    row with an unusable empty model id."""
+    body = {
+        "run_id": str(uuid.uuid4()),
+        "verdict_id": str(uuid.uuid4()),
+        "template_id": "tpl-a",
+        "checkpoint_id": "gen",
+        "label": "false_pass",
+        "scope": "this_model",
+    }
+    response = client.post(
+        "/v1/review-corrections",
+        headers={"X-Internal-Secret": SECRET, "X-User-ID": USER_A},
+        json=body,
+    )
+    assert response.status_code == 422

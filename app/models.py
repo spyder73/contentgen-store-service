@@ -444,6 +444,9 @@ class ReviewCorrection(Base):
     label: Mapped[str] = mapped_column(Text, nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
     scope: Mapped[str] = mapped_column(Text, nullable=False, default="this_pipeline")
+    # The generator model a scope="this_model" lesson is about; "" for every
+    # other scope.
+    model_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
     source: Mapped[str] = mapped_column(Text, nullable=False, default="user")
     lesson: Mapped[str] = mapped_column(Text, nullable=False, default="")
     reinforces_id: Mapped[str | None] = mapped_column(
@@ -457,8 +460,8 @@ class ReviewCorrection(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    # Mirrors 0033 + 0034 exactly (an autogenerate that "fixes" a drift here
-    # would rewrite production indexes/constraints).
+    # Mirrors 0033 + 0034 + 0035 exactly (an autogenerate that "fixes" a drift
+    # here would rewrite production indexes/constraints).
     __table_args__ = (
         Index("ux_review_corrections_user_verdict", "user_id", "verdict_id", unique=True),
         Index("ix_review_corrections_user_template_created", "user_id", "template_id", "created_at"),

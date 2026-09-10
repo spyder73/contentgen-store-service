@@ -56,6 +56,7 @@ async def upsert_correction(
         target.label = payload.label
         target.reason = payload.reason or ""
         target.scope = payload.scope
+        target.model_id = payload.model_id
         target.source = payload.source
         target.trace_id = payload.trace_id
         target.lesson = payload.lesson or ""
@@ -75,6 +76,7 @@ async def upsert_correction(
             label=payload.label,
             reason=payload.reason or "",
             scope=payload.scope,
+            model_id=payload.model_id,
             source=payload.source,
             lesson=payload.lesson or "",
             reinforces_id=payload.reinforces_id,
@@ -127,12 +129,14 @@ async def list_corrections(
     limit = max(1, min(limit, LIST_LIMIT_MAX))
     query = select(ReviewCorrection).where(ReviewCorrection.user_id == user_id)
     if template_id:
-        # Rows for this template at any scope, plus all_pipelines rows
-        # minted under any other template -- those apply everywhere.
+        # Rows for this template at any scope, plus rows minted under any
+        # other template that reach beyond it: all_pipelines applies
+        # everywhere, and this_model applies wherever that model is used --
+        # the caller filters those by model, so every one is returned here.
         query = query.where(
             or_(
                 ReviewCorrection.template_id == template_id,
-                ReviewCorrection.scope == "all_pipelines",
+                ReviewCorrection.scope.in_(("all_pipelines", "this_model")),
             )
         )
     if label:

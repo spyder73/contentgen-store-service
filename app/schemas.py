@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class PipelineTemplateOut(BaseModel):
@@ -192,10 +192,20 @@ class ReviewCorrectionIn(BaseModel):
     frame: str = ""
     label: Literal["false_pass", "false_fail", "correct"]
     reason: str = Field(default="", max_length=500)
-    scope: Literal["this_checkpoint", "this_pipeline", "all_pipelines"] = "this_pipeline"
+    scope: Literal["this_checkpoint", "this_pipeline", "all_pipelines", "this_model"] = "this_pipeline"
+    # The generator model a this_model lesson is about — required there,
+    # ignored (and left "") for every other scope.
+    model_id: str = ""
     source: Literal["user", "ask_human", "inferred"] = "user"
     lesson: str = Field(default="", max_length=500)
     reinforces_id: str | None = None
+
+    @model_validator(mode="after")
+    def normalize_and_require_model_id(self) -> "ReviewCorrectionIn":
+        self.model_id = self.model_id.strip()
+        if self.scope == "this_model" and not self.model_id:
+            raise ValueError("model_id is required when scope is 'this_model'")
+        return self
 
 
 class ReviewCorrectionOut(BaseModel):
@@ -213,6 +223,7 @@ class ReviewCorrectionOut(BaseModel):
     label: str
     reason: str = ""
     scope: str = "this_pipeline"
+    model_id: str = ""
     source: str = "user"
     lesson: str = ""
     reinforces_id: str | None = None
