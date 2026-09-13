@@ -617,10 +617,13 @@ class PagedResponse(BaseModel):
 
 # ── Series ───────────────────────────────────────────────────────────────
 
-def _validate_memories(value: list[Any]) -> list[Any]:
+def _validate_memories(value: list[Any] | None) -> list[Any] | None:
     """Every memory must carry text — a rule with nothing to say cannot be
     rendered into a prompt, so it is rejected here rather than stored as noise.
-    The rest of the item (id, created_at, source) passes through untouched."""
+    The rest of the item (id, created_at, source) passes through untouched.
+    ``None`` is the "field not supplied" sentinel, not a memory list."""
+    if value is None:
+        return None
     for item in value:
         if not isinstance(item, dict):
             raise ValueError("each memory must be an object")
@@ -666,14 +669,22 @@ class SeriesOut(BaseModel):
 
 
 class SeriesIn(BaseModel):
+    """PUT body. The v2 fields are merge sentinels: ``None`` means "the client
+    never mentioned this", so the stored value survives. An explicitly sent
+    ``[]`` / ``{}`` IS present and clears the value. This is what keeps the
+    not-yet-redeployed frontend — which PUTs the v1 shape — from wiping the
+    show's template binding, memories, wiring and parameters."""
+
     id: str
     name: str
     description: str = ""
     concept: str = ""
     template_id: str | None = None
-    memories: list[Any] = []
-    slot_map: dict[str, Any] = {}
-    parameters: dict[str, Any] = {}
+    memories: list[Any] | None = None
+    slot_map: dict[str, Any] | None = None
+    # Pipeline parameters are strings — a number here means a caller is
+    # inventing a second encoding for the same field.
+    parameters: dict[str, str] | None = None
     metadata: dict[str, Any] = {}
 
     _check_memories = field_validator("memories")(_validate_memories)
@@ -689,8 +700,10 @@ class CharacterOut(BaseModel):
     name: str
     description: str = ""
     voice: str = ""
-    # The cast sheet holds more than people.
-    kind: Literal["character", "place", "prop"] = "character"
+    # The cast sheet holds more than people. Validated on the way in (see
+    # CharacterIn), plain text on the way out: one off-vocabulary row must not
+    # 500 the whole list — and must stay readable so it can be repaired.
+    kind: str = "character"
     # Identity anchors — details that must survive every regeneration.
     anchors: list[Any] = []
     voice_media_id: str | None = None
@@ -720,13 +733,16 @@ class CharacterOut(BaseModel):
 
 
 class CharacterIn(BaseModel):
+    """PUT body. ``kind``/``anchors``/``voice_media_id`` are merge sentinels —
+    see SeriesIn. The write gate for the cast vocabulary lives here."""
+
     id: str
     series_id: str
     name: str
     description: str = ""
     voice: str = ""
-    kind: Literal["character", "place", "prop"] = "character"
-    anchors: list[Any] = []
+    kind: Literal["character", "place", "prop"] | None = None
+    anchors: list[Any] | None = None
     voice_media_id: str | None = None
     reference_image_media_id: str | None = None
     generator_profile_id: str | None = None
@@ -777,19 +793,58 @@ class EpisodeOut(BaseModel):
 
 
 class EpisodeIn(BaseModel):
+    """PUT body. The ledger fields are merge sentinels — see SeriesIn. The
+    sharpest edge this closes: renaming an episode from the old UI must not
+    flip a running episode back to ``draft``. Clearing a ledger field is
+    PATCH's job, not PUT's."""
+
     id: str
     series_id: str
     episode_number: int
     title: str = ""
     synopsis: str = ""
     prev_episode_summary: str = ""
-    status: str = "draft"
+    status: str | None = None
     run_id: str | None = None
     idea_id: str | None = None
     clip_id: str | None = None
-    storyline: dict[str, Any] = {}
+    storyline: dict[str, Any] | None = None
     last_frame_media_id: str | None = None
     metadata: dict[str, Any] = {}
+
+
+class EpisodePatch(BaseModel):
+    """PATCH body: only the keys actually present are written, so a caller that
+    knows one fact about an episode (``{"status": "complete"}``) can say it
+    without restating the row. Unknown keys are refused rather than silently
+    dropped — a typo in a recorder payload must fail loudly, not vanish.
+
+    Explicit ``null`` clears the nullable ledger references; the NOT NULL
+    columns refuse it (see ``_reject_explicit_null``)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = None
+    synopsis: str | None = None
+    prev_episode_summary: str | None = None
+    status: str | None = None
+    run_id: str | None = None
+    idea_id: str | None = None
+    clip_id: str | None = None
+    storyline: dict[str, Any] | None = None
+    last_frame_media_id: str | None = None
+    metadata: dict[str, Any] | None = None
+
+    @field_validator(
+        "title", "synopsis", "prev_episode_summary", "status", "storyline", "metadata"
+    )
+    @classmethod
+    def _reject_explicit_null(cls, value: Any) -> Any:
+        # Defaults are not validated, so this only fires on an explicit null —
+        # which would violate the column's NOT NULL at the database.
+        if value is None:
+            raise ValueError("must not be null")
+        return value
 
 
 # ── GeneratorProfile ─────────────────────────────────────────────────────

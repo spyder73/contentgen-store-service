@@ -111,7 +111,22 @@ def upgrade() -> None:
 
     # ── voice_snippets: dead table ──────────────────────────────────────────
     # Dropping the table takes its index with it (as 0002's own downgrade does).
-    op.drop_table("voice_snippets")
+    # Guarded: env.py runs the whole migration in one transaction, so a raise
+    # here would roll back all thirteen ADD COLUMNs — and the startup runner
+    # serves anyway, leaving an ORM that references columns the database does
+    # not have. A table that is already gone is not worth that.
+    if _voice_snippets_exists():
+        op.drop_table("voice_snippets")
+
+
+def _voice_snippets_exists() -> bool:
+    """Whether the dead table is still there. An offline (``--sql``) render has
+    no connection to inspect, so it emits the drop unconditionally — offline
+    scripts are read by a human before they are run."""
+    context = op.get_context()
+    if context.as_sql:
+        return True
+    return sa.inspect(op.get_bind()).has_table("voice_snippets")
 
 
 def downgrade() -> None:

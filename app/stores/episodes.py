@@ -4,7 +4,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Episode, Series
-from ..schemas import EpisodeIn, EpisodeOut, PagedResponse
+from ..schemas import EpisodeIn, EpisodeOut, EpisodePatch, PagedResponse
 
 
 def _owned_series_ids(user_id: str):
@@ -59,13 +59,51 @@ async def upsert_episode(session: AsyncSession, body: EpisodeIn) -> EpisodeOut:
     row.title = body.title
     row.synopsis = body.synopsis
     row.prev_episode_summary = body.prev_episode_summary
-    row.status = body.status
-    row.run_id = body.run_id
-    row.idea_id = body.idea_id
-    row.clip_id = body.clip_id
-    row.storyline = body.storyline
-    row.last_frame_media_id = body.last_frame_media_id
+    # Narrow write — see upsert_series. Renaming an episode from the old UI
+    # must not flip a running episode back to 'draft'.
+    if body.status is not None:
+        row.status = body.status
+    if body.run_id is not None:
+        row.run_id = body.run_id
+    if body.idea_id is not None:
+        row.idea_id = body.idea_id
+    if body.clip_id is not None:
+        row.clip_id = body.clip_id
+    if body.storyline is not None:
+        row.storyline = body.storyline
+    if body.last_frame_media_id is not None:
+        row.last_frame_media_id = body.last_frame_media_id
     row.metadata_ = body.metadata
+    await session.commit()
+    await session.refresh(row)
+    return EpisodeOut.from_orm_row(row)
+
+
+# Patch field name -> ORM attribute, for the one field whose column name is
+# taken by SQLAlchemy's own ``metadata``.
+_PATCH_ATTRIBUTES = {"metadata": "metadata_"}
+
+
+async def patch_episode(
+    session: AsyncSession,
+    id: str,
+    body: EpisodePatch,
+    user_id: str | None = None,
+) -> EpisodeOut | None:
+    """Write only the keys the caller actually sent. The recorder knows one
+    fact at a time ({"status": "complete"}) and must not have to restate — or
+    guess — the rest of the row. Owner-scoped: an episode outside the caller's
+    series reads as missing."""
+    if not user_id:
+        raise ValueError("patch_episode requires user_id")
+    stmt = select(Episode).where(
+        Episode.id == id, Episode.series_id.in_(_owned_series_ids(user_id))
+    )
+    row = (await session.execute(stmt)).scalar_one_or_none()
+    if row is None:
+        return None
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(row, _PATCH_ATTRIBUTES.get(field, field), value)
     await session.commit()
     await session.refresh(row)
     return EpisodeOut.from_orm_row(row)

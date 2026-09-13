@@ -27,6 +27,7 @@ from .schemas import (
     DatasetTemplateUpdate,
     EpisodeIn,
     EpisodeOut,
+    EpisodePatch,
     GeneratorProfileCreate,
     GeneratorProfileOut,
     GeneratorProfileUpdate,
@@ -880,6 +881,20 @@ def create_fastapi_app() -> FastAPI:
     async def upsert_episode_handler(id: str, body: EpisodeIn, session: SessionDep) -> Any:
         body.id = id
         return await episodes.upsert_episode(session, body)
+
+    @app.patch("/v1/episodes/{id}", response_model=EpisodeOut)
+    async def patch_episode_handler(
+        id: str, body: EpisodePatch, request: Request, session: SessionDep
+    ) -> Any:
+        # Partial update: only the keys in the body are written. Owner-scoped,
+        # so an episode belonging to another tenant answers 404 like a missing
+        # one — the recorder never needs to write outside its own series.
+        row = await episodes.patch_episode(
+            session, id, body, user_id=_require_user_id(request)
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
 
     @app.delete("/v1/episodes/{id}", status_code=204)
     async def delete_episode_handler(id: str, request: Request, session: SessionDep) -> None:

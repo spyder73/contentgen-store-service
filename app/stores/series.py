@@ -50,10 +50,18 @@ async def upsert_series(
     row.name = body.name
     row.description = body.description
     row.concept = body.concept
-    row.template_id = body.template_id
-    row.memories = body.memories
-    row.slot_map = body.slot_map
-    row.parameters = body.parameters
+    # Narrow write: a v2 field the caller never mentioned keeps its stored
+    # value. The live frontend still PUTs the v1 shape, and a blind overwrite
+    # would silently wipe the show's binding, memories, wiring and parameters.
+    # An explicitly sent [] / {} is present, and does clear.
+    if body.template_id is not None:
+        row.template_id = body.template_id
+    if body.memories is not None:
+        row.memories = body.memories
+    if body.slot_map is not None:
+        row.slot_map = body.slot_map
+    if body.parameters is not None:
+        row.parameters = body.parameters
     row.metadata_ = body.metadata
     await session.commit()
     await session.refresh(row)

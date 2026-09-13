@@ -25,10 +25,12 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import sqlalchemy as sa
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import delete, event, text
@@ -57,7 +59,13 @@ from app.models import (  # noqa: E402
     Series,
     User,
 )
-from app.schemas import CharacterIn, EpisodeIn, SeriesIn  # noqa: E402
+from app.schemas import (  # noqa: E402
+    CharacterIn,
+    EpisodeIn,
+    EpisodeOut,
+    EpisodePatch,
+    SeriesIn,
+)
 from app.stores import characters as characters_store  # noqa: E402
 from app.stores import episodes as episodes_store  # noqa: E402
 from app.stores import series as series_store  # noqa: E402
@@ -158,7 +166,7 @@ def test_series_v2_columns_roundtrip():
                 template_id="reel-v3",
                 memories=memories,
                 slot_map=slot_map,
-                parameters={"tone": "dry", "scene_count": 4},
+                parameters={"tone": "dry", "scene_count": "4"},
             )
             async with factory() as s:
                 written = await series_store.upsert_series(s, body, user_id=USER_A)
@@ -170,7 +178,7 @@ def test_series_v2_columns_roundtrip():
             assert row.template_id == "reel-v3"
             assert row.memories == memories
             assert row.slot_map == slot_map
-            assert row.parameters == {"tone": "dry", "scene_count": 4}
+            assert row.parameters == {"tone": "dry", "scene_count": "4"}
             # The concept text stays where it was — there is no free-text bible.
             assert row.concept == "a pirate who lost his coconut"
         finally:
@@ -460,14 +468,21 @@ def test_migration_0036_renders_the_contracted_postgres_ddl():
     sql = " ".join(statements)
 
     assert "ALTER TABLE series ADD COLUMN template_id TEXT" in sql
-    for table, column in (
-        ("series", "memories"),
-        ("series", "slot_map"),
-        ("series", "parameters"),
-        ("characters", "anchors"),
-        ("episodes", "storyline"),
+    # The full clause, not just the type: dropping a server_default would leave
+    # ADD COLUMN … JSONB NOT NULL, which fails outright on a non-empty table —
+    # and this offline render is the only guard a migration with no rehearsal
+    # gets.
+    for table, column, default in (
+        ("series", "memories", "[]"),
+        ("series", "slot_map", "{}"),
+        ("series", "parameters", "{}"),
+        ("characters", "anchors", "[]"),
+        ("episodes", "storyline", "{}"),
     ):
-        assert f"ALTER TABLE {table} ADD COLUMN {column} JSONB" in sql
+        assert (
+            f"ALTER TABLE {table} ADD COLUMN {column} JSONB DEFAULT '{default}' NOT NULL"
+            in sql
+        )
     assert "ALTER TABLE characters ADD COLUMN kind TEXT DEFAULT 'character' NOT NULL" in sql
     assert "ALTER TABLE episodes ADD COLUMN status TEXT DEFAULT 'draft' NOT NULL" in sql
     for column in ("run_id", "idea_id", "clip_id"):
@@ -543,3 +558,440 @@ def test_character_put_rejects_unknown_kind(client):
         },
     )
     assert resp.status_code == 422
+
+
+# ── merge semantics: an old-shape PUT must not wipe the v2 columns ───────────
+#
+# The live React app keeps PUTting the v1 shape until it is redeployed, and the
+# Go DTOs carry no v2 fields either. A blind overwrite would silently reset all
+# thirteen columns — the status reset being the sharpest edge (a rename would
+# flip a running episode back to draft). The rule: a field the caller never
+# mentioned keeps its stored value; an explicitly sent [] / {} does clear.
+
+
+def test_old_shape_put_preserves_series_v2_columns():
+    async def run():
+        engine, factory = await _make_factory()
+        try:
+            sid = str(uuid.uuid4())
+            memories = [{"id": "mem-1", "text": "no coconut on screen"}]
+            async with factory() as s:
+                await series_store.upsert_series(
+                    s,
+                    SeriesIn(
+                        id=sid,
+                        name="Coconut Chronicles",
+                        template_id="reel-v3",
+                        memories=memories,
+                        slot_map={"checkpoint:hero": [{"source": "episode:last_frame"}]},
+                        parameters={"tone": "dry"},
+                    ),
+                    user_id=USER_A,
+                )
+
+            # Exactly the body the un-redeployed frontend sends.
+            async with factory() as s:
+                await series_store.upsert_series(
+                    s,
+                    SeriesIn(
+                        id=sid,
+                        name="Coconut Chronicles II",
+                        description="renamed",
+                        concept="c",
+                        metadata={},
+                    ),
+                    user_id=USER_A,
+                )
+
+            async with factory() as s:
+                row = await series_store.get_series(s, sid, user_id=USER_A)
+            assert row is not None
+            assert row.name == "Coconut Chronicles II"
+            assert row.template_id == "reel-v3"
+            assert row.memories == memories
+            assert row.slot_map == {"checkpoint:hero": [{"source": "episode:last_frame"}]}
+            assert row.parameters == {"tone": "dry"}
+
+            # An explicit empty value IS present, and clears.
+            async with factory() as s:
+                await series_store.upsert_series(
+                    s,
+                    SeriesIn(
+                        id=sid,
+                        name="Coconut Chronicles II",
+                        memories=[],
+                        slot_map={},
+                        parameters={},
+                    ),
+                    user_id=USER_A,
+                )
+            async with factory() as s:
+                row = await series_store.get_series(s, sid, user_id=USER_A)
+            assert row is not None
+            assert row.memories == []
+            assert row.slot_map == {}
+            assert row.parameters == {}
+            assert row.template_id == "reel-v3"  # still never mentioned
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_old_shape_put_preserves_character_v2_columns():
+    async def run():
+        engine, factory = await _make_factory()
+        try:
+            sid, cid, voice_id = (
+                str(uuid.uuid4()),
+                str(uuid.uuid4()),
+                str(uuid.uuid4()),
+            )
+            await _seed_series(factory, sid)
+            await _add_media(factory, voice_id)
+            anchors = [{"label": "one palm tree"}]
+            async with factory() as s:
+                await characters_store.upsert_character(
+                    s,
+                    CharacterIn(
+                        id=cid,
+                        series_id=sid,
+                        name="The Beach",
+                        kind="place",
+                        anchors=anchors,
+                        voice_media_id=voice_id,
+                    ),
+                )
+
+            async with factory() as s:
+                await characters_store.upsert_character(
+                    s,
+                    CharacterIn(id=cid, series_id=sid, name="The Beach", voice="warm"),
+                )
+
+            async with factory() as s:
+                row = await characters_store.get_character(s, cid, user_id=USER_A)
+            assert row is not None
+            assert row.voice == "warm"
+            assert row.kind == "place"
+            assert row.anchors == anchors
+            assert row.voice_media_id == voice_id
+
+            async with factory() as s:
+                await characters_store.upsert_character(
+                    s, CharacterIn(id=cid, series_id=sid, name="The Beach", anchors=[])
+                )
+            async with factory() as s:
+                row = await characters_store.get_character(s, cid, user_id=USER_A)
+            assert row is not None
+            assert row.anchors == []
+            assert row.kind == "place"
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_old_shape_put_preserves_episode_v2_columns():
+    async def run():
+        engine, factory = await _make_factory()
+        try:
+            sid, eid, frame_id = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+            await _seed_series(factory, sid)
+            await _add_media(factory, frame_id)
+            run_id, idea_id, clip_id = (
+                str(uuid.uuid4()),
+                str(uuid.uuid4()),
+                str(uuid.uuid4()),
+            )
+            storyline = {"beats": ["the coconut rolls away"]}
+            async with factory() as s:
+                await episodes_store.upsert_episode(
+                    s,
+                    EpisodeIn(
+                        id=eid,
+                        series_id=sid,
+                        episode_number=1,
+                        title="Pilot",
+                        status="running",
+                        run_id=run_id,
+                        idea_id=idea_id,
+                        clip_id=clip_id,
+                        storyline=storyline,
+                        last_frame_media_id=frame_id,
+                    ),
+                )
+
+            # A rename from the current UI: v1 shape, no ledger fields.
+            async with factory() as s:
+                await episodes_store.upsert_episode(
+                    s,
+                    EpisodeIn(
+                        id=eid,
+                        series_id=sid,
+                        episode_number=1,
+                        title="Pilot (renamed)",
+                        synopsis="s",
+                        prev_episode_summary="",
+                        metadata={},
+                    ),
+                )
+
+            async with factory() as s:
+                row = await episodes_store.get_episode(s, eid, user_id=USER_A)
+            assert row is not None
+            assert row.title == "Pilot (renamed)"
+            assert row.status == "running"
+            assert row.run_id == run_id
+            assert row.idea_id == idea_id
+            assert row.clip_id == clip_id
+            assert row.storyline == storyline
+            assert row.last_frame_media_id == frame_id
+
+            async with factory() as s:
+                await episodes_store.upsert_episode(
+                    s,
+                    EpisodeIn(id=eid, series_id=sid, episode_number=1, storyline={}),
+                )
+            async with factory() as s:
+                row = await episodes_store.get_episode(s, eid, user_id=USER_A)
+            assert row is not None
+            assert row.storyline == {}
+            assert row.status == "running"
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_series_put_ignores_user_id_and_timestamps():
+    """Ownership and audit stamps are the store's to decide, never the body's."""
+    body = SeriesIn.model_validate(
+        {
+            "id": str(uuid.uuid4()),
+            "name": "n",
+            "user_id": str(uuid.uuid4()),
+            "created_at": "1999-01-01T00:00:00Z",
+            "updated_at": "1999-01-01T00:00:00Z",
+        }
+    )
+    for field in ("user_id", "created_at", "updated_at"):
+        assert not hasattr(body, field)
+        assert field not in body.model_dump()
+
+    async def run():
+        engine, factory = await _make_factory()
+        try:
+            sid, other = str(uuid.uuid4()), str(uuid.uuid4())
+            async with factory() as s:
+                s.add(User(id=other, username="b", password_hash="x"))
+                await s.commit()
+            await _seed_series(factory, sid)
+            async with factory() as s:
+                row = await s.get(Series, sid)
+                created = row.created_at
+
+            # A later PUT — even one carrying another user's id in the body —
+            # cannot hand the show to someone else.
+            async with factory() as s:
+                await series_store.upsert_series(
+                    s,
+                    SeriesIn.model_validate(
+                        {"id": sid, "name": "renamed", "user_id": other}
+                    ),
+                    user_id=other,
+                )
+            async with factory() as s:
+                row = await s.get(Series, sid)
+            assert row.user_id == USER_A
+            assert row.created_at == created
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_series_parameters_must_be_strings():
+    """Pipeline parameters are strings; a number is a second encoding."""
+    with pytest.raises(ValidationError):
+        SeriesIn(id=str(uuid.uuid4()), name="n", parameters={"scene_count": 4})
+    with pytest.raises(ValidationError):
+        SeriesIn(id=str(uuid.uuid4()), name="n", parameters={"nested": {"a": "b"}})
+    assert SeriesIn(
+        id=str(uuid.uuid4()), name="n", parameters={"scene_count": "4"}
+    ).parameters == {"scene_count": "4"}
+
+
+# ── PATCH /v1/episodes/{id} ──────────────────────────────────────────────────
+
+
+def test_patch_episode_writes_only_given_keys():
+    async def run():
+        engine, factory = await _make_factory()
+        try:
+            sid, eid = str(uuid.uuid4()), str(uuid.uuid4())
+            await _seed_series(factory, sid)
+            run_id = str(uuid.uuid4())
+            async with factory() as s:
+                await episodes_store.upsert_episode(
+                    s,
+                    EpisodeIn(
+                        id=eid,
+                        series_id=sid,
+                        episode_number=1,
+                        title="Pilot",
+                        status="running",
+                        run_id=run_id,
+                        storyline={"beats": ["a"]},
+                        metadata={"keep": "me"},
+                    ),
+                )
+
+            # The recorder knows one fact at a time.
+            async with factory() as s:
+                out = await episodes_store.patch_episode(
+                    s,
+                    eid,
+                    EpisodePatch(status="complete", storyline={"beats": ["a", "b"]}),
+                    user_id=USER_A,
+                )
+            assert out is not None
+            assert out.status == "complete"
+            assert out.storyline == {"beats": ["a", "b"]}
+            assert out.title == "Pilot"
+            assert out.run_id == run_id
+            assert out.metadata == {"keep": "me"}
+            assert out.episode_number == 1
+
+            # Explicit null clears a nullable ledger reference.
+            async with factory() as s:
+                out = await episodes_store.patch_episode(
+                    s, eid, EpisodePatch(run_id=None), user_id=USER_A
+                )
+            assert out is not None
+            assert out.run_id is None
+            assert out.status == "complete"
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_patch_episode_is_owner_scoped():
+    async def run():
+        engine, factory = await _make_factory()
+        try:
+            sid, eid, other = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+            async with factory() as s:
+                s.add(User(id=other, username="b", password_hash="x"))
+                await s.commit()
+            await _seed_series(factory, sid)
+            async with factory() as s:
+                await episodes_store.upsert_episode(
+                    s,
+                    EpisodeIn(
+                        id=eid, series_id=sid, episode_number=1, status="running"
+                    ),
+                )
+
+            async with factory() as s:
+                assert (
+                    await episodes_store.patch_episode(
+                        s, eid, EpisodePatch(status="stolen"), user_id=other
+                    )
+                    is None
+                )
+                assert (
+                    await episodes_store.patch_episode(
+                        s, str(uuid.uuid4()), EpisodePatch(status="x"), user_id=USER_A
+                    )
+                    is None
+                )
+            async with factory() as s:
+                row = await episodes_store.get_episode(s, eid, user_id=USER_A)
+            assert row is not None
+            assert row.status == "running"
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+    async def requires_user():
+        with pytest.raises(ValueError):
+            await episodes_store.patch_episode(
+                MagicMock(), str(uuid.uuid4()), EpisodePatch(status="x"), user_id=None
+            )
+
+    asyncio.run(requires_user())
+
+
+def test_patch_episode_route(client):
+    eid = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    out = EpisodeOut(
+        id=eid,
+        series_id=str(uuid.uuid4()),
+        episode_number=1,
+        status="complete",
+        created_at=now,
+        updated_at=now,
+    )
+    with patch(
+        "app.stores.episodes.patch_episode", new=AsyncMock(return_value=out)
+    ) as m:
+        resp = client.patch(
+            f"/v1/episodes/{eid}", headers=_headers(), json={"status": "complete"}
+        )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "complete"
+    assert m.call_args.kwargs.get("user_id") == USER_A
+    # Only the sent key reaches the store.
+    assert m.call_args.args[2].model_dump(exclude_unset=True) == {"status": "complete"}
+
+
+def test_patch_episode_route_404_when_unknown_or_foreign(client):
+    with patch("app.stores.episodes.patch_episode", new=AsyncMock(return_value=None)):
+        resp = client.patch(
+            f"/v1/episodes/{uuid.uuid4()}", headers=_headers(), json={"status": "x"}
+        )
+    assert resp.status_code == 404
+
+
+def test_patch_episode_route_rejects_unknown_key(client):
+    resp = client.patch(
+        f"/v1/episodes/{uuid.uuid4()}", headers=_headers(), json={"statuss": "complete"}
+    )
+    assert resp.status_code == 422
+    # A null on a NOT NULL column is refused too.
+    resp = client.patch(
+        f"/v1/episodes/{uuid.uuid4()}", headers=_headers(), json={"status": None}
+    )
+    assert resp.status_code == 422
+
+
+def test_patch_episode_without_user_id_401(client):
+    resp = client.patch(
+        f"/v1/episodes/{uuid.uuid4()}",
+        headers={"X-Internal-Secret": SECRET},
+        json={"status": "x"},
+    )
+    assert resp.status_code == 401
+
+
+# ── the guarded drop ─────────────────────────────────────────────────────────
+
+
+def test_migration_0036_drop_is_guarded_by_table_existence():
+    """A table that is already gone must not roll back thirteen ADD COLUMNs."""
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    module = _load_migration_module()
+    engine = sa.create_engine("sqlite://")
+    with engine.connect() as conn:
+        ctx = MigrationContext.configure(conn)
+        with Operations.context(ctx):
+            assert module._voice_snippets_exists() is False
+            conn.execute(sa.text("CREATE TABLE voice_snippets (id TEXT)"))
+            assert module._voice_snippets_exists() is True
+    engine.dispose()
