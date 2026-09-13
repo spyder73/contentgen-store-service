@@ -469,6 +469,9 @@ class _FakeCharacterRow:
         self.name = "Hero"
         self.description = ""
         self.voice = ""
+        self.kind = "character"
+        self.anchors = []
+        self.voice_media_id = None
         self.reference_image_media_id = None
         self.generator_profile_id = None
         self.metadata_ = {}

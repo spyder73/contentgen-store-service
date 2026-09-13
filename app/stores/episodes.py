@@ -59,6 +59,12 @@ async def upsert_episode(session: AsyncSession, body: EpisodeIn) -> EpisodeOut:
     row.title = body.title
     row.synopsis = body.synopsis
     row.prev_episode_summary = body.prev_episode_summary
+    row.status = body.status
+    row.run_id = body.run_id
+    row.idea_id = body.idea_id
+    row.clip_id = body.clip_id
+    row.storyline = body.storyline
+    row.last_frame_media_id = body.last_frame_media_id
     row.metadata_ = body.metadata
     await session.commit()
     await session.refresh(row)

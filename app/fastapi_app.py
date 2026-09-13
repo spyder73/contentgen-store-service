@@ -66,7 +66,6 @@ from .schemas import (
     UserAccessOut,
     UserFeatureUpdate,
     UserOut,
-    VoiceSnippetOut,
     ClipRatingIn,
     ClipRatingOut,
     IdeaIn,
@@ -99,7 +98,6 @@ from .stores import (
     system_prompts,
     user_settings,
     users,
-    voice_snippets,
 )
 
 logger = logging.getLogger(__name__)
@@ -886,30 +884,6 @@ def create_fastapi_app() -> FastAPI:
     @app.delete("/v1/episodes/{id}", status_code=204)
     async def delete_episode_handler(id: str, request: Request, session: SessionDep) -> None:
         deleted = await episodes.delete_episode(session, id, user_id=_require_user_id(request))
-        if not deleted:
-            raise HTTPException(status_code=404, detail="not_found")
-
-    # ── voice snippets ───────────────────────────────────────────────────────
-
-    @app.get("/v1/voice-snippets", response_model=PagedResponse)
-    async def list_voice_snippets_handler(
-        session: SessionDep,
-        character_id: str | None = Query(None),
-        page: int = Query(1, ge=1),
-        limit: int = Query(50, ge=1, le=200),
-    ) -> Any:
-        return await voice_snippets.list_voice_snippets(session, character_id=character_id, page=page, limit=limit)
-
-    @app.get("/v1/voice-snippets/{id}", response_model=VoiceSnippetOut)
-    async def get_voice_snippet_handler(id: str, request: Request, session: SessionDep) -> Any:
-        row = await voice_snippets.get_voice_snippet(session, id, user_id=_require_user_id(request))
-        if row is None:
-            raise HTTPException(status_code=404, detail="not_found")
-        return row
-
-    @app.delete("/v1/voice-snippets/{id}", status_code=204)
-    async def delete_voice_snippet_handler(id: str, request: Request, session: SessionDep) -> None:
-        deleted = await voice_snippets.delete_voice_snippet(session, id, user_id=_require_user_id(request))
         if not deleted:
             raise HTTPException(status_code=404, detail="not_found")
 

@@ -617,6 +617,19 @@ class PagedResponse(BaseModel):
 
 # ── Series ───────────────────────────────────────────────────────────────
 
+def _validate_memories(value: list[Any]) -> list[Any]:
+    """Every memory must carry text — a rule with nothing to say cannot be
+    rendered into a prompt, so it is rejected here rather than stored as noise.
+    The rest of the item (id, created_at, source) passes through untouched."""
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("each memory must be an object")
+        text = item.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("each memory needs a non-empty text")
+    return value
+
+
 class SeriesOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -624,6 +637,13 @@ class SeriesOut(BaseModel):
     name: str
     description: str = ""
     concept: str = ""
+    # The pipeline template every episode of this show runs.
+    template_id: str | None = None
+    # [{"id","text","created_at","source":"user"|"auto"}]
+    memories: list[Any] = []
+    # {"<checkpoint_id>": [{"source":"media"|"cast"|"episode:last_frame", …}]}
+    slot_map: dict[str, Any] = {}
+    parameters: dict[str, Any] = {}
     metadata: dict[str, Any] = {}
     created_at: datetime
     updated_at: datetime
@@ -635,6 +655,10 @@ class SeriesOut(BaseModel):
             name=row.name,
             description=row.description,
             concept=row.concept,
+            template_id=row.template_id,
+            memories=row.memories or [],
+            slot_map=row.slot_map or {},
+            parameters=row.parameters or {},
             metadata=row.metadata_ or {},
             created_at=row.created_at,
             updated_at=row.updated_at,
@@ -646,7 +670,13 @@ class SeriesIn(BaseModel):
     name: str
     description: str = ""
     concept: str = ""
+    template_id: str | None = None
+    memories: list[Any] = []
+    slot_map: dict[str, Any] = {}
+    parameters: dict[str, Any] = {}
     metadata: dict[str, Any] = {}
+
+    _check_memories = field_validator("memories")(_validate_memories)
 
 
 # ── Character ────────────────────────────────────────────────────────────
@@ -659,6 +689,11 @@ class CharacterOut(BaseModel):
     name: str
     description: str = ""
     voice: str = ""
+    # The cast sheet holds more than people.
+    kind: Literal["character", "place", "prop"] = "character"
+    # Identity anchors — details that must survive every regeneration.
+    anchors: list[Any] = []
+    voice_media_id: str | None = None
     reference_image_media_id: str | None = None
     generator_profile_id: str | None = None
     metadata: dict[str, Any] = {}
@@ -673,6 +708,9 @@ class CharacterOut(BaseModel):
             name=row.name,
             description=row.description,
             voice=row.voice,
+            kind=row.kind,
+            anchors=row.anchors or [],
+            voice_media_id=row.voice_media_id,
             reference_image_media_id=row.reference_image_media_id,
             generator_profile_id=row.generator_profile_id,
             metadata=row.metadata_ or {},
@@ -687,6 +725,9 @@ class CharacterIn(BaseModel):
     name: str
     description: str = ""
     voice: str = ""
+    kind: Literal["character", "place", "prop"] = "character"
+    anchors: list[Any] = []
+    voice_media_id: str | None = None
     reference_image_media_id: str | None = None
     generator_profile_id: str | None = None
     metadata: dict[str, Any] = {}
@@ -703,6 +744,13 @@ class EpisodeOut(BaseModel):
     title: str = ""
     synopsis: str = ""
     prev_episode_summary: str = ""
+    # The ledger of what actually ran.
+    status: str = "draft"
+    run_id: str | None = None
+    idea_id: str | None = None
+    clip_id: str | None = None
+    storyline: dict[str, Any] = {}
+    last_frame_media_id: str | None = None
     metadata: dict[str, Any] = {}
     created_at: datetime
     updated_at: datetime
@@ -716,6 +764,12 @@ class EpisodeOut(BaseModel):
             title=row.title,
             synopsis=row.synopsis,
             prev_episode_summary=row.prev_episode_summary,
+            status=row.status,
+            run_id=row.run_id,
+            idea_id=row.idea_id,
+            clip_id=row.clip_id,
+            storyline=row.storyline or {},
+            last_frame_media_id=row.last_frame_media_id,
             metadata=row.metadata_ or {},
             created_at=row.created_at,
             updated_at=row.updated_at,
@@ -729,33 +783,13 @@ class EpisodeIn(BaseModel):
     title: str = ""
     synopsis: str = ""
     prev_episode_summary: str = ""
+    status: str = "draft"
+    run_id: str | None = None
+    idea_id: str | None = None
+    clip_id: str | None = None
+    storyline: dict[str, Any] = {}
+    last_frame_media_id: str | None = None
     metadata: dict[str, Any] = {}
-
-
-# ── VoiceSnippet ─────────────────────────────────────────────────────────
-
-class VoiceSnippetOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: str
-    character_id: str
-    file_url: str = ""
-    duration: float = 0.0
-    metadata: dict[str, Any] = {}
-    created_at: datetime
-    updated_at: datetime
-
-    @classmethod
-    def from_orm_row(cls, row) -> "VoiceSnippetOut":
-        return cls(
-            id=row.id,
-            character_id=row.character_id,
-            file_url=row.file_url,
-            duration=row.duration,
-            metadata=row.metadata_ or {},
-            created_at=row.created_at,
-            updated_at=row.updated_at,
-        )
 
 
 # ── GeneratorProfile ─────────────────────────────────────────────────────

@@ -1,10 +1,9 @@
-"""Cross-tenant isolation for series / characters / episodes / voice-snippets.
+"""Cross-tenant isolation for series / characters / episodes.
 
 Series list/upsert are already user-scoped, but single-item get/delete used to
 resolve purely by primary key with no owner predicate — a cross-tenant IDOR
 letting any authenticated user read or permanently delete another user's series
-(cascading to its characters/episodes/voice snippets). These tests pin two
-things:
+(cascading to its characters and episodes). These tests pin two things:
 
   * the store DELETEs are owner-scoped (the destructive path), and refuse to run
     without a user_id, and
@@ -25,8 +24,8 @@ os.environ["INTERNAL_API_SECRET"] = INTERNAL_SECRET
 
 from app.db import get_session
 from app.fastapi_app import create_fastapi_app
-from app.schemas import CharacterOut, EpisodeOut, SeriesOut, VoiceSnippetOut
-from app.stores import characters, episodes, series, voice_snippets
+from app.schemas import CharacterOut, EpisodeOut, SeriesOut
+from app.stores import characters, episodes, series
 
 
 async def _mock_session():
@@ -99,14 +98,6 @@ class TestDeleteScoping:
         assert "episodes.series_id" in sql
         assert "series.user_id" in sql
 
-    async def test_delete_voice_snippet_is_owner_scoped(self):
-        sess = _Capture()
-        uid = str(uuid.uuid4())
-        await voice_snippets.delete_voice_snippet(sess, str(uuid.uuid4()), user_id=uid)
-        sql = str(sess.statement)
-        assert "voice_snippets.character_id" in sql
-        assert "series.user_id" in sql
-
 
 @pytest.mark.asyncio
 class TestDeleteRequiresUserId:
@@ -121,10 +112,6 @@ class TestDeleteRequiresUserId:
     async def test_delete_episode_requires_user_id(self):
         with pytest.raises(ValueError):
             await episodes.delete_episode(MagicMock(), str(uuid.uuid4()), user_id=None)
-
-    async def test_delete_voice_snippet_requires_user_id(self):
-        with pytest.raises(ValueError):
-            await voice_snippets.delete_voice_snippet(MagicMock(), str(uuid.uuid4()), user_id=None)
 
 
 # ── route-level: handlers forward X-User-ID and 401 without it ────────────────
@@ -152,14 +139,6 @@ def _episode_out(id_: str) -> EpisodeOut:
     return EpisodeOut(
         id=id_, series_id=str(uuid.uuid4()), episode_number=1, title="", synopsis="",
         prev_episode_summary="", metadata={}, created_at=now, updated_at=now,
-    )
-
-
-def _voice_out(id_: str) -> VoiceSnippetOut:
-    now = datetime.now(timezone.utc)
-    return VoiceSnippetOut(
-        id=id_, character_id=str(uuid.uuid4()), file_url="", duration=0.0,
-        metadata={}, created_at=now, updated_at=now,
     )
 
 
@@ -244,28 +223,4 @@ class TestEpisodeRouteForwarding:
 
     def test_delete_without_user_id_401(self, client):
         resp = client.delete(f"/v1/episodes/{uuid.uuid4()}", headers=_no_user_headers())
-        assert resp.status_code == 401
-
-
-class TestVoiceSnippetRouteForwarding:
-    def test_get_forwards_user_id(self, client):
-        uid, vid = str(uuid.uuid4()), str(uuid.uuid4())
-        with patch("app.stores.voice_snippets.get_voice_snippet", new=AsyncMock(return_value=_voice_out(vid))) as m:
-            resp = client.get(f"/v1/voice-snippets/{vid}", headers=_headers(uid))
-        assert resp.status_code == 200
-        assert m.call_args.kwargs.get("user_id") == uid
-
-    def test_get_without_user_id_401(self, client):
-        resp = client.get(f"/v1/voice-snippets/{uuid.uuid4()}", headers=_no_user_headers())
-        assert resp.status_code == 401
-
-    def test_delete_forwards_user_id(self, client):
-        uid, vid = str(uuid.uuid4()), str(uuid.uuid4())
-        with patch("app.stores.voice_snippets.delete_voice_snippet", new=AsyncMock(return_value=True)) as m:
-            resp = client.delete(f"/v1/voice-snippets/{vid}", headers=_headers(uid))
-        assert resp.status_code == 204
-        assert m.call_args.kwargs.get("user_id") == uid
-
-    def test_delete_without_user_id_401(self, client):
-        resp = client.delete(f"/v1/voice-snippets/{uuid.uuid4()}", headers=_no_user_headers())
         assert resp.status_code == 401

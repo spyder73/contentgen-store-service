@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, Numeric, Text, UniqueConstraint, func, text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, LargeBinary, Numeric, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -557,6 +557,20 @@ class Series(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str] = mapped_column(Text, default="")
     concept: Mapped[str] = mapped_column(Text, default="")
+    # The pipeline template every episode of this show runs (0036). Plain text,
+    # not an FK: templates live in files as often as in the DB.
+    template_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Durable show rules the reviewer must respect, newest last:
+    # [{"id","text","created_at","source":"user"|"auto"}]. The concept text
+    # stays in ``concept`` — there is no free-text bible.
+    memories: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    # Per-checkpoint input wiring:
+    # {"<checkpoint_id>": [{"source":"media","media_id":…}
+    #                      | {"source":"cast","character_id":…}
+    #                      | {"source":"episode:last_frame"}]}
+    slot_map: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # Free parameter bag applied to every episode run.
+    parameters: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -578,6 +592,15 @@ class Character(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str] = mapped_column(Text, default="")
     voice: Mapped[str] = mapped_column(Text, default="")
+    # The cast sheet holds more than people: character | place | prop (0036).
+    kind: Mapped[str] = mapped_column(Text, nullable=False, default="character")
+    # Identity anchors — the details that must survive every regeneration.
+    anchors: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    voice_media_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("media_items.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     reference_image_media_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),
         ForeignKey("media_items.id", ondelete="SET NULL"),
@@ -706,6 +729,19 @@ class Episode(Base):
     title: Mapped[str] = mapped_column(Text, default="")
     synopsis: Mapped[str] = mapped_column(Text, default="")
     prev_episode_summary: Mapped[str] = mapped_column(Text, default="")
+    # The ledger of what actually ran (0036). run_id/idea_id/clip_id are plain
+    # text: a run is minted by the backend, an idea/clip may be deleted, and an
+    # episode must outlive both.
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="draft")
+    run_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    idea_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    clip_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    storyline: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    last_frame_media_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("media_items.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -716,30 +752,6 @@ class Episode(Base):
 
     __table_args__ = (
         Index("ix_episodes_series_id", "series_id"),
-    )
-
-
-class VoiceSnippet(Base):
-    __tablename__ = "voice_snippets"
-
-    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
-    character_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False),
-        ForeignKey("characters.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    file_url: Mapped[str] = mapped_column(Text, default="")
-    duration: Mapped[float] = mapped_column(Float, default=0.0)
-    metadata_: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
-    __table_args__ = (
-        Index("ix_voice_snippets_character_id", "character_id"),
     )
 
 

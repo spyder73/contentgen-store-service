@@ -50,6 +50,10 @@ async def upsert_series(
     row.name = body.name
     row.description = body.description
     row.concept = body.concept
+    row.template_id = body.template_id
+    row.memories = body.memories
+    row.slot_map = body.slot_map
+    row.parameters = body.parameters
     row.metadata_ = body.metadata
     await session.commit()
     await session.refresh(row)

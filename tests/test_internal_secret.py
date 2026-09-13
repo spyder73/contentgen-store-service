@@ -49,7 +49,6 @@ SAMPLE_ROUTES = [
     ("get", "/v1/series"),
     ("get", "/v1/characters"),
     ("get", "/v1/episodes"),
-    ("get", "/v1/voice-snippets"),
     ("post", "/v1/ideas"),
     ("get", "/v1/ideas"),
     ("get", f"/v1/ideas/{IDEA_ID}"),

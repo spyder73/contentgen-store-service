@@ -58,6 +58,9 @@ async def upsert_character(session: AsyncSession, body: CharacterIn) -> Characte
     row.name = body.name
     row.description = body.description
     row.voice = body.voice
+    row.kind = body.kind
+    row.anchors = body.anchors
+    row.voice_media_id = body.voice_media_id
     row.reference_image_media_id = body.reference_image_media_id
     row.generator_profile_id = body.generator_profile_id
     row.metadata_ = body.metadata
