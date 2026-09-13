@@ -58,12 +58,13 @@ async def upsert_character(session: AsyncSession, body: CharacterIn) -> Characte
     row.name = body.name
     row.description = body.description
     row.voice = body.voice
-    # Narrow write — see upsert_series.
+    # Narrow write — see upsert_series. voice_media_id is nullable, so presence
+    # decides: absent keeps the sample, "voice_media_id": null unlinks it.
     if body.kind is not None:
         row.kind = body.kind
     if body.anchors is not None:
         row.anchors = body.anchors
-    if body.voice_media_id is not None:
+    if "voice_media_id" in body.model_fields_set:
         row.voice_media_id = body.voice_media_id
     row.reference_image_media_id = body.reference_image_media_id
     row.generator_profile_id = body.generator_profile_id

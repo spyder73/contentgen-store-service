@@ -7,6 +7,11 @@ from ..models import Episode, Series
 from ..schemas import EpisodeIn, EpisodeOut, EpisodePatch, PagedResponse
 
 
+# Ledger references that may legitimately be cleared: an explicit null unlinks,
+# an absent key leaves the stored value alone.
+_NULLABLE_LEDGER_FIELDS = ("run_id", "idea_id", "clip_id", "last_frame_media_id")
+
+
 def _owned_series_ids(user_id: str):
     """Subquery of the series ids the user owns (legacy rows with no owner
     included). Episodes have no user_id, so ownership is scoped through the
@@ -63,16 +68,14 @@ async def upsert_episode(session: AsyncSession, body: EpisodeIn) -> EpisodeOut:
     # must not flip a running episode back to 'draft'.
     if body.status is not None:
         row.status = body.status
-    if body.run_id is not None:
-        row.run_id = body.run_id
-    if body.idea_id is not None:
-        row.idea_id = body.idea_id
-    if body.clip_id is not None:
-        row.clip_id = body.clip_id
     if body.storyline is not None:
         row.storyline = body.storyline
-    if body.last_frame_media_id is not None:
-        row.last_frame_media_id = body.last_frame_media_id
+    # The nullable ledger references go by presence, so a run that failed to
+    # produce a clip can be unlinked with an explicit null instead of needing a
+    # second route.
+    for field in _NULLABLE_LEDGER_FIELDS:
+        if field in body.model_fields_set:
+            setattr(row, field, getattr(body, field))
     row.metadata_ = body.metadata
     await session.commit()
     await session.refresh(row)

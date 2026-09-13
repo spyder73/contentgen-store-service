@@ -822,6 +822,180 @@ def test_series_parameters_must_be_strings():
     ).parameters == {"scene_count": "4"}
 
 
+# ── absent vs explicit null on the nullable v2 scalars ───────────────────────
+#
+# The Go client forwards exactly the keys its caller sent, so the store has to
+# tell "never mentioned" (leave it) from "sent as null" (clear it). Membership
+# in model_fields_set is the only thing that distinguishes the two — the value
+# is None either way.
+
+
+def test_series_put_null_template_id_unbinds_absent_leaves():
+    async def run():
+        engine, factory = await _make_factory()
+        try:
+            sid = str(uuid.uuid4())
+            async with factory() as s:
+                await series_store.upsert_series(
+                    s,
+                    SeriesIn(id=sid, name="Coconut Chronicles", template_id="reel-v3"),
+                    user_id=USER_A,
+                )
+
+            # Key absent: the binding survives.
+            async with factory() as s:
+                await series_store.upsert_series(
+                    s,
+                    SeriesIn.model_validate({"id": sid, "name": "renamed"}),
+                    user_id=USER_A,
+                )
+            async with factory() as s:
+                row = await series_store.get_series(s, sid, user_id=USER_A)
+            assert row is not None
+            assert row.template_id == "reel-v3"
+
+            # Key sent as null: the show is unbound.
+            async with factory() as s:
+                await series_store.upsert_series(
+                    s,
+                    SeriesIn.model_validate(
+                        {"id": sid, "name": "renamed", "template_id": None}
+                    ),
+                    user_id=USER_A,
+                )
+            async with factory() as s:
+                row = await series_store.get_series(s, sid, user_id=USER_A)
+            assert row is not None
+            assert row.template_id is None
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_character_put_null_voice_media_id_unlinks_absent_leaves():
+    async def run():
+        engine, factory = await _make_factory()
+        try:
+            sid, cid, voice_id = (
+                str(uuid.uuid4()),
+                str(uuid.uuid4()),
+                str(uuid.uuid4()),
+            )
+            await _seed_series(factory, sid)
+            await _add_media(factory, voice_id)
+            async with factory() as s:
+                await characters_store.upsert_character(
+                    s,
+                    CharacterIn(
+                        id=cid, series_id=sid, name="Captain", voice_media_id=voice_id
+                    ),
+                )
+
+            async with factory() as s:
+                await characters_store.upsert_character(
+                    s,
+                    CharacterIn.model_validate(
+                        {"id": cid, "series_id": sid, "name": "Captain"}
+                    ),
+                )
+            async with factory() as s:
+                row = await characters_store.get_character(s, cid, user_id=USER_A)
+            assert row is not None
+            assert row.voice_media_id == voice_id
+
+            async with factory() as s:
+                await characters_store.upsert_character(
+                    s,
+                    CharacterIn.model_validate(
+                        {
+                            "id": cid,
+                            "series_id": sid,
+                            "name": "Captain",
+                            "voice_media_id": None,
+                        }
+                    ),
+                )
+            async with factory() as s:
+                row = await characters_store.get_character(s, cid, user_id=USER_A)
+            assert row is not None
+            assert row.voice_media_id is None
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_episode_null_ledger_refs_clear_via_put_and_patch():
+    async def run():
+        engine, factory = await _make_factory()
+        try:
+            sid, eid = str(uuid.uuid4()), str(uuid.uuid4())
+            await _seed_series(factory, sid)
+            run_id, idea_id, clip_id = (
+                str(uuid.uuid4()),
+                str(uuid.uuid4()),
+                str(uuid.uuid4()),
+            )
+            base = {"id": eid, "series_id": sid, "episode_number": 1}
+            async with factory() as s:
+                await episodes_store.upsert_episode(
+                    s,
+                    EpisodeIn(
+                        **base,
+                        status="running",
+                        run_id=run_id,
+                        idea_id=idea_id,
+                        clip_id=clip_id,
+                    ),
+                )
+
+            # Absent: the whole ledger survives.
+            async with factory() as s:
+                await episodes_store.upsert_episode(
+                    s, EpisodeIn.model_validate({**base, "title": "renamed"})
+                )
+            async with factory() as s:
+                row = await episodes_store.get_episode(s, eid, user_id=USER_A)
+            assert row is not None
+            assert (row.run_id, row.idea_id, row.clip_id) == (run_id, idea_id, clip_id)
+
+            # Explicit null on one reference clears only that one.
+            async with factory() as s:
+                await episodes_store.upsert_episode(
+                    s, EpisodeIn.model_validate({**base, "run_id": None})
+                )
+            async with factory() as s:
+                row = await episodes_store.get_episode(s, eid, user_id=USER_A)
+            assert row is not None
+            assert row.run_id is None
+            assert row.idea_id == idea_id
+            assert row.clip_id == clip_id
+            assert row.status == "running"
+
+            # Same rule through PATCH.
+            async with factory() as s:
+                out = await episodes_store.patch_episode(
+                    s, eid, EpisodePatch.model_validate({"clip_id": None}), user_id=USER_A
+                )
+            assert out is not None
+            assert out.clip_id is None
+            assert out.idea_id == idea_id
+            assert out.status == "running"
+
+            # A PATCH that mentions nothing changes nothing.
+            async with factory() as s:
+                out = await episodes_store.patch_episode(
+                    s, eid, EpisodePatch.model_validate({}), user_id=USER_A
+                )
+            assert out is not None
+            assert out.idea_id == idea_id
+            assert out.status == "running"
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
 # ── PATCH /v1/episodes/{id} ──────────────────────────────────────────────────
 
 

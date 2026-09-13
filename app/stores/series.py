@@ -54,7 +54,10 @@ async def upsert_series(
     # value. The live frontend still PUTs the v1 shape, and a blind overwrite
     # would silently wipe the show's binding, memories, wiring and parameters.
     # An explicitly sent [] / {} is present, and does clear.
-    if body.template_id is not None:
+    #
+    # template_id is nullable, so presence — not value — decides: a body that
+    # never mentions it keeps the binding, "template_id": null unbinds the show.
+    if "template_id" in body.model_fields_set:
         row.template_id = body.template_id
     if body.memories is not None:
         row.memories = body.memories

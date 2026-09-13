@@ -669,11 +669,14 @@ class SeriesOut(BaseModel):
 
 
 class SeriesIn(BaseModel):
-    """PUT body. The v2 fields are merge sentinels: ``None`` means "the client
-    never mentioned this", so the stored value survives. An explicitly sent
-    ``[]`` / ``{}`` IS present and clears the value. This is what keeps the
-    not-yet-redeployed frontend — which PUTs the v1 shape — from wiping the
-    show's template binding, memories, wiring and parameters."""
+    """PUT body with merge semantics: a v2 field the client never mentioned
+    keeps its stored value, which is what keeps the not-yet-redeployed frontend
+    — it PUTs the v1 shape — from wiping the show's binding, memories, wiring
+    and parameters. A field that IS mentioned is written: ``[]`` / ``{}`` clears
+    a collection, and an explicit ``null`` on the nullable ``template_id``
+    unbinds the show (the store tests membership in ``model_fields_set``, so
+    absent and null are different things). A ``null`` on the NOT NULL columns
+    is treated as "not mentioned" — they cannot be cleared, only replaced."""
 
     id: str
     name: str
@@ -733,8 +736,9 @@ class CharacterOut(BaseModel):
 
 
 class CharacterIn(BaseModel):
-    """PUT body. ``kind``/``anchors``/``voice_media_id`` are merge sentinels —
-    see SeriesIn. The write gate for the cast vocabulary lives here."""
+    """PUT body with merge semantics — see SeriesIn. An explicit
+    ``"voice_media_id": null`` unlinks the voice sample; omitting the key keeps
+    it. The write gate for the cast vocabulary lives here."""
 
     id: str
     series_id: str
@@ -793,10 +797,12 @@ class EpisodeOut(BaseModel):
 
 
 class EpisodeIn(BaseModel):
-    """PUT body. The ledger fields are merge sentinels — see SeriesIn. The
-    sharpest edge this closes: renaming an episode from the old UI must not
-    flip a running episode back to ``draft``. Clearing a ledger field is
-    PATCH's job, not PUT's."""
+    """PUT body with merge semantics — see SeriesIn. The sharpest edge this
+    closes: renaming an episode from the old UI must not flip a running episode
+    back to ``draft``. The nullable ledger references (``run_id``, ``idea_id``,
+    ``clip_id``, ``last_frame_media_id``) go by presence, so an explicit
+    ``null`` unlinks one — a run that produced no clip does not need a second
+    route to say so."""
 
     id: str
     series_id: str
