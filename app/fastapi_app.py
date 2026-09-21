@@ -1243,11 +1243,11 @@ def create_fastapi_app() -> FastAPI:
 
     @app.get("/v1/review-traces", response_model=list[ReviewTraceOut])
     async def list_review_traces_handler(
-        request: Request, session: SessionDep, run_id: str, limit: int = 200
+        request: Request, session: SessionDep, run_id: str, limit: int = 200, offset: int = 0
     ) -> Any:
         user_id = _require_user_id(request)
         return await review_traces.list_traces(
-            session, user_id, run_id=run_id, limit=max(1, min(limit, 200))
+            session, user_id, run_id=run_id, limit=max(1, min(limit, 200)), offset=max(0, offset)
         )
 
     @app.post("/v1/review-corrections", response_model=ReviewCorrectionOut)

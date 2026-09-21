@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from sqlalchemy import delete, select
+from sqlalchemy import BigInteger, cast, delete, func, or_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import PipelineRunSnapshot
@@ -28,20 +30,37 @@ async def get_snapshot(session: AsyncSession, id: str) -> PipelineRunSnapshotOut
 async def upsert_snapshot(
     session: AsyncSession, body: PipelineRunSnapshotIn, user_id: str | None = None
 ) -> PipelineRunSnapshotOut:
-    # Trust model: reached only via the internal-secret-gated service-to-service
-    # PUT route; the Go backend always writes the run's own user, so we stamp
-    # user_id on insert and never enforce ownership on update (unlike
-    # upsert_pipeline, which refuses cross-user overwrites for end-user callers).
-    row = await session.get(PipelineRunSnapshot, body.id)
-    if row is None:
-        row = PipelineRunSnapshot(id=body.id)
-        if user_id:
-            row.user_id = user_id
-        session.add(row)
-    row.status = body.status
-    row.snapshot = body.snapshot
+    # A run is saved asynchronously before and after provider calls. HTTP
+    # completion order is not generation order: an older dispatched snapshot
+    # must never overwrite a newer completed ledger after a backend restart.
+    # Keep the revision in JSONB so existing installations need no migration.
+    raw_version = body.snapshot.get("_snapshot_version", 0)
+    version = raw_version if isinstance(raw_version, int) and not isinstance(raw_version, bool) else 0
+    version = max(0, min(version, 2**63 - 1))
+    snapshot = dict(body.snapshot)
+    snapshot["_snapshot_version"] = version
+    dialect = session.get_bind().dialect.name
+    insert = sqlite_insert if dialect == "sqlite" else pg_insert
+    statement = insert(PipelineRunSnapshot).values(
+        id=body.id, user_id=user_id, status=body.status, snapshot=snapshot,
+    )
+    existing_version = func.coalesce(
+        cast(PipelineRunSnapshot.snapshot["_snapshot_version"].as_string(), BigInteger), 0
+    )
+    # Unversioned older backends retain their behavior only until a versioned
+    # writer has saved this run. Equal revisions are idempotent retries.
+    newer = or_(existing_version < version, (existing_version == 0) & (version == 0))
+    statement = statement.on_conflict_do_update(
+        index_elements=[PipelineRunSnapshot.id],
+        set_={"status": body.status, "snapshot": snapshot, "updated_at": func.now()},
+        where=newer,
+    )
+    await session.execute(statement)
     await session.commit()
-    await session.refresh(row)
+    row = (await session.execute(
+        select(PipelineRunSnapshot).where(PipelineRunSnapshot.id == body.id)
+        .execution_options(populate_existing=True)
+    )).scalar_one()
     return PipelineRunSnapshotOut.model_validate(row)
 
 

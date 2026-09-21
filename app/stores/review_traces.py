@@ -94,13 +94,14 @@ async def create_trace(session: AsyncSession, user_id: str, payload: ReviewTrace
 
 
 async def list_traces(
-    session: AsyncSession, user_id: str, run_id: str, limit: int = LIST_LIMIT_DEFAULT
+    session: AsyncSession, user_id: str, run_id: str, limit: int = LIST_LIMIT_DEFAULT, offset: int = 0
 ) -> list[ReviewTrace]:
     limit = max(1, min(limit, LIST_LIMIT_MAX))
     query = (
         select(ReviewTrace)
         .where(ReviewTrace.user_id == user_id, ReviewTrace.run_id == run_id)
-        .order_by(ReviewTrace.created_at.asc())
+        .order_by(ReviewTrace.created_at.asc(), ReviewTrace.id.asc())
         .limit(limit)
+        .offset(max(0, offset))
     )
     return (await session.execute(query)).scalars().all()

@@ -384,3 +384,39 @@ def test_this_model_without_model_id_is_422_over_http(client):
         json=body,
     )
     assert response.status_code == 422
+
+
+def test_trace_pagination_preserves_equal_timestamp_order_and_owner():
+    from datetime import datetime, timezone
+
+    async def run():
+        engine, factory = await _make_factory()
+        run_id = str(uuid.uuid4())
+        ids = sorted(str(uuid.uuid4()) for _ in range(5))
+        async with factory() as session:
+            for ident in reversed(ids):
+                row = await review_traces.create_trace(session, USER_A, ReviewTraceIn(
+                    id=ident, run_id=run_id, checkpoint_id="scene", checkpoint_index=0,
+                    tier="check", system_prompt="full prompt", raw_output="full response",
+                ))
+                row.created_at = datetime(2026, 9, 14, tzinfo=timezone.utc)
+            await session.commit()
+        async with factory() as session:
+            page1 = await review_traces.list_traces(session, USER_A, run_id, limit=2, offset=0)
+            page2 = await review_traces.list_traces(session, USER_A, run_id, limit=2, offset=2)
+            page3 = await review_traces.list_traces(session, USER_A, run_id, limit=2, offset=4)
+            assert [row.id for row in page1 + page2 + page3] == ids
+            assert await review_traces.list_traces(session, USER_B, run_id, offset=2) == []
+        await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_list_trace_route_forwards_bounded_pagination(client):
+    with patch("app.stores.review_traces.list_traces", new=AsyncMock(return_value=[])) as query:
+        response = client.get(
+            "/v1/review-traces?run_id=run&limit=999&offset=200",
+            headers={"X-Internal-Secret": SECRET, "X-User-ID": USER_A},
+        )
+    assert response.status_code == 200
+    assert query.await_args.kwargs == {"run_id": "run", "limit": 200, "offset": 200}

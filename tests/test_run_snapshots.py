@@ -195,3 +195,46 @@ class TestBulkDeleteRunSnapshots:
             resp = client.delete("/v1/run-snapshots", headers=_headers(_id(1)))
         assert resp.status_code == 200
         assert resp.json() == {"deleted": 0}
+
+
+def test_snapshot_revision_prevents_out_of_order_evidence_loss():
+    """Late dispatch writes and same-revision retries cannot erase completion."""
+    import asyncio
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from app.schemas import PipelineRunSnapshotIn
+    from app.stores.run_snapshots import upsert_snapshot
+
+    async def run():
+        engine = create_async_engine("sqlite+aiosqlite://")
+        # The production model uses PostgreSQL-only JSONB server-default syntax;
+        # use equivalent SQLite DDL while exercising the real atomic DAO.
+        async with engine.begin() as conn:
+            await conn.execute(text("""CREATE TABLE pipeline_run_snapshots (
+                id VARCHAR PRIMARY KEY, user_id VARCHAR,
+                status TEXT NOT NULL DEFAULT '', snapshot JSON NOT NULL DEFAULT '{}',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )"""))
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        rid = _id(901)
+        async def save(version, status):
+            snapshot = {"evidence": status}
+            if version is not None:
+                snapshot["_snapshot_version"] = version
+            async with factory() as session:
+                return await upsert_snapshot(session, PipelineRunSnapshotIn(
+                    id=rid, status=status, snapshot=snapshot,
+                ))
+
+        assert (await save(None, "legacy")).status == "legacy"
+        assert (await save(12, "completed")).status == "completed"
+        assert (await save(11, "dispatched")).status == "completed"
+        assert (await save(12, "duplicate-retry")).status == "completed"
+        assert (await save(None, "late-legacy")).status == "completed"
+        updated = await save(13, "regenerated")
+        assert updated.status == "regenerated"
+        assert updated.snapshot["_snapshot_version"] == 13
+        await engine.dispose()
+
+    asyncio.run(run())
