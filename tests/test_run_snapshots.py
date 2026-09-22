@@ -231,10 +231,17 @@ def test_snapshot_revision_prevents_out_of_order_evidence_loss():
         assert (await save(12, "completed")).status == "completed"
         assert (await save(11, "dispatched")).status == "completed"
         assert (await save(12, "duplicate-retry")).status == "completed"
-        assert (await save(None, "late-legacy")).status == "completed"
         updated = await save(13, "regenerated")
         assert updated.status == "regenerated"
         assert updated.snapshot["_snapshot_version"] == 13
+        # A backend rolled back to an unversioned build is the only writer:
+        # its saves apply and reset the revision, and a later versioned
+        # writer resumes from there instead of being stuck behind 13.
+        rolled_back = await save(None, "rolled-back")
+        assert rolled_back.status == "rolled-back"
+        assert rolled_back.snapshot["_snapshot_version"] == 0
+        assert (await save(2, "versioned-again")).status == "versioned-again"
+        assert (await save(1, "stale-after-rollback")).status == "versioned-again"
         await engine.dispose()
 
     asyncio.run(run())

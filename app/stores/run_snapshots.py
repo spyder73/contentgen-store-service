@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, cast, delete, func, or_, select
+from sqlalchemy import BigInteger, cast, delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,14 +47,21 @@ async def upsert_snapshot(
     existing_version = func.coalesce(
         cast(PipelineRunSnapshot.snapshot["_snapshot_version"].as_string(), BigInteger), 0
     )
-    # Unversioned older backends retain their behavior only until a versioned
-    # writer has saved this run. Equal revisions are idempotent retries.
-    newer = or_(existing_version < version, (existing_version == 0) & (version == 0))
-    statement = statement.on_conflict_do_update(
-        index_elements=[PipelineRunSnapshot.id],
-        set_={"status": body.status, "snapshot": snapshot, "updated_at": func.now()},
-        where=newer,
-    )
+    # An unversioned writer (a backend that predates revisions, or one rolled
+    # back to such a build) always applies: only one backend runs at a time,
+    # so its saves are the newest state and dropping them would silently stop
+    # run persistence after a rollback. A versioned writer applies only over
+    # an older revision; equal revisions are idempotent retries.
+    changes = {"status": body.status, "snapshot": snapshot, "updated_at": func.now()}
+    if version == 0:
+        statement = statement.on_conflict_do_update(
+            index_elements=[PipelineRunSnapshot.id], set_=changes,
+        )
+    else:
+        statement = statement.on_conflict_do_update(
+            index_elements=[PipelineRunSnapshot.id], set_=changes,
+            where=existing_version < version,
+        )
     await session.execute(statement)
     await session.commit()
     row = (await session.execute(
