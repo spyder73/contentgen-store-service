@@ -184,6 +184,99 @@ async def reserve(
     return {"status": "reserved", "balance": int(row[0]), "reserved": int(row[1])}
 
 
+# ── Hold closure ────────────────────────────────────────────────────────────
+#
+# A hold is keyed by (pipeline_run_id, checkpoint_id, attempt). It stays OPEN —
+# its credits sitting in `credits_reserved` — until one of these closes it:
+#
+#   * a `debit` or `release` row with the same (run, checkpoint_id, attempt).
+#     settle() writes a debit (plus a `settle_slack` release); release() writes
+#     one release row per hold it returns.
+#   * a legacy run-wide `release` row: checkpoint_id NULL, same run, created_at
+#     >= the hold's created_at. Before per-hold release rows existed, release()
+#     returned every then-open hold of the run under ONE aggregate row with no
+#     checkpoint_id, which the key match above can never see. Without this rule
+#     those holds looked open forever and every later release refunded them
+#     again.
+#
+# release() refunds exactly the open holds, and settle() of a hold that is no
+# longer open must not touch `credits_reserved` again.
+
+_OPEN_HOLDS_SQL = """
+    SELECT h.checkpoint_id, h.attempt, SUM(h.delta) AS amount
+      FROM credits_ledger h
+     WHERE h.user_id = :uid
+       AND h.pipeline_run_id = :run_id
+       AND h.kind = 'hold'
+       {hold_filter}
+       AND NOT EXISTS (
+             SELECT 1
+               FROM credits_ledger c
+              WHERE c.user_id = :uid
+                AND c.pipeline_run_id = :run_id
+                AND c.kind IN ('debit', 'release')
+                AND c.checkpoint_id = h.checkpoint_id
+                AND c.attempt = h.attempt
+           )
+       AND NOT EXISTS (
+             SELECT 1
+               FROM credits_ledger l
+              WHERE l.user_id = :uid
+                AND l.pipeline_run_id = :run_id
+                AND l.kind = 'release'
+                AND l.checkpoint_id IS NULL
+                AND l.created_at >= h.created_at
+           )
+     GROUP BY h.checkpoint_id, h.attempt
+     ORDER BY MIN(h.created_at), h.checkpoint_id, h.attempt
+"""
+
+_OPEN_HOLDS_RUN_SQL = text(_OPEN_HOLDS_SQL.format(hold_filter=""))
+_OPEN_HOLDS_ONE_SQL = text(
+    _OPEN_HOLDS_SQL.format(
+        hold_filter="AND h.checkpoint_id = :checkpoint_id AND h.attempt = :attempt"
+    )
+)
+
+
+async def _open_holds(
+    session: AsyncSession,
+    user_id: str,
+    pipeline_run_id: str,
+    checkpoint_id: Optional[str] = None,
+    attempt: Optional[int] = None,
+) -> list[tuple[Optional[str], int, int]]:
+    """Open holds of the run as (checkpoint_id, attempt, credits), oldest first.
+
+    With checkpoint_id + attempt, only that one hold (empty list when it is
+    closed or never existed).
+    """
+    params: dict = {"uid": user_id, "run_id": pipeline_run_id}
+    if checkpoint_id is not None:
+        params.update({"checkpoint_id": checkpoint_id, "attempt": attempt})
+        res = await session.execute(_OPEN_HOLDS_ONE_SQL, params)
+    else:
+        res = await session.execute(_OPEN_HOLDS_RUN_SQL, params)
+    return [(r[0], int(r[1]), int(r[2])) for r in res.all()]
+
+
+async def _lock_user_row(session: AsyncSession, user_id: str) -> None:
+    """Serialise settle/release for one user.
+
+    Both read the ledger to decide which holds are open and then move money
+    between balance and reserved; two of them interleaving between that read
+    and their commit could each act on the same hold (refund it twice, or
+    refund it AND subtract it from reserved again at settle). The users row
+    lock makes the decision and the write atomic per user. FOR NO KEY UPDATE is
+    exactly the lock the later `UPDATE users` takes anyway, only taken earlier —
+    it does not block the FK KEY SHARE lock ledger inserts take (no new
+    deadlock surface). A no-op on sqlite (tests), which has no row locks.
+    """
+    await session.execute(
+        select(User.id).where(User.id == user_id).with_for_update(key_share=True)
+    )
+
+
 # ── Settle ──────────────────────────────────────────────────────────────────
 
 
@@ -220,6 +313,7 @@ async def settle(
     cost_source: Optional[str],
     idempotency_key: str,
 ) -> dict:
+    await _lock_user_row(session, user_id)
     existing = await session.execute(
         select(CreditsLedger.id).where(CreditsLedger.idempotency_key == idempotency_key)
     )
@@ -234,6 +328,13 @@ async def settle(
     hold = await _find_hold(session, user_id, pipeline_run_id, checkpoint_id, attempt)
     if hold is None:
         raise CreditsError("no_matching_hold")
+    # A release (per-hold, or a run-wide one that caught this call in flight)
+    # may already have returned the hold to balance and taken it out of
+    # reserved. Settling it like an open hold would subtract it from reserved a
+    # second time and refund its slack a second time.
+    hold_open = bool(
+        await _open_holds(session, user_id, pipeline_run_id, checkpoint_id, attempt)
+    )
 
     actual_cost_decimal = Decimal(str(actual_cost_usd))
     actual_credits = usd_to_credits(actual_cost_decimal)
@@ -250,8 +351,32 @@ async def settle(
         raise CreditsError("user_not_found")
 
     balance_exhausted = False
+    # What leaves credits_reserved: the hold, unless a release already took it
+    # out (and gave it back to balance).
+    reserved_release = hold if hold_open else 0
 
-    if hold >= actual_credits:
+    if not hold_open:
+        # The whole hold is already back in balance, so there is no slack to
+        # refund: the actual cost comes out of balance alone, as far as the
+        # balance covers it.
+        covered = min(actual_credits, max(bv.balance, 0))
+        balance_delta = -covered
+        debited_delta = -covered
+        extra_rows = []
+        if covered < actual_credits:
+            extra_rows.append(
+                CreditsLedger(
+                    user_id=user_id,
+                    kind="adjust",
+                    delta=-(actual_credits - covered),
+                    pipeline_run_id=pipeline_run_id,
+                    checkpoint_id=checkpoint_id,
+                    attempt=attempt,
+                    note="estimate_shortfall",
+                )
+            )
+            balance_exhausted = True
+    elif hold >= actual_credits:
         slack = hold - actual_credits
         balance_delta = slack
         debited_delta = -actual_credits
@@ -301,32 +426,47 @@ async def settle(
             """
             UPDATE users
                SET credits_balance  = credits_balance + :balance_delta,
-                   credits_reserved = credits_reserved - :hold
+                   credits_reserved = credits_reserved - :reserved_release
              WHERE id = :uid
             RETURNING credits_balance, credits_reserved
             """
         ),
-        {"balance_delta": balance_delta, "hold": hold, "uid": user_id},
+        {
+            "balance_delta": balance_delta,
+            "reserved_release": reserved_release,
+            "uid": user_id,
+        },
     )
     new_row = updated.first()
     new_balance = int(new_row[0])
     new_reserved = int(new_row[1])
 
-    session.add(
-        CreditsLedger(
-            user_id=user_id,
-            kind="debit",
-            delta=debited_delta,
-            pipeline_run_id=pipeline_run_id,
-            checkpoint_id=checkpoint_id,
-            attempt=attempt,
-            provider=provider,
-            model=model,
-            cost_usd=actual_cost_decimal,
-            cost_source=resolved_cost_source,
-            idempotency_key=idempotency_key,
-        )
+    call_fields = dict(
+        provider=provider,
+        model=model,
+        cost_usd=actual_cost_decimal,
+        cost_source=resolved_cost_source,
+        idempotency_key=idempotency_key,
     )
+    if debited_delta < 0:
+        session.add(
+            CreditsLedger(
+                user_id=user_id,
+                kind="debit",
+                delta=debited_delta,
+                pipeline_run_id=pipeline_run_id,
+                checkpoint_id=checkpoint_id,
+                attempt=attempt,
+                **call_fields,
+            )
+        )
+    else:
+        # Only a released hold settling against an empty balance debits
+        # nothing, and the ledger forbids a zero debit: the shortfall row
+        # carries the call's cost and idempotency key instead, so a replay
+        # still answers already_settled.
+        for field, value in call_fields.items():
+            setattr(extra_rows[0], field, value)
     for r in extra_rows:
         session.add(r)
 
@@ -355,6 +495,15 @@ async def settle(
 # ── Release ─────────────────────────────────────────────────────────────────
 
 
+def _hold_release_key(idempotency_key: str, checkpoint_id: Optional[str], attempt: int) -> str:
+    """Idempotency key for the 2nd+ release row a run-wide release writes.
+
+    The caller's key sits on the first row (so a replay still answers
+    already_released); the others need their own non-null, unique keys.
+    """
+    return f"{idempotency_key}#{checkpoint_id or ''}#{attempt}"
+
+
 async def release(
     session: AsyncSession,
     *,
@@ -362,7 +511,20 @@ async def release(
     pipeline_run_id: str,
     reason: str,
     idempotency_key: str,
+    checkpoint_id: Optional[str] = None,
+    attempt: Optional[int] = None,
 ) -> dict:
+    """Return open holds of a run to balance.
+
+    With checkpoint_id + attempt: only that hold, if still open. Without: every
+    open hold of the run (the old backend's run-wide release). Either way each
+    returned hold gets its OWN release row carrying its checkpoint_id/attempt,
+    so no later release (or settle) can return it again.
+    """
+    if (checkpoint_id is None) != (attempt is None):
+        raise ValueError("checkpoint_id and attempt go together")
+
+    await _lock_user_row(session, user_id)
     existing = await session.execute(
         select(CreditsLedger.id).where(CreditsLedger.idempotency_key == idempotency_key)
     )
@@ -374,32 +536,10 @@ async def release(
             "reserved": bv.reserved if bv else 0,
         }
 
-    # Sum unreleased holds for this pipeline run: holds minus any existing
-    # releases/settles that match by (run_id, checkpoint_id, attempt).
-    res = await session.execute(
-        text(
-            """
-            WITH holds AS (
-              SELECT pipeline_run_id, checkpoint_id, attempt, delta
-                FROM credits_ledger
-               WHERE user_id = :uid AND pipeline_run_id = :run_id AND kind = 'hold'
-            ),
-            closed AS (
-              SELECT pipeline_run_id, checkpoint_id, attempt
-                FROM credits_ledger
-               WHERE user_id = :uid AND pipeline_run_id = :run_id AND kind IN ('debit','release')
-               GROUP BY pipeline_run_id, checkpoint_id, attempt
-            )
-            SELECT COALESCE(SUM(h.delta), 0)
-              FROM holds h
-              LEFT JOIN closed c USING (pipeline_run_id, checkpoint_id, attempt)
-             WHERE c.pipeline_run_id IS NULL
-            """
-        ),
-        {"uid": user_id, "run_id": pipeline_run_id},
+    open_holds = await _open_holds(
+        session, user_id, pipeline_run_id, checkpoint_id, attempt
     )
-    row = res.first()
-    to_return = int(row[0]) if row and row[0] is not None else 0
+    to_return = sum(amount for _, _, amount in open_holds)
 
     if to_return <= 0:
         bv = await get_balance(session, user_id)
@@ -421,16 +561,23 @@ async def release(
         {"amt": to_return, "uid": user_id},
     )
 
-    session.add(
-        CreditsLedger(
-            user_id=user_id,
-            kind="release",
-            delta=to_return,
-            pipeline_run_id=pipeline_run_id,
-            note=reason,
-            idempotency_key=idempotency_key,
+    for i, (hold_checkpoint_id, hold_attempt, amount) in enumerate(open_holds):
+        session.add(
+            CreditsLedger(
+                user_id=user_id,
+                kind="release",
+                delta=amount,
+                pipeline_run_id=pipeline_run_id,
+                checkpoint_id=hold_checkpoint_id,
+                attempt=hold_attempt,
+                note=reason,
+                idempotency_key=(
+                    idempotency_key
+                    if i == 0
+                    else _hold_release_key(idempotency_key, hold_checkpoint_id, hold_attempt)
+                ),
+            )
         )
-    )
     try:
         await session.commit()
     except IntegrityError:

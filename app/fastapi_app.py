@@ -9,7 +9,7 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Reques
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from .db import get_session
 from .logging_config import new_request_id, set_request_id, set_user_id
@@ -149,6 +149,17 @@ class CreditsReleaseBody(BaseModel):
     pipeline_run_id: str
     reason: str
     idempotency_key: str
+    # Both set: release only that one hold. Both absent: every open hold of the
+    # run (what older backends send). One without the other is rejected rather
+    # than silently widened to a run-wide release or guessed.
+    checkpoint_id: str | None = None
+    attempt: int | None = None
+
+    @model_validator(mode="after")
+    def _hold_key_complete(self) -> "CreditsReleaseBody":
+        if (self.checkpoint_id is None) != (self.attempt is None):
+            raise ValueError("checkpoint_id and attempt must be sent together")
+        return self
 
 
 class CreditsGrantBody(BaseModel):
@@ -1100,6 +1111,8 @@ def create_fastapi_app() -> FastAPI:
                 pipeline_run_id=body.pipeline_run_id,
                 reason=body.reason,
                 idempotency_key=body.idempotency_key,
+                checkpoint_id=body.checkpoint_id,
+                attempt=body.attempt,
             )
         except credits.CreditsError as e:
             return _credits_error_response(e)

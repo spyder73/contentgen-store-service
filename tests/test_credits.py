@@ -3,9 +3,10 @@
 Handler-layer tests use mocked `app.stores.credits.*` — they verify auth
 gates, request/response shape, and error→402 mapping.
 
-DB-level invariants (concurrent reserves, append-only trigger, daily-limit
-boundary at the SQL level) require a real Postgres fixture; those live in
-`tests/integration/test_credits_db.py` (TBD for a fresh DB harness).
+Settle/release ledger behaviour (which holds are open, per-hold release rows)
+runs against sqlite in `tests/test_credits_hold_release.py`. Postgres-only
+invariants (concurrent reserves, daily-limit boundary at the SQL level) still
+need a real Postgres fixture (TBD for a fresh DB harness).
 """
 from __future__ import annotations
 
@@ -252,11 +253,15 @@ class TestSettle:
 
 
 class _FakeResult:
-    def __init__(self, row):
+    def __init__(self, row, rows=None):
         self._row = row
+        self._rows = rows or []
 
     def first(self):
         return self._row
+
+    def all(self):
+        return self._rows
 
 
 class _FakeSettleSession:
@@ -283,11 +288,13 @@ class _FakeSettleSession:
                 self._shared["reserved"] = params["r"]
             else:                                   # relative write (race-safe)
                 self._shared["balance"] += params["balance_delta"]
-                self._shared["reserved"] -= params["hold"]
+                self._shared["reserved"] -= params["reserved_release"]
             return _FakeResult((self._shared["balance"], self._shared["reserved"]))
+        if "FROM credits_ledger h" in sql:          # open-hold check: still open
+            return _FakeResult(None, rows=[(params["checkpoint_id"], params["attempt"], self._hold)])
         name = statement.column_descriptions[0]["name"]
         if name == "id":
-            return _FakeResult(None)               # not yet settled
+            return _FakeResult(None)               # row lock / not yet settled
         if name == "delta":
             return _FakeResult((self._hold,))
         if name == "credits_balance":
@@ -368,6 +375,35 @@ class TestRelease:
             )
         assert resp.status_code == 200
         assert resp.json()["returned"] == 100
+
+    def _post(self, client, body: dict):
+        uid = str(uuid.uuid4())
+        mock = AsyncMock(return_value={"status": "released", "balance": 1000, "reserved": 0, "returned": 100})
+        with patch("app.stores.credits.release", new=mock):
+            resp = client.post(
+                f"/v1/users/{uid}/credits/release",
+                headers={"X-User-ID": uid, "X-Internal-Secret": INTERNAL_SECRET},
+                json={"pipeline_run_id": "run-1", "reason": "r", "idempotency_key": "k", **body},
+            )
+        return resp, mock
+
+    def test_old_body_is_a_run_wide_release(self, client):
+        resp, mock = self._post(client, {})
+        assert resp.status_code == 200
+        assert mock.await_args.kwargs["checkpoint_id"] is None
+        assert mock.await_args.kwargs["attempt"] is None
+
+    def test_hold_key_is_passed_through(self, client):
+        resp, mock = self._post(client, {"checkpoint_id": "gen-a#frame-2", "attempt": 3})
+        assert resp.status_code == 200
+        assert mock.await_args.kwargs["checkpoint_id"] == "gen-a#frame-2"
+        assert mock.await_args.kwargs["attempt"] == 3
+
+    @pytest.mark.parametrize("partial", [{"checkpoint_id": "gen-a"}, {"attempt": 1}])
+    def test_half_a_hold_key_is_rejected_not_widened(self, client, partial):
+        resp, mock = self._post(client, partial)
+        assert resp.status_code == 422
+        assert mock.await_count == 0
 
 
 # ── admin ────────────────────────────────────────────────────────────────────
