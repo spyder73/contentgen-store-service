@@ -244,10 +244,18 @@ class RenderTemplateOut(BaseModel):
     status: str = "active"
     config: dict[str, Any] = Field(default_factory=dict)
     preview_url: str | None = None
+    validation_report_json: dict[str, Any] = Field(default_factory=dict)
+    approved_at: datetime | None = None
     created_from_clip_id: str | None = None
     created_from_instruction: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class RenderTemplateStatusPatch(BaseModel):
+    status: str
+    validation_report_json: dict[str, Any] | None = None
+    preview_url: str | None = Field(default=None, max_length=2048)
 
 
 class RenderTemplateIn(BaseModel):

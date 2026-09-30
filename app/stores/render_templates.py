@@ -7,6 +7,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import RenderProposal, RenderTemplate
+from . import clipstyle_packages
 from ..schemas import (
     RenderProposalIn,
     RenderProposalOut,
@@ -86,6 +87,8 @@ async def update_template(
     row = await session.get(RenderTemplate, id)
     if row is None or row.user_id != user_id:
         return None
+    # Before `_apply_template_body` reassigns `kind`, so an approved package cannot escape by switching kind.
+    clipstyle_packages.guard_package_update(row)
     _apply_template_body(row, body)
     row.user_id = user_id
     await session.commit()
@@ -117,7 +120,8 @@ async def clone_template(
         description=source.description or "",
         kind=source.kind or "carousel",
         source="user_saved",
-        status="active",
+        # A cloned package is the "new version = new row" path: it starts over in draft, no report.
+        status="draft" if source.kind == clipstyle_packages.PACKAGE_KIND else "active",
         config=dict(source.config or {}),
         preview_url=source.preview_url,
         created_from_clip_id=source.created_from_clip_id,
@@ -134,7 +138,10 @@ def _apply_template_body(row: RenderTemplate, body: RenderTemplateIn) -> None:
     row.description = body.description
     row.kind = body.kind or "carousel"
     row.source = _require_valid(body.source or "user_saved", VALID_TEMPLATE_SOURCES, "source")
-    row.status = _require_valid(body.status or "active", VALID_TEMPLATE_STATUSES, "status")
+    if row.kind == clipstyle_packages.PACKAGE_KIND:
+        clipstyle_packages.apply_package_body(row, body)
+    else:
+        row.status = _require_valid(body.status or "active", VALID_TEMPLATE_STATUSES, "status")
     row.config = body.config or {}
     row.preview_url = body.preview_url
     row.created_from_clip_id = body.created_from_clip_id
