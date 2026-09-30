@@ -26,6 +26,18 @@ PACKAGE_KIND = "clipstyle_package"
 PACKAGE_STATUSES = {"draft", "validated", "approved", "rejected"}
 REPORT_CONTRACT_VERSION = 1
 MAX_VALIDATION_REPORT_BYTES = 2 * 1024 * 1024
+# Mirrors remotion/src/validator/package-files.ts `PACKAGE_PATH_PATTERN` and
+# modal_bridge/validator_types.py `MAX_FILES`/`MAX_FILE_BYTES`/`MAX_TOTAL_BYTES`. Enforced here too
+# (not only by the runner's check_files) so a bad path or an oversized package is refused at write
+# time (400) instead of only after a full validation round trip (M2).
+PACKAGE_PATH_PATTERN = re.compile(
+    r"(?:manifest\.ts|schema\.ts|Template\.tsx|validate\.ts|writing-guide\.md"
+    r"|fixtures/(?!constructor\.json\Z)[a-z0-9][a-z0-9-]{0,63}\.json"
+    r"|components/[A-Z][A-Za-z0-9]{0,63}\.tsx|lib/[a-z][A-Za-z0-9-]{0,63}\.ts)"
+)
+MAX_FILES = 48
+MAX_FILE_BYTES = 64 * 1024
+MAX_TOTAL_BYTES = 512 * 1024
 _ALLOWED = {
     ("draft", "draft"), ("draft", "validated"), ("draft", "rejected"),
     ("validated", "draft"), ("validated", "validated"), ("validated", "approved"), ("validated", "rejected"),
@@ -69,6 +81,18 @@ def check_package_config(config: dict) -> None:
     files = config.get("files")
     if not isinstance(files, dict) or not files or not all(isinstance(k, str) and isinstance(v, str) for k, v in files.items()):
         raise ValueError("invalid_package_config:files")
+    if len(files) > MAX_FILES:
+        raise ValueError("invalid_package_config:files.count")
+    total = 0
+    for path, content in files.items():
+        if not PACKAGE_PATH_PATTERN.fullmatch(path):
+            raise ValueError("invalid_package_config:files.path")
+        size = len(_utf8(content))
+        if size > MAX_FILE_BYTES:
+            raise ValueError("invalid_package_config:files.size")
+        total += size
+    if total > MAX_TOTAL_BYTES:
+        raise ValueError("invalid_package_config:files.size")
 
 
 def _check_report_ok_and_fresh(report: dict | None, files: dict[str, str]) -> None:
@@ -112,7 +136,12 @@ def guard_package_archive(row: RenderTemplate) -> None:
 
 
 def apply_package_body(row: RenderTemplate, body: RenderTemplateIn) -> None:
-    """Any create/edit of a package lands in draft with no report: a report never outlives its files."""
+    """Any create/edit of a package lands in draft with no report: a report never outlives its files.
+
+    `preview_url` is bridge-owned (set only through the status PATCH, see `set_package_status`): a
+    client-supplied value on create/PUT is always ignored, never stored, and any edit resets the
+    field to None even if the body didn't touch it, since the old preview described the pre-edit
+    files (ruling F-I3)."""
     check_package_config(body.config)
     if body.status in ("validated", "approved", "rejected"):
         raise ValueError("package_status_via_status_endpoint")
@@ -123,6 +152,7 @@ def apply_package_body(row: RenderTemplate, body: RenderTemplateIn) -> None:
     row.status = "draft"
     row.validation_report_json = {}
     row.approved_at = None
+    row.preview_url = None
 
 
 def _check_report_size(report: dict) -> None:
@@ -156,6 +186,10 @@ async def set_package_status(
     validation_report_json: dict | None = None,
     preview_url: str | None = None,
 ) -> RenderTemplateOut | None:
+    """`preview_url` is bridge-owned end to end: this is the only place a package's preview can be
+    set or cleared (ruling F-I3). `None` (omitted) leaves it alone; `""` is an explicit clear; any
+    other string is the new value. Either way it is still refused on an approved row unless it's a
+    no-op retry, same as the report."""
     if validation_report_json is not None:
         _check_report_size(validation_report_json)
     row = await session.get(RenderTemplate, id)
@@ -163,10 +197,11 @@ async def set_package_status(
         return None
     report = validation_report_json if validation_report_json is not None else (row.validation_report_json or {})
     new_status = next_package_status(row.status, target, report=report, files=(row.config or {}).get("files") or {})
+    new_preview_url = None if preview_url == "" else preview_url
     if row.status == "approved":
         # Idempotent re-approval (e.g. a retried bridge call) may not rewrite what was approved.
         if (validation_report_json is not None and validation_report_json != row.validation_report_json) or (
-            preview_url is not None and preview_url != row.preview_url
+            preview_url is not None and new_preview_url != row.preview_url
         ):
             raise ValueError("package_immutable")
         return _template_out(row)
@@ -177,7 +212,7 @@ async def set_package_status(
     if validation_report_json is not None:
         row.validation_report_json = validation_report_json
     if preview_url is not None:
-        row.preview_url = preview_url
+        row.preview_url = new_preview_url
     try:
         await session.commit()
     except IntegrityError as exc:  # concurrent approval of the same id@version (partial unique index)

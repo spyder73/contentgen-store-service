@@ -130,6 +130,7 @@ _TEMPLATE_CONFLICTS = (
     "validation_report_not_ok",
     "validation_report_stale",
     "validation_report_contract_version",
+    "render_template_id_taken",
 )
 
 
@@ -388,7 +389,7 @@ def create_fastapi_app() -> FastAPI:
         try:
             return await render_templates.create_template(session, body, user_id=user_id)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise _template_error(exc)
 
     @app.get("/v1/render-templates/{id}", response_model=RenderTemplateOut)
     async def get_render_template_handler(id: str, request: Request, session: SessionDep) -> Any:
@@ -429,9 +430,12 @@ def create_fastapi_app() -> FastAPI:
         body: RenderTemplateCloneIn | None = None,
     ) -> Any:
         user_id = _require_user_id(request)
-        row = await render_templates.clone_template(
-            session, id, body or RenderTemplateCloneIn(), user_id=user_id
-        )
+        try:
+            row = await render_templates.clone_template(
+                session, id, body or RenderTemplateCloneIn(), user_id=user_id
+            )
+        except ValueError as exc:
+            raise _template_error(exc)
         if row is None:
             raise HTTPException(status_code=404, detail="not_found")
         return row

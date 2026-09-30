@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import defer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -85,7 +86,11 @@ async def create_template(
     _apply_template_body(row, body)
     row.user_id = user_id
     session.add(row)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as exc:  # a client-supplied id collides with an existing row
+        await session.rollback()
+        raise ValueError("render_template_id_taken") from exc
     await session.refresh(row)
     return _template_out(row)
 
@@ -139,7 +144,11 @@ async def clone_template(
         created_from_instruction=source.created_from_instruction,
     )
     session.add(row)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as exc:  # a client-supplied clone id collides with an existing row
+        await session.rollback()
+        raise ValueError("render_template_id_taken") from exc
     await session.refresh(row)
     return _template_out(row)
 
@@ -150,14 +159,16 @@ def _apply_template_body(row: RenderTemplate, body: RenderTemplateIn) -> None:
     row.kind = body.kind or "carousel"
     row.source = _require_valid(body.source or "user_saved", VALID_TEMPLATE_SOURCES, "source")
     if row.kind == clipstyle_packages.PACKAGE_KIND:
+        # preview_url is bridge-owned for packages (ruling F-I3): apply_package_body ignores any
+        # client-supplied value and resets the field, so it is never assigned from body here.
         clipstyle_packages.apply_package_body(row, body)
     else:
         row.status = _require_valid(body.status or "active", VALID_TEMPLATE_STATUSES, "status")
         # Package-only fields (a draft package may become a normal template): never carried over.
         row.validation_report_json = {}
         row.approved_at = None
+        row.preview_url = body.preview_url
     row.config = body.config or {}
-    row.preview_url = body.preview_url
     row.created_from_clip_id = body.created_from_clip_id
     row.created_from_instruction = body.created_from_instruction
 

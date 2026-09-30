@@ -63,6 +63,25 @@ def test_vectors_include_the_ordering_and_surrogate_cases():
         ({"manifest": {"id": "miniCard", "version": 1, "kind": "gif"}, "files": FILES}, "manifest.kind"),
         ({"manifest": {"id": "miniCard", "version": 1, "kind": "video"}, "files": {}}, "files"),
         ({"manifest": {"id": "miniCard", "version": 1, "kind": "video"}, "files": {"a": 1}}, "files"),
+        # M2 (final fix wave): the same path/count/size limits the runner's check_files enforces,
+        # applied here at write time so a bad path or an oversized package never round-trips
+        # through a full validation first.
+        ({"manifest": {"id": "miniCard", "version": 1, "kind": "carousel"}, "files": {**FILES, "evil.exe": "x"}}, "files.path"),
+        (
+            {"manifest": {"id": "miniCard", "version": 1, "kind": "carousel"}, "files": {f"lib/f{i}.ts": "x" for i in range(cp.MAX_FILES + 1)}},
+            "files.count",
+        ),
+        (
+            {"manifest": {"id": "miniCard", "version": 1, "kind": "carousel"}, "files": {"manifest.ts": "x" * (cp.MAX_FILE_BYTES + 1)}},
+            "files.size",
+        ),
+        (
+            {
+                "manifest": {"id": "miniCard", "version": 1, "kind": "carousel"},
+                "files": {f"lib/big{i}.ts": "x" * cp.MAX_FILE_BYTES for i in range(9)},
+            },
+            "files.size",
+        ),
     ],
 )
 def test_check_package_config_rejects(config, reason):
@@ -131,6 +150,16 @@ def test_apply_package_body_forces_draft_and_clears_the_report():
         cp.apply_package_body(_row(), RenderTemplateIn(name="p", kind=cp.PACKAGE_KIND, status="approved", config=CONFIG))
     with pytest.raises(ValueError, match="invalid_package_config:source"):
         cp.apply_package_body(_row(), RenderTemplateIn(name="p", kind=cp.PACKAGE_KIND, source="builtin", config=CONFIG))
+
+
+def test_apply_package_body_ignores_a_client_supplied_preview_and_resets_the_old_one():
+    """preview_url is bridge-owned: a package body edit never lets the client set it, and any edit
+    drops whatever the bridge had set before, since it described the pre-edit files."""
+    row = _row(status="validated", preview_url="/v1/media/bridge-set/file")
+    cp.apply_package_body(
+        row, RenderTemplateIn(name="p", kind=cp.PACKAGE_KIND, config=CONFIG, preview_url="/v1/media/attacker/file")
+    )
+    assert row.preview_url is None
 
 
 def test_guard_package_update_blocks_approved_and_rejected():
@@ -207,6 +236,29 @@ def test_reapproving_is_idempotent_but_cannot_rewrite_the_report_or_preview():
         asyncio.run(cp.set_package_status(_session(row), "tpl-1", "approved", user_id=UID, validation_report_json={**OK, "x": 1}))
     with pytest.raises(ValueError, match="package_immutable"):
         asyncio.run(cp.set_package_status(_session(row), "tpl-1", "approved", user_id=UID, preview_url="/other"))
+
+
+def test_set_package_status_omitting_preview_url_leaves_it_alone():
+    # validated -> draft needs no fresh report, so this isolates the preview_url sentinel.
+    row = _row(status="validated", preview_url="/p")
+    with patch.object(cp, "_template_out", side_effect=lambda r: r):
+        out = asyncio.run(cp.set_package_status(_session(row), "tpl-1", "draft", user_id=UID))
+    assert out.preview_url == "/p"
+
+
+def test_set_package_status_explicit_empty_string_clears_the_preview():
+    row = _row(status="validated", preview_url="/p")
+    with patch.object(cp, "_template_out", side_effect=lambda r: r):
+        out = asyncio.run(cp.set_package_status(_session(row), "tpl-1", "draft", user_id=UID, preview_url=""))
+    assert out.preview_url is None
+
+
+def test_reapproving_cannot_clear_the_preview_either():
+    """The explicit-clear sentinel still hits the same immutability wall as setting a new value."""
+    stamped = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    row = _row(status="approved", validation_report_json=OK, approved_at=stamped, preview_url="/p")
+    with pytest.raises(ValueError, match="package_immutable"):
+        asyncio.run(cp.set_package_status(_session(row), "tpl-1", "approved", user_id=UID, preview_url=""))
 
 
 # ── routes ──────────────────────────────────────────────────────────────────
@@ -561,3 +613,79 @@ def test_downgrade_refuses_while_package_lifecycle_rows_exist():
     assert "status IN ('validated','approved','rejected')" in out[:guard]
     assert guard < out.index("DROP COLUMN validation_report_json")
     assert "UPDATE render_templates SET status" not in out
+
+
+# ── final fix wave: F-I3 (preview_url is bridge-owned) ──────────────────────
+
+
+def test_package_create_ignores_a_client_supplied_preview_url(db):
+    """Ruling F-I3: the store ignores a client-set preview_url on a package create/PUT; it is
+    bridge-owned and only ever set through the status PATCH."""
+    created = _create(db, preview_url="/v1/media/attacker/file")
+    assert created.preview_url is None
+
+
+def test_package_put_resets_a_bridge_set_preview_even_without_a_client_value(db):
+    from app.stores import render_templates as rt
+
+    _create(db)
+    _status(db, "validated", validation_report_json=OK, preview_url="/v1/media/bridge/file")
+    edited = _run(
+        db,
+        lambda s: rt.update_template(
+            s, "tpl-1", RenderTemplateIn(name="p2", kind=cp.PACKAGE_KIND, config=CONFIG), user_id=UID
+        ),
+    )
+    assert edited.preview_url is None
+
+
+def test_normal_template_put_still_accepts_a_client_supplied_preview_url(db):
+    """F-I3 only touches packages: this stays additive for the existing non-package flow."""
+    from app.stores import render_templates as rt
+
+    _create(db, id="n", kind="carousel", config={}, preview_url="/v1/media/old/file")
+    edited = _run(
+        db,
+        lambda s: rt.update_template(
+            s, "n", RenderTemplateIn(name="n2", kind="carousel", config={}, preview_url="/v1/media/new/file"), user_id=UID
+        ),
+    )
+    assert edited.preview_url == "/v1/media/new/file"
+
+
+# ── final fix wave: Task 15 deferred minor (colliding id -> 409, not 500) ───
+
+
+def test_create_with_a_colliding_id_is_a_conflict_not_a_500(db):
+    from app.stores import render_templates as rt
+
+    _create(db, id="dup", kind="carousel", config={})
+    with pytest.raises(ValueError, match="render_template_id_taken"):
+        _run(
+            db,
+            lambda s: rt.create_template(
+                s, RenderTemplateIn(id="dup", name="other", kind="carousel", config={}), user_id=UID
+            ),
+        )
+    _create(db, id="dup-pkg")
+    with pytest.raises(ValueError, match="render_template_id_taken"):
+        _run(
+            db,
+            lambda s: rt.create_template(
+                s, RenderTemplateIn(id="dup-pkg", name="other", kind=cp.PACKAGE_KIND, config=CONFIG), user_id=OTHER_UID
+            ),
+        )
+
+
+def test_clone_into_a_colliding_id_is_a_conflict_not_a_500(db):
+    from app.stores import render_templates as rt
+
+    _create(db, id="src", kind="carousel", config={})
+    _create(db, id="dup", kind="carousel", config={})
+    with pytest.raises(ValueError, match="render_template_id_taken"):
+        _run(db, lambda s: rt.clone_template(s, "src", RenderTemplateCloneIn(id="dup"), user_id=UID))
+    # colliding with another user's row (own or another user's, archived or not - rereview note)
+    _create(db, id="pkg-src")
+    _create(db, id="pkg-dup", user_id=OTHER_UID, config={**CONFIG, "manifest": {**CONFIG["manifest"], "version": 9}})
+    with pytest.raises(ValueError, match="render_template_id_taken"):
+        _run(db, lambda s: rt.clone_template(s, "pkg-src", RenderTemplateCloneIn(id="pkg-dup"), user_id=UID))
