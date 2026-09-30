@@ -99,6 +99,12 @@ def guard_package_update(row: RenderTemplate) -> None:
         raise ValueError("package_immutable")
 
 
+def guard_package_archive(row: RenderTemplate) -> None:
+    """Approved versions cannot be archived: retiring one will be an explicit, later feature."""
+    if row.kind == PACKAGE_KIND and row.status == "approved":
+        raise ValueError("package_immutable")
+
+
 def apply_package_body(row: RenderTemplate, body: RenderTemplateIn) -> None:
     """Any create/edit of a package lands in draft with no report: a report never outlives its files."""
     check_package_config(body.config)
@@ -127,8 +133,10 @@ async def _ensure_version_unique(session: AsyncSession, row: RenderTemplate) -> 
     for other in (await session.execute(stmt)).scalars():
         other_manifest = (other.config or {}).get("manifest") or {}
         if other_manifest.get("id") == manifest["id"] and other.user_id != row.user_id:
-            # The registry is keyed by style id: another user's approval would overwrite theirs.
-            raise ValueError("package_id_owned_by_other_user")
+            # A manifest.id belongs to the user who first got it approved (the registry is keyed by
+            # style id). Check-then-act: two users' simultaneous FIRST approvals of one id are not
+            # caught (no DB constraint can express it) - accepted, approvals are human-gated.
+            raise ValueError("package_id_taken")
         if (other_manifest.get("id"), other_manifest.get("version")) == (manifest["id"], manifest["version"]):
             raise ValueError("package_version_already_approved")
 

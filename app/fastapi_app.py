@@ -124,7 +124,7 @@ _TEMPLATE_CONFLICTS = (
     "package_immutable",
     "invalid_transition",
     "package_version_already_approved",
-    "package_id_owned_by_other_user",
+    "package_id_taken",
     "validation_report_not_ok",
     "validation_report_stale",
     "validation_report_contract_version",
@@ -412,7 +412,10 @@ def create_fastapi_app() -> FastAPI:
     @app.delete("/v1/render-templates/{id}", status_code=204)
     async def delete_render_template_handler(id: str, request: Request, session: SessionDep) -> None:
         user_id = _require_user_id(request)
-        archived = await render_templates.archive_template(session, id, user_id=user_id)
+        try:
+            archived = await render_templates.archive_template(session, id, user_id=user_id)
+        except ValueError as exc:
+            raise _template_error(exc)
         if not archived:
             raise HTTPException(status_code=404, detail="not_found")
 

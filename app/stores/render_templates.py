@@ -100,6 +100,7 @@ async def archive_template(session: AsyncSession, id: str, *, user_id: str) -> b
     row = await session.get(RenderTemplate, id)
     if row is None or row.user_id != user_id:
         return False
+    clipstyle_packages.guard_package_archive(row)
     row.status = "archived"
     await session.commit()
     return True
