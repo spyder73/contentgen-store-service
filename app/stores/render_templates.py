@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import or_, select
+from sqlalchemy.orm import defer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import RenderProposal, RenderTemplate
@@ -13,6 +14,7 @@ from ..schemas import (
     RenderProposalOut,
     RenderTemplateCloneIn,
     RenderTemplateIn,
+    RenderTemplateListOut,
     RenderTemplateOut,
 )
 
@@ -45,17 +47,24 @@ async def list_templates(
     user_id: str,
     kind: str | None = None,
     include_archived: bool = False,
-) -> list[RenderTemplateOut]:
-    stmt = select(RenderTemplate).where(
-        or_(RenderTemplate.user_id == user_id, RenderTemplate.user_id.is_(None))
+) -> list[RenderTemplateListOut]:
+    # Lists never carry validation reports (up to 2 MiB each): the column is not even loaded.
+    stmt = (
+        select(RenderTemplate)
+        .options(defer(RenderTemplate.validation_report_json))
+        .where(or_(RenderTemplate.user_id == user_id, RenderTemplate.user_id.is_(None)))
     )
     if kind:
         stmt = stmt.where(RenderTemplate.kind == kind)
+    else:
+        # Clipstyle packages are listed only when asked for by kind, so unfiltered clients keep
+        # seeing just the templates they always did.
+        stmt = stmt.where(RenderTemplate.kind != clipstyle_packages.PACKAGE_KIND)
     if not include_archived:
         stmt = stmt.where(RenderTemplate.status != "archived")
     stmt = stmt.order_by(RenderTemplate.created_at.desc(), RenderTemplate.name)
     result = await session.execute(stmt)
-    return [_template_out(row) for row in result.scalars()]
+    return [RenderTemplateListOut.model_validate(row) for row in result.scalars()]
 
 
 async def get_template(
@@ -88,7 +97,7 @@ async def update_template(
     if row is None or row.user_id != user_id:
         return None
     # Before `_apply_template_body` reassigns `kind`, so an approved package cannot escape by switching kind.
-    clipstyle_packages.guard_package_update(row)
+    clipstyle_packages.guard_package_update(row, new_kind=body.kind or "carousel")
     _apply_template_body(row, body)
     row.user_id = user_id
     await session.commit()
@@ -124,7 +133,8 @@ async def clone_template(
         # A cloned package is the "new version = new row" path: it starts over in draft, no report.
         status="draft" if source.kind == clipstyle_packages.PACKAGE_KIND else "active",
         config=dict(source.config or {}),
-        preview_url=source.preview_url,
+        # A package preview shows the approved files, not the new draft's: it is re-rendered on validation.
+        preview_url=None if source.kind == clipstyle_packages.PACKAGE_KIND else source.preview_url,
         created_from_clip_id=source.created_from_clip_id,
         created_from_instruction=source.created_from_instruction,
     )
@@ -143,6 +153,9 @@ def _apply_template_body(row: RenderTemplate, body: RenderTemplateIn) -> None:
         clipstyle_packages.apply_package_body(row, body)
     else:
         row.status = _require_valid(body.status or "active", VALID_TEMPLATE_STATUSES, "status")
+        # Package-only fields (a draft package may become a normal template): never carried over.
+        row.validation_report_json = {}
+        row.approved_at = None
     row.config = body.config or {}
     row.preview_url = body.preview_url
     row.created_from_clip_id = body.created_from_clip_id

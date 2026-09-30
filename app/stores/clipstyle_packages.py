@@ -94,9 +94,15 @@ def next_package_status(current: str, target: str, *, report: dict | None, files
     return target
 
 
-def guard_package_update(row: RenderTemplate) -> None:
-    if row.kind == PACKAGE_KIND and row.status in ("approved", "rejected"):
+def guard_package_update(row: RenderTemplate, *, new_kind: str | None = None) -> None:
+    """Approved, rejected and archived packages are frozen (an archived package cannot be revived by
+    PUT; clone it instead). Leaving the package kind is only allowed from draft."""
+    if row.kind != PACKAGE_KIND:
+        return
+    if row.status in ("approved", "rejected", "archived"):
         raise ValueError("package_immutable")
+    if new_kind is not None and new_kind != PACKAGE_KIND and row.status != "draft":
+        raise ValueError("package_kind_change_requires_draft")
 
 
 def guard_package_archive(row: RenderTemplate) -> None:

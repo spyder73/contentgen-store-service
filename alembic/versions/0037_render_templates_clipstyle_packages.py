@@ -44,10 +44,17 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Refuse rather than silently erase approval state: the narrowed CHECK cannot hold the package
+    # lifecycle statuses. Resolve (or delete) those rows by hand first, then downgrade.
+    op.execute(
+        "DO $$ BEGIN "
+        "IF EXISTS (SELECT 1 FROM render_templates WHERE status IN ('validated','approved','rejected')) THEN "
+        "RAISE EXCEPTION 'downgrade 0037 refused: render_templates has clipstyle package rows in "
+        "validated/approved/rejected; resolve them first (downgrading would erase approval state)'; "
+        "END IF; END $$"
+    )
     op.execute(f"DROP INDEX IF EXISTS {_INDEX}")
     op.drop_column("render_templates", "approved_at")
     op.drop_column("render_templates", "validation_report_json")
-    # The narrowed CHECK cannot hold the package-only statuses; they fall back to draft (lossy).
-    op.execute("UPDATE render_templates SET status = 'draft' WHERE status IN ('validated','approved','rejected')")
     op.drop_constraint("render_templates_status_valid", "render_templates", type_="check")
     op.create_check_constraint("render_templates_status_valid", "render_templates", "status IN ('draft','active','archived')")

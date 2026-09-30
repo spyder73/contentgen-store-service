@@ -232,7 +232,9 @@ class ReviewCorrectionOut(BaseModel):
     updated_at: datetime
 
 
-class RenderTemplateOut(BaseModel):
+class RenderTemplateListOut(BaseModel):
+    """List item: everything but the (possibly large) validation report."""
+
     model_config = ConfigDict(from_attributes=True)
 
     id: str
@@ -244,12 +246,15 @@ class RenderTemplateOut(BaseModel):
     status: str = "active"
     config: dict[str, Any] = Field(default_factory=dict)
     preview_url: str | None = None
-    validation_report_json: dict[str, Any] = Field(default_factory=dict)
     approved_at: datetime | None = None
     created_from_clip_id: str | None = None
     created_from_instruction: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class RenderTemplateOut(RenderTemplateListOut):
+    validation_report_json: dict[str, Any] = Field(default_factory=dict)
 
 
 class RenderTemplateStatusPatch(BaseModel):

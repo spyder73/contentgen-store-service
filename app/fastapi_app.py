@@ -59,6 +59,7 @@ from .schemas import (
     RenderProposalStatusPatch,
     RenderTemplateCloneIn,
     RenderTemplateIn,
+    RenderTemplateListOut,
     RenderTemplateOut,
     RenderTemplateStatusPatch,
     SeriesIn,
@@ -122,6 +123,7 @@ def _require_user_id(request: Request) -> str:
 
 _TEMPLATE_CONFLICTS = (
     "package_immutable",
+    "package_kind_change_requires_draft",
     "invalid_transition",
     "package_version_already_approved",
     "package_id_taken",
@@ -366,7 +368,7 @@ def create_fastapi_app() -> FastAPI:
 
     # ── render templates ────────────────────────────────────────────────────
 
-    @app.get("/v1/render-templates", response_model=list[RenderTemplateOut])
+    @app.get("/v1/render-templates", response_model=list[RenderTemplateListOut])
     async def list_render_templates_handler(
         request: Request,
         session: SessionDep,

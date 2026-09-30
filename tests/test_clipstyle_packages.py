@@ -456,3 +456,108 @@ def test_the_owner_of_an_id_can_approve_new_versions(db):
         _status(db, "validated", id=id, validation_report_json=OK)
         assert _status(db, "approved", id=id).status == "approved"
     assert [r.id for r in _run(db, cp.list_approved_packages)] == ["v1", "v2"]
+
+
+# ── fix round 1 ─────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("final", ["rejected", "draft"])
+def test_an_archived_package_stays_dead(db, final):
+    """DELETE of a rejected (or draft) package is terminal: no PUT, no status change. New work = clone."""
+    from app.stores import render_templates as rt
+
+    _create(db)
+    if final == "rejected":
+        _status(db, "rejected")
+    assert _run(db, lambda s: rt.archive_template(s, "tpl-1", user_id=UID)) is True
+    with pytest.raises(ValueError, match="package_immutable"):
+        _run(db, lambda s: rt.update_template(s, "tpl-1", RenderTemplateIn(name="p", kind=cp.PACKAGE_KIND, config=CONFIG), user_id=UID))
+    with pytest.raises(ValueError, match="package_immutable"):
+        _run(db, lambda s: rt.update_template(s, "tpl-1", RenderTemplateIn(name="p", kind="carousel", config={}), user_id=UID))
+    for target in ("draft", "validated", "rejected"):
+        with pytest.raises(ValueError, match=f"invalid_transition:archived->{target}"):
+            _status(db, target, validation_report_json=OK)
+    from app.models import RenderTemplate
+
+    assert _run(db, lambda s: s.get(RenderTemplate, "tpl-1")).status == "archived"
+    clone = _run(db, lambda s: rt.clone_template(s, "tpl-1", RenderTemplateCloneIn(id="tpl-2"), user_id=UID))
+    assert clone.status == "draft"
+
+
+def test_archived_normal_templates_can_still_be_restored_by_put(db):
+    from app.stores import render_templates as rt
+
+    _create(db, id="n", kind="carousel", config={"layout": "split"})
+    assert _run(db, lambda s: rt.archive_template(s, "n", user_id=UID)) is True
+    restored = _run(db, lambda s: rt.update_template(s, "n", RenderTemplateIn(name="n", kind="carousel", status="active"), user_id=UID))
+    assert restored.status == "active"
+
+
+def test_kind_change_away_from_a_package_only_from_draft_and_it_drops_the_report(db):
+    from app.stores import render_templates as rt
+
+    _create(db, id="v")
+    _status(db, "validated", id="v", validation_report_json=OK)
+    with pytest.raises(ValueError, match="package_kind_change_requires_draft"):
+        _run(db, lambda s: rt.update_template(s, "v", RenderTemplateIn(name="p", kind="carousel", config={}), user_id=UID))
+    _create(db, id="d")
+    _status(db, "draft", id="d", validation_report_json={"ok": False, "contract_version": 1})
+    out = _run(db, lambda s: rt.update_template(s, "d", RenderTemplateIn(name="p", kind="carousel", config={}), user_id=UID))
+    assert (out.kind, out.status, out.validation_report_json, out.approved_at) == ("carousel", "active", {}, None)
+
+
+def test_kind_change_conflict_maps_to_409(client):
+    with patch("app.stores.render_templates.update_template", new=AsyncMock(side_effect=ValueError("package_kind_change_requires_draft"))):
+        resp = client.put("/v1/render-templates/tpl-1", headers=HEADERS, json={"name": "p", "config": {}})
+    assert resp.status_code == 409
+
+
+def test_cloning_a_package_drops_the_preview_but_normal_clones_keep_it(db):
+    from app.stores import render_templates as rt
+
+    _create(db, id="p", preview_url="/v1/media/old/file")
+    _create(db, id="n", kind="carousel", config={}, preview_url="/v1/media/n/file")
+    assert _run(db, lambda s: rt.clone_template(s, "p", RenderTemplateCloneIn(id="p2"), user_id=UID)).preview_url is None
+    assert _run(db, lambda s: rt.clone_template(s, "n", RenderTemplateCloneIn(id="n2"), user_id=UID)).preview_url == "/v1/media/n/file"
+
+
+def test_user_lists_hide_packages_unless_asked_and_never_carry_reports(db):
+    from app.stores import render_templates as rt
+
+    _create(db, id="p")
+    _status(db, "validated", id="p", validation_report_json=OK)
+    _create(db, id="n", kind="carousel", config={})
+    assert [r.id for r in _run(db, lambda s: rt.list_templates(s, user_id=UID))] == ["n"]
+    packages = _run(db, lambda s: rt.list_templates(s, user_id=UID, kind=cp.PACKAGE_KIND))
+    assert [r.id for r in packages] == ["p"]
+    assert "validation_report_json" not in packages[0].model_dump()
+    # single GET and the internal approved list keep the report (the bridge reads registry_payload)
+    assert _run(db, lambda s: rt.get_template(s, "p", user_id=UID)).validation_report_json == OK
+
+
+def test_list_route_omits_reports(client):
+    with patch("app.stores.render_templates.list_templates", new=AsyncMock(return_value=[_out(validation_report_json=OK)])):
+        resp = client.get("/v1/render-templates?kind=clipstyle_package", headers=HEADERS)
+    assert resp.status_code == 200
+    assert "validation_report_json" not in resp.json()[0]
+    with patch("app.stores.render_templates.get_template", new=AsyncMock(return_value=_out(validation_report_json=OK))):
+        assert client.get("/v1/render-templates/tpl-1", headers=HEADERS).json()["validation_report_json"] == OK
+    with patch("app.stores.clipstyle_packages.list_approved_packages", new=AsyncMock(return_value=[_out(status="approved", validation_report_json=OK)])):
+        assert client.get("/v1/internal/clipstyle-packages/approved", headers={"X-Internal-Secret": SECRET}).json()[0]["validation_report_json"] == OK
+
+
+def test_downgrade_refuses_while_package_lifecycle_rows_exist():
+    import os
+    import subprocess
+    import sys
+
+    root = Path(__file__).resolve().parent.parent
+    out = subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "0037:0036", "--sql"],
+        cwd=root, env={**os.environ, "DATABASE_URL": "postgresql://offline/offline"},
+        capture_output=True, text=True, check=True,
+    ).stdout
+    guard = out.index("RAISE EXCEPTION")
+    assert "status IN ('validated','approved','rejected')" in out[:guard]
+    assert guard < out.index("DROP COLUMN validation_report_json")
+    assert "UPDATE render_templates SET status" not in out
