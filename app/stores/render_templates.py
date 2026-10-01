@@ -103,8 +103,12 @@ async def update_template(
         return None
     # Before `_apply_template_body` reassigns `kind`, so an approved package cannot escape by switching kind.
     clipstyle_packages.guard_package_update(row, new_kind=body.kind or "carousel")
+    old_report = row.validation_report_json
     _apply_template_body(row, body)
     row.user_id = user_id
+    # A package body edit, or a kind change away from a package, resets the report to {} above:
+    # drop whatever preview media the old report referenced (M3/I-1 residual) in the same transaction.
+    await clipstyle_packages.drop_stale_preview_media(session, id, user_id, old_report, row.validation_report_json)
     await session.commit()
     await session.refresh(row)
     return _template_out(row)

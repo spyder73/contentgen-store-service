@@ -440,3 +440,62 @@ def test_controlnet_and_created_after_filters_cover_both_recipe_shapes():
             await engine.dispose()
 
     asyncio.run(run())
+
+
+# ── Residual fix (M3/I-1): clipstyle preview media hidden from the library ──
+# modal_bridge/clients.py marks every preview PNG it uploads during a package
+# validation with metadata.kind == "clipstyle_preview" (media.CLIPSTYLE_PREVIEW_KIND).
+# Those rows are bridge-internal scratch media: a listing must never show them,
+# but a direct GET by id (the bridge's own preview_media URLs) still must work.
+
+
+def test_list_media_hides_clipstyle_preview_rows():
+    async def run():
+        uid = str(uuid.uuid4())
+        engine, factory = await _make_engine_factory()
+        try:
+            base = datetime(2026, 6, 13, 10, 0, 0, tzinfo=timezone.utc)
+            await _seed(
+                factory,
+                [
+                    dict(id=str(uuid.uuid4()), user_id=uid, type="image",
+                         file_url="/m/normal.png", metadata_={}, created_at=base),
+                    dict(id=str(uuid.uuid4()), user_id=uid, type="image",
+                         file_url="/m/upload.png", metadata_={"source": "manual_upload"}, created_at=base),
+                    dict(id=str(uuid.uuid4()), user_id=uid, type="image",
+                         file_url="/m/preview.png", metadata_={"kind": media_store.CLIPSTYLE_PREVIEW_KIND},
+                         created_at=base),
+                ],
+            )
+            async with factory() as s:
+                listed = await media_store.list_media(s, user_id=uid, page=1, limit=50)
+            assert {it.file_url for it in listed.items} == {"/m/normal.png", "/m/upload.png"}
+            assert listed.total == 2
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_single_get_still_returns_a_clipstyle_preview_row():
+    """Hiding previews is list-only: a direct GET by id (the bridge's own
+    `/v1/media/{id}/file` URL, carried in a report's preview_media) must still resolve."""
+
+    async def run():
+        uid = str(uuid.uuid4())
+        engine, factory = await _make_engine_factory()
+        try:
+            base = datetime(2026, 6, 13, 10, 0, 0, tzinfo=timezone.utc)
+            mid = str(uuid.uuid4())
+            await _seed(
+                factory,
+                [dict(id=mid, user_id=uid, type="image", file_url="/m/preview.png",
+                      metadata_={"kind": media_store.CLIPSTYLE_PREVIEW_KIND}, created_at=base)],
+            )
+            async with factory() as s:
+                got = await media_store.get_media(s, mid, user_id=uid)
+            assert got is not None and got.id == mid
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())

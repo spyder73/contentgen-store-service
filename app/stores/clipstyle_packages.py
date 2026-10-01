@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from datetime import datetime, timezone
 
@@ -21,6 +22,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import RenderTemplate
 from ..schemas import RenderTemplateIn, RenderTemplateOut
+from . import media as media_store
+
+logger = logging.getLogger(__name__)
 
 PACKAGE_KIND = "clipstyle_package"
 PACKAGE_STATUSES = {"draft", "validated", "approved", "rejected"}
@@ -135,6 +139,51 @@ def guard_package_archive(row: RenderTemplate) -> None:
         raise ValueError("package_immutable")
 
 
+# Media ids in a bridge-owned report (modal_bridge/previews.py media ids are UUIDs; this is the same
+# lenient id-shape check the bridge itself uses before ever sending an id to a delete).
+_MEDIA_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,63}")
+
+
+def _preview_media_ids(report: dict | None) -> list[str]:
+    """Media ids in a report's bridge-owned `preview_media` key (contact sheet + previews) — the
+    only shape the bridge writes (mirrors modal_bridge/previews.py `media_ids`). Any other shape,
+    including a report with no `preview_media` at all, yields []."""
+    if not isinstance(report, dict):
+        return []
+    preview_media = report.get("preview_media")
+    if not isinstance(preview_media, dict):
+        return []
+    sheet, previews = preview_media.get("contact_sheet"), preview_media.get("previews")
+    entries = ([sheet] if sheet is not None else []) + (previews if isinstance(previews, list) else [])
+    ids = [e.get("media_id") if isinstance(e, dict) else None for e in entries]
+    return ids if all(isinstance(i, str) and _MEDIA_ID.fullmatch(i) for i in ids) else []
+
+
+async def drop_stale_preview_media(session: AsyncSession, template_id: str, user_id: str, old_report: dict | None, new_report: dict | None) -> None:
+    """Deletes the OLD report's preview media that the NEW report doesn't also carry, in the same
+    transaction as whatever reset or replaced the report (a package body edit, a kind change away
+    from a package, or a status PATCH that stores a newer report over an older one).
+
+    Called only where the report is actually changing on a non-approved row (an approved package's
+    report can never be reset or replaced — see `guard_package_update` and the immutability check in
+    `set_package_status`), so this never reaches an approved package's media.
+
+    The delete runs inside a savepoint: a failure there is isolated and only logged, never allowed
+    to fail the edit that orphaned the media (final fix wave M3/I-1 residual).
+    """
+    old_ids = set(_preview_media_ids(old_report)) - set(_preview_media_ids(new_report))
+    if not old_ids:
+        return
+    try:
+        async with session.begin_nested():
+            await media_store.delete_clipstyle_preview_media(session, user_id, old_ids)
+    except Exception:
+        logger.warning(
+            "clipstyle package %s: could not delete %d orphaned preview media for user %s",
+            template_id, len(old_ids), user_id, exc_info=True,
+        )
+
+
 def apply_package_body(row: RenderTemplate, body: RenderTemplateIn) -> None:
     """Any create/edit of a package lands in draft with no report: a report never outlives its files.
 
@@ -205,12 +254,16 @@ async def set_package_status(
         ):
             raise ValueError("package_immutable")
         return _template_out(row)
+    old_report = row.validation_report_json
     if new_status == "approved":
         await _ensure_version_unique(session, row)
         row.approved_at = datetime.now(timezone.utc)
     row.status = new_status
     if validation_report_json is not None:
         row.validation_report_json = validation_report_json
+        # A newer report replaces the old one here: drop the old one's preview media now that
+        # nothing (row.status == "approved" already returned above) references it any more.
+        await drop_stale_preview_media(session, id, user_id, old_report, validation_report_json)
     if preview_url is not None:
         row.preview_url = new_preview_url
     try:

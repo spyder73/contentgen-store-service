@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,6 +30,15 @@ OK = {"ok": True, "contract_version": 1, "package": {"sha256": SHA}}
 #   CLIPKIT_WRITE_VECTORS=1 npx tsx --test tests/validator-cross-language.test.ts
 # then copy the file here again: this copy does not update itself.
 VECTORS = json.loads((Path(__file__).parent / "fixtures" / "package-files-vectors.json").read_text(encoding="utf-8"))
+# final fix wave M11/N4: pin the vector file's own hash so a regeneration on just one side (store or
+# remotion) fails loudly here instead of the two copies silently drifting apart. The remotion copy
+# pins the same value (modal_bridge/tests/test_validator_types.py VECTORS_SHA256).
+VECTORS_SHA256 = "08e2986cfd43af3c233cb7172ef42843c3ba437b9e4790e91d5ff6362845f2a1"
+
+
+def test_the_vector_file_is_the_one_both_repos_pin():
+    path = Path(__file__).parent / "fixtures" / "package-files-vectors.json"
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == VECTORS_SHA256
 
 
 def test_sha_matches_the_cross_language_vector():
@@ -350,7 +361,7 @@ def db():
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
     from sqlalchemy.ext.compiler import compiles
 
-    from app.models import RenderTemplate
+    from app.models import MediaItem, RenderTemplate
 
     @compiles(JSONB, "sqlite")
     def _jsonb_sqlite(element, compiler, **kw):  # pragma: no cover - trivial
@@ -362,22 +373,30 @@ def db():
 
     engine = create_async_engine("sqlite+aiosqlite://")
 
-    table = RenderTemplate.__table__
+    # MediaItem is included so the residual-fix tests (orphaned clipstyle preview media) can exercise
+    # the real cross-table delete in the same transaction as a package edit/status change.
+    tables = [RenderTemplate.__table__, MediaItem.__table__]
     # `'{}'::jsonb` is Postgres syntax: drop those server defaults for the sqlite DDL only (the ORM
     # `default=dict` still fills the columns), then restore them on the shared metadata.
-    pg_defaults = {c.name: c.server_default for c in table.columns if c.server_default is not None and "::" in str(c.server_default.arg)}
+    pg_defaults = {
+        table: {c.name: c.server_default for c in table.columns if c.server_default is not None and "::" in str(c.server_default.arg)}
+        for table in tables
+    }
 
     async def setup():
         async with engine.begin() as conn:
-            await conn.run_sync(lambda c: table.create(c))
+            for table in tables:
+                await conn.run_sync(lambda c, t=table: t.create(c))
 
-    for name in pg_defaults:
-        table.c[name].server_default = None
+    for table, defaults in pg_defaults.items():
+        for name in defaults:
+            table.c[name].server_default = None
     try:
         asyncio.run(setup())
     finally:
-        for name, default in pg_defaults.items():
-            table.c[name].server_default = default
+        for table, defaults in pg_defaults.items():
+            for name, default in defaults.items():
+                table.c[name].server_default = default
     yield async_sessionmaker(engine, expire_on_commit=False)
     asyncio.run(engine.dispose())
 
@@ -689,3 +708,140 @@ def test_clone_into_a_colliding_id_is_a_conflict_not_a_500(db):
     _create(db, id="pkg-dup", user_id=OTHER_UID, config={**CONFIG, "manifest": {**CONFIG["manifest"], "version": 9}})
     with pytest.raises(ValueError, match="render_template_id_taken"):
         _run(db, lambda s: rt.clone_template(s, "pkg-src", RenderTemplateCloneIn(id="pkg-dup"), user_id=UID))
+
+
+# ── Residual fix (M3/I-1): orphaned clipstyle preview media ─────────────────
+# Every validation of a package uploads up to ~61 preview PNGs as the user's media, recorded in the
+# bridge-owned `preview_media` key of the stored report (modal_bridge/previews.py). Whenever the
+# store resets or replaces that report, the media those ids point to must be deleted too, in the
+# same transaction where possible, scoped to the same user and the bridge's own marker
+# (metadata.kind == "clipstyle_preview", media.CLIPSTYLE_PREVIEW_KIND) — never an approved row's media.
+
+
+def _report_with_previews(sheet_id, *preview_ids, ok=True):
+    """A report carrying the bridge's `preview_media` shape (modal_bridge/previews.py), for an
+    otherwise-valid report against CONFIG/FILES."""
+    base = OK if ok else {"ok": False, "contract_version": 1}
+    return {
+        **base,
+        "preview_media": {
+            "contact_sheet": {"media_id": sheet_id, "url": f"/v1/media/{sheet_id}/file"},
+            "previews": [
+                {"fixture": "a", "slide": 0, "frame": 0, "media_id": pid, "url": f"/v1/media/{pid}/file"}
+                for pid in preview_ids
+            ],
+        },
+    }
+
+
+def _seed_media(factory, rows):
+    from app.models import MediaItem
+
+    async def go(session):
+        for r in rows:
+            session.add(MediaItem(**r))
+        await session.commit()
+
+    _run(factory, go)
+
+
+def _media_row(id_, *, user_id=UID, kind="clipstyle_preview"):
+    return dict(id=id_, user_id=user_id, type="image", metadata_=({"kind": kind} if kind else {}))
+
+
+def _media_present(factory, ids):
+    from app.models import MediaItem
+
+    async def go(session):
+        return {mid for mid in ids if await session.get(MediaItem, mid) is not None}
+
+    return _run(factory, go)
+
+
+def test_package_body_edit_deletes_the_old_reports_preview_media(db):
+    from app.stores import render_templates as rt
+
+    _create(db)
+    sheet, p1 = str(uuid.uuid4()), str(uuid.uuid4())
+    _seed_media(db, [_media_row(sheet), _media_row(p1)])
+    _status(db, "validated", validation_report_json=_report_with_previews(sheet, p1))
+    assert _media_present(db, [sheet, p1]) == {sheet, p1}
+    _run(db, lambda s: rt.update_template(s, "tpl-1", RenderTemplateIn(name="p2", kind=cp.PACKAGE_KIND, config=CONFIG), user_id=UID))
+    assert _media_present(db, [sheet, p1]) == set()
+
+
+def test_kind_change_away_from_a_package_also_deletes_its_preview_media(db):
+    from app.stores import render_templates as rt
+
+    _create(db, id="d")
+    sheet = str(uuid.uuid4())
+    _seed_media(db, [_media_row(sheet)])
+    _status(db, "draft", id="d", validation_report_json=_report_with_previews(sheet, ok=False))
+    assert _media_present(db, [sheet]) == {sheet}
+    _run(db, lambda s: rt.update_template(s, "d", RenderTemplateIn(name="p", kind="carousel", config={}), user_id=UID))
+    assert _media_present(db, [sheet]) == set()
+
+
+def test_status_patch_deletes_the_replaced_reports_preview_media(db):
+    """draft <-> validated re-validation loop: a newer report replaces an older one via the status
+    PATCH, and the old report's preview media (not also claimed by the new one) is dropped."""
+    _create(db)
+    old_sheet, new_sheet = str(uuid.uuid4()), str(uuid.uuid4())
+    _seed_media(db, [_media_row(old_sheet), _media_row(new_sheet)])
+    _status(db, "validated", validation_report_json=_report_with_previews(old_sheet))
+    assert _media_present(db, [old_sheet, new_sheet]) == {old_sheet, new_sheet}
+    _status(db, "validated", validation_report_json=_report_with_previews(new_sheet))
+    assert _media_present(db, [old_sheet, new_sheet]) == {new_sheet}
+
+
+def test_approved_packages_preview_media_is_never_deleted(db):
+    _create(db)
+    sheet = str(uuid.uuid4())
+    _seed_media(db, [_media_row(sheet)])
+    _status(db, "validated", validation_report_json=_report_with_previews(sheet))
+    _status(db, "approved", preview_url=f"/v1/media/{sheet}/file")
+    # idempotent re-approval retry with the exact same report: a no-op, so no deletion either.
+    _status(db, "approved", validation_report_json=_report_with_previews(sheet), preview_url=f"/v1/media/{sheet}/file")
+    assert _media_present(db, [sheet]) == {sheet}
+    # a refused attempt to change the approved row's report must not touch the media either.
+    with pytest.raises(ValueError, match="package_immutable"):
+        _status(db, "approved", validation_report_json=_report_with_previews(str(uuid.uuid4())))
+    assert _media_present(db, [sheet]) == {sheet}
+
+
+def test_only_the_same_users_marked_preview_media_is_deleted(db):
+    """The old report's preview_media ids are only a lead: the store still scopes the delete to the
+    caller's own user AND the bridge's own clipstyle_preview marker, so a report that (somehow)
+    pointed at someone else's row or a non-preview row can never make this delete reach it."""
+    from app.stores import render_templates as rt
+
+    _create(db)
+    mine, someone_elses, not_a_preview = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    _seed_media(
+        db,
+        [
+            _media_row(mine),
+            dict(id=someone_elses, user_id=OTHER_UID, type="image", metadata_={"kind": "clipstyle_preview"}),
+            dict(id=not_a_preview, user_id=UID, type="image", metadata_={"source": "manual_upload"}),
+        ],
+    )
+    _status(db, "validated", validation_report_json=_report_with_previews(mine, someone_elses, not_a_preview))
+    _run(db, lambda s: rt.update_template(s, "tpl-1", RenderTemplateIn(name="p2", kind=cp.PACKAGE_KIND, config=CONFIG), user_id=UID))
+    assert _media_present(db, [mine]) == set()
+    assert _media_present(db, [someone_elses, not_a_preview]) == {someone_elses, not_a_preview}
+
+
+def test_a_failed_delete_does_not_fail_the_edit(db):
+    from app.stores import render_templates as rt
+
+    _create(db)
+    sheet = str(uuid.uuid4())
+    _seed_media(db, [_media_row(sheet)])
+    _status(db, "validated", validation_report_json=_report_with_previews(sheet))
+    with patch("app.stores.clipstyle_packages.media_store.delete_clipstyle_preview_media", new=AsyncMock(side_effect=RuntimeError("boom"))):
+        edited = _run(
+            db,
+            lambda s: rt.update_template(s, "tpl-1", RenderTemplateIn(name="p2", kind=cp.PACKAGE_KIND, config=CONFIG), user_id=UID),
+        )
+    assert (edited.status, edited.validation_report_json) == ("draft", {})
+    assert _media_present(db, [sheet]) == {sheet}  # cleanup failed (logged), but the edit still landed
