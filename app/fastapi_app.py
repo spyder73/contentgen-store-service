@@ -9,7 +9,7 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Reques
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from .db import get_session
 from .logging_config import new_request_id, set_request_id, set_user_id
@@ -83,6 +83,7 @@ from .stores import (
     characters,
     clips,
     credits,
+    credits_spent,
     episodes,
     generator_profiles,
     puppet_pose_presets,
@@ -159,6 +160,19 @@ class CreditsReleaseBody(BaseModel):
     def _hold_key_complete(self) -> "CreditsReleaseBody":
         if (self.checkpoint_id is None) != (self.attempt is None):
             raise ValueError("checkpoint_id and attempt must be sent together")
+        return self
+
+
+class CreditsSpentBody(BaseModel):
+    # {scope name: ledger keys}. The backend sends one scope per clip: the
+    # clip id plus the pipeline runs that produced it. Bounded so one list
+    # request stays one cheap indexed query.
+    scopes: dict[str, list[str]] = Field(default_factory=dict, max_length=500)
+
+    @model_validator(mode="after")
+    def _bounded_keys(self) -> "CreditsSpentBody":
+        if any(len(keys) > 64 for keys in self.scopes.values()):
+            raise ValueError("at most 64 ledger keys per scope")
         return self
 
 
@@ -1116,6 +1130,20 @@ def create_fastapi_app() -> FastAPI:
             )
         except credits.CreditsError as e:
             return _credits_error_response(e)
+
+    @app.post("/v1/users/{user_id}/credits/spent")
+    async def spent_credits_handler(
+        user_id: str,
+        body: CreditsSpentBody,
+        request: Request,
+        session: SessionDep,
+    ) -> Any:
+        """Debited credits (markup included) and raw USD per scope of ledger
+        keys — what the user paid, read from the ledger, never re-priced."""
+        caller = _require_user_id(request)
+        if caller != user_id:
+            raise HTTPException(status_code=403, detail="forbidden")
+        return {"scopes": await credits_spent.spent_by_scope(session, user_id, body.scopes)}
 
     @app.patch("/v1/users/{user_id}/limits")
     async def set_user_daily_limit_handler(
