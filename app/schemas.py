@@ -1032,3 +1032,12 @@ class ClipstylePackageMetadataOut(BaseModel):
     version: int | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class ClipstylePackageMetadataPage(BaseModel):
+    """One page of GET /v1/clipstyle-packages/metadata (``page`` is 1-based)."""
+
+    items: list[ClipstylePackageMetadataOut]
+    total: int
+    page: int
+    limit: int

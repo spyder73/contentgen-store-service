@@ -41,7 +41,7 @@ def _uuid_sqlite(element, compiler, **kw):  # pragma: no cover - trivial
 from app.db import get_session  # noqa: E402  (after compiler registration)
 from app.fastapi_app import create_fastapi_app  # noqa: E402
 from app.models import RenderTemplate  # noqa: E402
-from app.schemas import ClipstylePackageMetadataOut  # noqa: E402
+from app.schemas import ClipstylePackageMetadataOut, ClipstylePackageMetadataPage  # noqa: E402
 from app.stores import clipstyle_package_metadata as metadata_store  # noqa: E402
 
 INTERNAL_SECRET = "test-secret-xyz"
@@ -81,35 +81,52 @@ def _meta(id_: str, **overrides) -> ClipstylePackageMetadataOut:
     return ClipstylePackageMetadataOut(**data)
 
 
+def _page(*items: ClipstylePackageMetadataOut, total: int | None = None, page: int = 1, limit: int = 500):
+    return ClipstylePackageMetadataPage(items=list(items), total=len(items) if total is None else total, page=page, limit=limit)
+
+
 class TestClipstylePackageMetadataRoute:
     def test_lists_the_callers_rows_as_metadata_only(self, client):
         with patch(
             "app.stores.clipstyle_package_metadata.list_package_metadata",
-            new=AsyncMock(return_value=[_meta("tpl-1")]),
+            new=AsyncMock(return_value=_page(_meta("tpl-1"))),
         ) as m:
             resp = client.get("/v1/clipstyle-packages/metadata", headers=_headers(OWNER))
         assert resp.status_code == 200
         body = resp.json()
-        assert len(body) == 1
-        assert set(body[0]) == {"id", "user_id", "name", "status", "style_id", "version", "created_at", "updated_at"}
-        assert body[0]["version"] == 2 and body[0]["style_id"] == "imageSequenceCaptions"
-        assert m.call_args.kwargs == {"user_id": OWNER, "include_archived": False}
+        assert set(body) == {"items", "total", "page", "limit"} and body["total"] == 1
+        item = body["items"][0]
+        assert set(item) == {"id", "user_id", "name", "status", "style_id", "version", "created_at", "updated_at"}
+        assert item["version"] == 2 and item["style_id"] == "imageSequenceCaptions"
+        assert m.call_args.kwargs == {"user_id": OWNER, "include_archived": False, "page": 1, "limit": 500}
 
     def test_forwards_include_archived(self, client):
         with patch(
             "app.stores.clipstyle_package_metadata.list_package_metadata",
-            new=AsyncMock(return_value=[]),
+            new=AsyncMock(return_value=_page(page=3, limit=2)),
         ) as m:
             resp = client.get(
-                "/v1/clipstyle-packages/metadata", headers=_headers(OWNER), params={"include_archived": "true"}
+                "/v1/clipstyle-packages/metadata",
+                headers=_headers(OWNER),
+                params={"include_archived": "true", "page": "3", "limit": "2"},
             )
         assert resp.status_code == 200
-        assert m.call_args.kwargs == {"user_id": OWNER, "include_archived": True}
+        assert m.call_args.kwargs == {"user_id": OWNER, "include_archived": True, "page": 3, "limit": 2}
+
+    @pytest.mark.parametrize("params", [{"limit": "0"}, {"limit": "1001"}, {"page": "0"}, {"page": "-1"}])
+    def test_rejects_an_out_of_range_page_or_limit(self, client, params):
+        with patch(
+            "app.stores.clipstyle_package_metadata.list_package_metadata",
+            new=AsyncMock(return_value=_page()),
+        ) as m:
+            resp = client.get("/v1/clipstyle-packages/metadata", headers=_headers(OWNER), params=params)
+        assert resp.status_code == 422
+        m.assert_not_called()
 
     def test_requires_a_user(self, client):
         with patch(
             "app.stores.clipstyle_package_metadata.list_package_metadata",
-            new=AsyncMock(return_value=[]),
+            new=AsyncMock(return_value=_page()),
         ) as m:
             resp = client.get("/v1/clipstyle-packages/metadata", headers=_headers(None))
         assert resp.status_code == 401
@@ -165,7 +182,7 @@ def _package_config(style: str, version) -> dict:
             "clipstyle_session_id": "s-1"}
 
 
-def _list(rows: list[dict], **kwargs) -> list[ClipstylePackageMetadataOut]:
+def _list(rows: list[dict], **kwargs) -> ClipstylePackageMetadataPage:
     async def run():
         engine, factory = await _factory_with(rows)
         try:
@@ -190,18 +207,20 @@ class TestListPackageMetadata:
     ]
 
     def test_only_the_callers_own_package_rows_newest_first(self):
-        out = _list(self.ROWS, user_id=OWNER)
+        page = _list(self.ROWS, user_id=OWNER)
+        out = page.items
+        assert (page.total, page.page, page.limit) == (2, 1, 500)
         assert [m.id for m in out] == ["own-new", "own-old"]
         assert all(m.user_id == OWNER for m in out)
         assert (out[0].name, out[0].status, out[0].style_id, out[0].version) == ("name-own-new", "active", "captions", 3)
         assert (out[1].status, out[1].version) == ("draft", 2)
 
     def test_include_archived(self):
-        out = _list(self.ROWS, user_id=OWNER, include_archived=True)
+        out = _list(self.ROWS, user_id=OWNER, include_archived=True).items
         assert [m.id for m in out] == ["own-new", "own-old", "own-archived"]
 
     def test_never_carries_a_file(self):
-        for m in _list(self.ROWS, user_id=OWNER, include_archived=True):
+        for m in _list(self.ROWS, user_id=OWNER, include_archived=True).items:
             dumped = m.model_dump()
             assert set(dumped) == {"id", "user_id", "name", "status", "style_id", "version", "created_at", "updated_at"}
             assert "export const schema" not in str(dumped) and "xxxx" not in str(dumped)
@@ -213,13 +232,22 @@ class TestListPackageMetadata:
             _row("bad-version", config=_package_config("b", "seven"), minutes_ago=3),
             _row("float-version", config=_package_config("d", 1.5), minutes_ago=5),
         ]
-        got = {m.id: (m.style_id, m.version) for m in _list(rows, user_id=OWNER)}
+        got = {m.id: (m.style_id, m.version) for m in _list(rows, user_id=OWNER).items}
         assert got == {
             "no-manifest": (None, None),
             "text-version": ("a", 7),
             "bad-version": ("b", None),
             "float-version": ("d", None),
         }
+
+    def test_pages_through_the_rows_in_a_stable_order(self):
+        # Five rows, two created at the same instant: the id breaks the tie, so pages never
+        # overlap or skip a row.
+        rows = [_row(f"p{i}", config=_package_config("s", i), minutes_ago=0 if i < 2 else i) for i in range(5)]
+        pages = [_list(rows, user_id=OWNER, page=n, limit=2) for n in (1, 2, 3, 4)]
+        assert [p.total for p in pages] == [5, 5, 5, 5]
+        assert [p.limit for p in pages] == [2, 2, 2, 2] and [p.page for p in pages] == [1, 2, 3, 4]
+        assert [[m.id for m in p.items] for p in pages] == [["p0", "p1"], ["p2", "p3"], ["p4"], []]
 
     def test_version_parsing(self):
         # What the two databases hand back for config.manifest.version: Postgres' #>> is text
@@ -236,3 +264,7 @@ class TestListPackageMetadata:
         # config appears only inside the two path extractions, never as a column of its own.
         assert re.findall(r"render_templates\.config(?!\s*#>>)", select_list) == []
         assert "render_templates.kind = " in sql and "render_templates.user_id = " in sql
+        # A total order (the id breaks ties), so pages are stable.
+        assert sql.rstrip().endswith(
+            "ORDER BY render_templates.created_at DESC, render_templates.name, render_templates.id"
+        )

@@ -10,19 +10,32 @@ from __future__ import annotations
 
 import re
 
-from sqlalchemy import JSON, Select, select, type_coerce
+from sqlalchemy import JSON, Select, func, select, type_coerce
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import RenderTemplate
-from ..schemas import ClipstylePackageMetadataOut
+from ..schemas import ClipstylePackageMetadataOut, ClipstylePackageMetadataPage
 
 PACKAGE_KIND = "clipstyle_package"
+# Pages are bounded: a user's built packages are not capped, and the caller reads every page
+# within its own time budget (fail-closed for anything it does not reach).
+DEFAULT_LIMIT = 500
+MAX_LIMIT = 1000
 
 _INTEGER_TEXT = re.compile(r"-?\d+")
 
 
+def _owned(user_id: str, include_archived: bool) -> list:
+    where = [RenderTemplate.user_id == user_id, RenderTemplate.kind == PACKAGE_KIND]
+    if not include_archived:
+        where.append(RenderTemplate.status != "archived")
+    return where
+
+
 def metadata_query(*, user_id: str, include_archived: bool = False) -> Select:
-    """The caller's own package rows (never system or other users' rows), newest first."""
+    """The caller's own package rows (never system or other users' rows), newest first. The id
+    breaks ties, so the order is total: without concurrent writes, consecutive pages neither
+    overlap nor skip a row (a row archived between two pages can shift one past the reader)."""
     # Generic JSON paths: ``#>>`` on Postgres, JSON_EXTRACT on sqlite (the test database).
     config = type_coerce(RenderTemplate.config, JSON)
     stmt = select(
@@ -34,17 +47,24 @@ def metadata_query(*, user_id: str, include_archived: bool = False) -> Select:
         config[("manifest", "version")].as_string().label("version"),
         RenderTemplate.created_at,
         RenderTemplate.updated_at,
-    ).where(RenderTemplate.user_id == user_id, RenderTemplate.kind == PACKAGE_KIND)
-    if not include_archived:
-        stmt = stmt.where(RenderTemplate.status != "archived")
-    return stmt.order_by(RenderTemplate.created_at.desc(), RenderTemplate.name)
+    ).where(*_owned(user_id, include_archived))
+    return stmt.order_by(RenderTemplate.created_at.desc(), RenderTemplate.name, RenderTemplate.id)
 
 
 async def list_package_metadata(
-    session: AsyncSession, *, user_id: str, include_archived: bool = False
-) -> list[ClipstylePackageMetadataOut]:
-    result = await session.execute(metadata_query(user_id=user_id, include_archived=include_archived))
-    return [
+    session: AsyncSession,
+    *,
+    user_id: str,
+    include_archived: bool = False,
+    page: int = 1,
+    limit: int = DEFAULT_LIMIT,
+) -> ClipstylePackageMetadataPage:
+    total = (
+        await session.execute(select(func.count()).select_from(RenderTemplate).where(*_owned(user_id, include_archived)))
+    ).scalar_one()
+    stmt = metadata_query(user_id=user_id, include_archived=include_archived).offset((page - 1) * limit).limit(limit)
+    result = await session.execute(stmt)
+    items = [
         ClipstylePackageMetadataOut(
             id=row.id,
             user_id=None if row.user_id is None else str(row.user_id),
@@ -57,6 +77,7 @@ async def list_package_metadata(
         )
         for row in result
     ]
+    return ClipstylePackageMetadataPage(items=items, total=total, page=page, limit=limit)
 
 
 def _version(value: object) -> int | None:

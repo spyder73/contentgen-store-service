@@ -76,7 +76,7 @@ from .schemas import (
     ReviewCorrectionOut,
     ReviewTraceIn,
     ReviewTraceOut,
-    ClipstylePackageMetadataOut,
+    ClipstylePackageMetadataPage,
 )
 
 from .stores import (
@@ -477,16 +477,18 @@ def create_fastapi_app() -> FastAPI:
 
     # ── clipstyle packages ──────────────────────────────────────────────────
 
-    @app.get("/v1/clipstyle-packages/metadata", response_model=list[ClipstylePackageMetadataOut])
+    @app.get("/v1/clipstyle-packages/metadata", response_model=ClipstylePackageMetadataPage)
     async def list_clipstyle_package_metadata_handler(
         request: Request,
         session: SessionDep,
         include_archived: bool = Query(False),
+        page: int = Query(1, ge=1),
+        limit: int = Query(clipstyle_package_metadata.DEFAULT_LIMIT, ge=1, le=clipstyle_package_metadata.MAX_LIMIT),
     ) -> Any:
-        """The caller's own clipstyle package rows, without their package files."""
+        """The caller's own clipstyle package rows, without their package files, a page at a time."""
         user_id = _require_user_id(request)
         return await clipstyle_package_metadata.list_package_metadata(
-            session, user_id=user_id, include_archived=include_archived
+            session, user_id=user_id, include_archived=include_archived, page=page, limit=limit
         )
 
     @app.put("/v1/system-prompts/{id}", response_model=str)
