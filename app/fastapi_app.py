@@ -76,6 +76,7 @@ from .schemas import (
     ReviewCorrectionOut,
     ReviewTraceIn,
     ReviewTraceOut,
+    ClipstylePackageMetadataOut,
 )
 
 from .stores import (
@@ -100,6 +101,7 @@ from .stores import (
     system_prompts,
     user_settings,
     users,
+    clipstyle_package_metadata,
 )
 
 logger = logging.getLogger(__name__)
@@ -472,6 +474,20 @@ def create_fastapi_app() -> FastAPI:
         if row is None:
             raise HTTPException(status_code=404, detail="not_found")
         return row
+
+    # ── clipstyle packages ──────────────────────────────────────────────────
+
+    @app.get("/v1/clipstyle-packages/metadata", response_model=list[ClipstylePackageMetadataOut])
+    async def list_clipstyle_package_metadata_handler(
+        request: Request,
+        session: SessionDep,
+        include_archived: bool = Query(False),
+    ) -> Any:
+        """The caller's own clipstyle package rows, without their package files."""
+        user_id = _require_user_id(request)
+        return await clipstyle_package_metadata.list_package_metadata(
+            session, user_id=user_id, include_archived=include_archived
+        )
 
     @app.put("/v1/system-prompts/{id}", response_model=str)
     async def upsert_system_prompt_handler(id: str, body: dict, session: SessionDep) -> Any:

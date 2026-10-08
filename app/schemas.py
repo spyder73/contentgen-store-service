@@ -1015,3 +1015,20 @@ class DatasetTemplateUpdate(BaseModel):
     collage_stages: list[CollageStage] | None = None
     seed_reference_media_id: str | None = None
     is_default: bool | None = None
+
+
+class ClipstylePackageMetadataOut(BaseModel):
+    """A clipstyle package row without its package files (GET /v1/clipstyle-packages/metadata).
+
+    ``style_id`` and ``version`` are the row's ``config.manifest.id`` and ``.version``; either is
+    None when the manifest does not carry it as expected.
+    """
+
+    id: str
+    user_id: str | None = None
+    name: str
+    status: str
+    style_id: str | None = None
+    version: int | None = None
+    created_at: datetime
+    updated_at: datetime
