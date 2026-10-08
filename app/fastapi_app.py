@@ -59,7 +59,9 @@ from .schemas import (
     RenderProposalStatusPatch,
     RenderTemplateCloneIn,
     RenderTemplateIn,
+    RenderTemplateListOut,
     RenderTemplateOut,
+    RenderTemplateStatusPatch,
     SeriesIn,
     SeriesOut,
     SwapClipMediaBody,
@@ -82,6 +84,7 @@ from .schemas import (
 from .stores import (
     access,
     characters,
+    clipstyle_packages,
     clips,
     credits,
     credits_spent,
@@ -119,6 +122,26 @@ def _require_user_id(request: Request) -> str:
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id_required")
     return user_id
+
+
+_TEMPLATE_CONFLICTS = (
+    "package_immutable",
+    "package_kind_change_requires_draft",
+    "invalid_transition",
+    "package_version_already_approved",
+    "package_id_taken",
+    "validation_report_not_ok",
+    "validation_report_stale",
+    "validation_report_contract_version",
+    "render_template_id_taken",
+)
+
+
+def _template_error(exc: ValueError) -> HTTPException:
+    detail = str(exc)
+    if detail == "validation_report_too_large":
+        return HTTPException(status_code=413, detail=detail)
+    return HTTPException(status_code=409 if detail.startswith(_TEMPLATE_CONFLICTS) else 400, detail=detail)
 
 
 def _require_internal_secret(x_internal_secret: str | None) -> None:
@@ -362,7 +385,7 @@ def create_fastapi_app() -> FastAPI:
 
     # ── render templates ────────────────────────────────────────────────────
 
-    @app.get("/v1/render-templates", response_model=list[RenderTemplateOut])
+    @app.get("/v1/render-templates", response_model=list[RenderTemplateListOut])
     async def list_render_templates_handler(
         request: Request,
         session: SessionDep,
@@ -382,7 +405,7 @@ def create_fastapi_app() -> FastAPI:
         try:
             return await render_templates.create_template(session, body, user_id=user_id)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise _template_error(exc)
 
     @app.get("/v1/render-templates/{id}", response_model=RenderTemplateOut)
     async def get_render_template_handler(id: str, request: Request, session: SessionDep) -> Any:
@@ -400,7 +423,7 @@ def create_fastapi_app() -> FastAPI:
         try:
             row = await render_templates.update_template(session, id, body, user_id=user_id)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            raise _template_error(exc)
         if row is None:
             raise HTTPException(status_code=404, detail="not_found")
         return row
@@ -408,7 +431,10 @@ def create_fastapi_app() -> FastAPI:
     @app.delete("/v1/render-templates/{id}", status_code=204)
     async def delete_render_template_handler(id: str, request: Request, session: SessionDep) -> None:
         user_id = _require_user_id(request)
-        archived = await render_templates.archive_template(session, id, user_id=user_id)
+        try:
+            archived = await render_templates.archive_template(session, id, user_id=user_id)
+        except ValueError as exc:
+            raise _template_error(exc)
         if not archived:
             raise HTTPException(status_code=404, detail="not_found")
 
@@ -420,12 +446,41 @@ def create_fastapi_app() -> FastAPI:
         body: RenderTemplateCloneIn | None = None,
     ) -> Any:
         user_id = _require_user_id(request)
-        row = await render_templates.clone_template(
-            session, id, body or RenderTemplateCloneIn(), user_id=user_id
-        )
+        try:
+            row = await render_templates.clone_template(
+                session, id, body or RenderTemplateCloneIn(), user_id=user_id
+            )
+        except ValueError as exc:
+            raise _template_error(exc)
         if row is None:
             raise HTTPException(status_code=404, detail="not_found")
         return row
+
+    @app.patch("/v1/render-templates/{id}/status", response_model=RenderTemplateOut)
+    async def patch_render_template_status_handler(
+        id: str, body: RenderTemplateStatusPatch, request: Request, session: SessionDep
+    ) -> Any:
+        user_id = _require_user_id(request)
+        try:
+            row = await clipstyle_packages.set_package_status(
+                session,
+                id,
+                body.status,
+                user_id=user_id,
+                validation_report_json=body.validation_report_json,
+                preview_url=body.preview_url,
+            )
+        except ValueError as exc:
+            raise _template_error(exc)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
+
+    @app.get("/v1/internal/clipstyle-packages/approved", response_model=list[RenderTemplateOut])
+    async def list_approved_clipstyle_packages_handler(session: SessionDep) -> Any:
+        # Internal-secret gate only (middleware), across all users: the bridge re-registers every
+        # approved package after a registry restart (the registry keeps styles in memory).
+        return await clipstyle_packages.list_approved_packages(session)
 
     # ── render proposals ────────────────────────────────────────────────────
 

@@ -1,0 +1,2708 @@
+[
+ {
+  "name": "valid",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "components/Cover.tsx",
+    "x"
+   ],
+   [
+    "lib/layout.ts",
+    "y"
+   ]
+  ],
+  "issues": [],
+  "sha256": "ff9d938390abd1013aa84b46ac107b6b727f05a18d6c70cffc4fe08d83286dde"
+ },
+ {
+  "name": "sha-vector",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = 1;\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{\"x\":1}\n"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "schema.ts",
+    "message": "required file missing"
+   },
+   {
+    "file": "Template.tsx",
+    "message": "required file missing"
+   },
+   {
+    "file": "validate.ts",
+    "message": "required file missing"
+   },
+   {
+    "file": "writing-guide.md",
+    "message": "required file missing"
+   },
+   {
+    "file": "fixtures/",
+    "message": "at least 3 fixtures required"
+   }
+  ],
+  "sha256": "fcd4c6245b9417e2da395808bb48a03a07da263bcf834aaeb87a70ebb637a93c"
+ },
+ {
+  "name": "bad-path \"../evil.ts\"",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "../evil.ts",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "../evil.ts",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "9a8b8666cc40728477f7e1fcfb13b751769874ad5ce676e1c505d38535a63e23"
+ },
+ {
+  "name": "bad-path \"/etc/passwd\"",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "/etc/passwd",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "/etc/passwd",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "f44f246f2ce47f787d1938731ebc0854819db9f2aba968125ecb0a1d96d6992c"
+ },
+ {
+  "name": "bad-path \"fixtures/../../a.json\"",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "fixtures/../../a.json",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "fixtures/../../a.json",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "3e1dcbe231364b513140dfbc6ce4b8f7690696b59efc56346bb6453157def00e"
+ },
+ {
+  "name": "bad-path \"fixtures\\\\a.json\"",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "fixtures\\a.json",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "fixtures\\a.json",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "73d1d65143b484b2b3261c03bf8635f3c6857fa5f2871efe44b79fc4255916bd"
+ },
+ {
+  "name": "bad-path \"node_modules/x.js\"",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "node_modules/x.js",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "node_modules/x.js",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "5ca12fcb39666adfb6f0a629f2cb884d1c606d1d6b3cb2787d1f6880e4cbe2c4"
+ },
+ {
+  "name": "bad-path \"Template.jsx\"",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "Template.jsx",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "Template.jsx",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "b106fd08cae0fa31a7df5253d7d3c78bd93d8aa10537b651c121b43839de6424"
+ },
+ {
+  "name": "bad-path \"fixtures/A.json\"",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "fixtures/A.json",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "fixtures/A.json",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "00618a87a74be805ab966a4805a3fe1c68ae3f5cce32a8ff55009ae454668af2"
+ },
+ {
+  "name": "bad-path \"manifest.ts\\n\"",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "manifest.ts\n",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "manifest.ts\n",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "d9bcc3bd035a449d0711f79de438bc56a74aa7ee8f541ecdf7a8cbc4c9f283c9"
+ },
+ {
+  "name": "bad-path \"\\nmanifest.ts\"",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "\nmanifest.ts",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "\nmanifest.ts",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "c4cd9ec182c25b7e39588ef511b74bd7317257b8ba0be33052c2a140fbd146ac"
+ },
+ {
+  "name": "bad-path \"fixtures/constructor.json\\n\"",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "fixtures/constructor.json\n",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "fixtures/constructor.json\n",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "3696975152e134f81613a1294bcf1749f20748dfc1ba3b9b386393d2bafe87b0"
+ },
+ {
+  "name": "bad-path \"lib/x.ts\\u0000\"",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "lib/x.ts\u0000",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "lib/x.ts\u0000",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "2e364983bbd8dd52997156277ed9f57f950a74bc556f99bd81168871371dcfe4"
+ },
+ {
+  "name": "bad-path \"fixtures/é.json\"",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "fixtures/é.json",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "fixtures/é.json",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "7bf7dfc7f5a74caa023df9f54b9830771411914ba6df635f589745f8a6dba674"
+ },
+ {
+  "name": "bad-path \"fixtures/-a.json\"",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "fixtures/-a.json",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "fixtures/-a.json",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "11bf6eccdaa0275ecd079cda8f073bd2c808c01aa4cb8d69eef54e4fee4b43ab"
+ },
+ {
+  "name": "bad-path \"components/cover.tsx\"",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "components/cover.tsx",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "components/cover.tsx",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "61b309661debed6dd4a39a42755bae95ff13066aa74c47bc41ca23a88906ca6b"
+ },
+ {
+  "name": "bad-path \"lib/Layout.ts\"",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "lib/Layout.ts",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "lib/Layout.ts",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "a3cb15dadc6dc9733c5c6ded1ed9bd4a6c4c4cf92b93ea285a557f24faabb53f"
+ },
+ {
+  "name": "bad-path \"fixtures/.json\"",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "fixtures/.json",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "fixtures/.json",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "d16c471bc635d2c5230e80df4da95cc7d218d0aebcd6fc7c1f12e8c7c07368ed"
+ },
+ {
+  "name": "bad-path \"fixtures/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json\"",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "fixtures/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "fixtures/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "f2e7fb413d1dafefa9698f678149609f71d64c064bce78a2b19aae552c230567"
+ },
+ {
+  "name": "longest-names-allowed",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "fixtures/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+    "{}"
+   ],
+   [
+    "components/Caaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.tsx",
+    "x"
+   ],
+   [
+    "lib/laaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.ts",
+    "x"
+   ]
+  ],
+  "issues": [],
+  "sha256": "df1a650bebd363f5f576ea93c7467059b78246bc2d667d7dd6d2e044cc75ded4"
+ },
+ {
+  "name": "prototype-fixture-names",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/constructor.json",
+    "{}"
+   ],
+   [
+    "fixtures/__proto__.json",
+    "{}"
+   ],
+   [
+    "fixtures/toString.json",
+    "{}"
+   ],
+   [
+    "fixtures/hasownproperty.json",
+    "{}"
+   ],
+   [
+    "fixtures/valueof.json",
+    "{}"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "fixtures/constructor.json",
+    "message": "path not allowed"
+   },
+   {
+    "file": "fixtures/__proto__.json",
+    "message": "path not allowed"
+   },
+   {
+    "file": "fixtures/toString.json",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "5c656328310a90841ed1bfaea88273983f2d05e9fb0b4519eedfa63982aeee3b"
+ },
+ {
+  "name": "prototype-top-level-keys",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "__proto__",
+    "x"
+   ],
+   [
+    "constructor",
+    "x"
+   ],
+   [
+    "toString",
+    "x"
+   ],
+   [
+    "hasOwnProperty",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "__proto__",
+    "message": "path not allowed"
+   },
+   {
+    "file": "constructor",
+    "message": "path not allowed"
+   },
+   {
+    "file": "toString",
+    "message": "path not allowed"
+   },
+   {
+    "file": "hasOwnProperty",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "0c3d614a5e134697d9eb6c6fb5ff4ab3331da63a7e892fe4090dfec21f052e47"
+ },
+ {
+  "name": "missing-and-sizes",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "lib/big.ts",
+    {
+     "$gen": {
+      "repeat": "x",
+      "count": 65537,
+      "suffix": ""
+     }
+    }
+   ]
+  ],
+  "issues": [
+   {
+    "file": "lib/big.ts",
+    "message": "larger than 65536 bytes"
+   },
+   {
+    "file": "validate.ts",
+    "message": "required file missing"
+   },
+   {
+    "file": "fixtures/",
+    "message": "at least 3 fixtures required"
+   }
+  ],
+  "sha256": "65a0ecdafe6e349db6b1a9a2cfd48f9c300377861220f0e12348222eef0cd078"
+ },
+ {
+  "name": "exactly-at-file-limit",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "lib/edge.ts",
+    {
+     "$gen": {
+      "repeat": "x",
+      "count": 65536,
+      "suffix": ""
+     }
+    }
+   ]
+  ],
+  "issues": [],
+  "sha256": "38db68a8bd1248661cf3f46cec66d04bd6734865bac48bb4fddb0909678ade14"
+ },
+ {
+  "name": "multibyte-over-file-limit",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "lib/cjk.ts",
+    {
+     "$gen": {
+      "repeat": "漢",
+      "count": 21846,
+      "suffix": ""
+     }
+    }
+   ]
+  ],
+  "issues": [
+   {
+    "file": "lib/cjk.ts",
+    "message": "larger than 65536 bytes"
+   }
+  ],
+  "sha256": "be03d31adfd4737cb3ebb79a0c2fbc2572265f761fb75f6ef07cf7450b039729"
+ },
+ {
+  "name": "lone-surrogate-at-limit",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "lib/s.ts",
+    {
+     "$gen": {
+      "repeat": "x",
+      "count": 65533,
+      "suffix": "\ud800"
+     }
+    }
+   ]
+  ],
+  "issues": [],
+  "sha256": "331b679a58bc21f343ea1009199d1d1cbba9b6e78e3bdb79a017a559e85fa30b"
+ },
+ {
+  "name": "lone-surrogate-over-limit",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "lib/s.ts",
+    {
+     "$gen": {
+      "repeat": "x",
+      "count": 65534,
+      "suffix": "\udc00"
+     }
+    }
+   ]
+  ],
+  "issues": [
+   {
+    "file": "lib/s.ts",
+    "message": "larger than 65536 bytes"
+   }
+  ],
+  "sha256": "ea63c57935b550b199b18ae83ebe8d938990b82161221c404eb50a6ae259151f"
+ },
+ {
+  "name": "surrogate-pair-and-lone",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "lib/e.ts",
+    "😀 \ud83d x \ude00"
+   ]
+  ],
+  "issues": [],
+  "sha256": "85273e78c86196c08ede11198d2efda6389b6ac4914e54c979ddace8683600bf"
+ },
+ {
+  "name": "integer-like-keys-order",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "10",
+    "a"
+   ],
+   [
+    "2",
+    "b"
+   ],
+   [
+    "01",
+    "c"
+   ],
+   [
+    "4294967294",
+    "d"
+   ],
+   [
+    "4294967295",
+    "e"
+   ],
+   [
+    "-1",
+    "f"
+   ],
+   [
+    "0",
+    "g"
+   ],
+   [
+    "1.5",
+    "h"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "0",
+    "message": "path not allowed"
+   },
+   {
+    "file": "2",
+    "message": "path not allowed"
+   },
+   {
+    "file": "10",
+    "message": "path not allowed"
+   },
+   {
+    "file": "4294967294",
+    "message": "path not allowed"
+   },
+   {
+    "file": "01",
+    "message": "path not allowed"
+   },
+   {
+    "file": "4294967295",
+    "message": "path not allowed"
+   },
+   {
+    "file": "-1",
+    "message": "path not allowed"
+   },
+   {
+    "file": "1.5",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "7d12bf57d53b6fe33317091612dd0fc4bd33bcbeb49d2139d9d728f62ed58c2d"
+ },
+ {
+  "name": "non-string-content",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "lib/n.ts",
+    1
+   ],
+   [
+    "lib/z.ts",
+    null
+   ],
+   [
+    "lib/o.ts",
+    {
+     "a": 1
+    }
+   ],
+   [
+    "lib/b.ts",
+    true
+   ],
+   [
+    "../bad",
+    2
+   ]
+  ],
+  "issues": [
+   {
+    "file": "lib/n.ts",
+    "message": "content must be a string"
+   },
+   {
+    "file": "lib/z.ts",
+    "message": "content must be a string"
+   },
+   {
+    "file": "lib/o.ts",
+    "message": "content must be a string"
+   },
+   {
+    "file": "lib/b.ts",
+    "message": "content must be a string"
+   },
+   {
+    "file": "../bad",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": null
+ },
+ {
+  "name": "non-string-required-file",
+  "files": [
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "manifest.ts",
+    7
+   ]
+  ],
+  "issues": [
+   {
+    "file": "manifest.ts",
+    "message": "content must be a string"
+   }
+  ],
+  "sha256": null
+ },
+ {
+  "name": "too-few-fixtures",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "fixtures/",
+    "message": "at least 3 fixtures required"
+   }
+  ],
+  "sha256": "3372201d6d6c0f2135c0cfb796314bbbc8e5625f95c30e873abeef6435f70113"
+ },
+ {
+  "name": "empty",
+  "files": [],
+  "issues": [
+   {
+    "file": "manifest.ts",
+    "message": "required file missing"
+   },
+   {
+    "file": "schema.ts",
+    "message": "required file missing"
+   },
+   {
+    "file": "Template.tsx",
+    "message": "required file missing"
+   },
+   {
+    "file": "validate.ts",
+    "message": "required file missing"
+   },
+   {
+    "file": "writing-guide.md",
+    "message": "required file missing"
+   },
+   {
+    "file": "fixtures/",
+    "message": "at least 3 fixtures required"
+   }
+  ],
+  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+ },
+ {
+  "name": "too-many-files",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "lib/f0.ts",
+    "x"
+   ],
+   [
+    "lib/f1.ts",
+    "x"
+   ],
+   [
+    "lib/f2.ts",
+    "x"
+   ],
+   [
+    "lib/f3.ts",
+    "x"
+   ],
+   [
+    "lib/f4.ts",
+    "x"
+   ],
+   [
+    "lib/f5.ts",
+    "x"
+   ],
+   [
+    "lib/f6.ts",
+    "x"
+   ],
+   [
+    "lib/f7.ts",
+    "x"
+   ],
+   [
+    "lib/f8.ts",
+    "x"
+   ],
+   [
+    "lib/f9.ts",
+    "x"
+   ],
+   [
+    "lib/f10.ts",
+    "x"
+   ],
+   [
+    "lib/f11.ts",
+    "x"
+   ],
+   [
+    "lib/f12.ts",
+    "x"
+   ],
+   [
+    "lib/f13.ts",
+    "x"
+   ],
+   [
+    "lib/f14.ts",
+    "x"
+   ],
+   [
+    "lib/f15.ts",
+    "x"
+   ],
+   [
+    "lib/f16.ts",
+    "x"
+   ],
+   [
+    "lib/f17.ts",
+    "x"
+   ],
+   [
+    "lib/f18.ts",
+    "x"
+   ],
+   [
+    "lib/f19.ts",
+    "x"
+   ],
+   [
+    "lib/f20.ts",
+    "x"
+   ],
+   [
+    "lib/f21.ts",
+    "x"
+   ],
+   [
+    "lib/f22.ts",
+    "x"
+   ],
+   [
+    "lib/f23.ts",
+    "x"
+   ],
+   [
+    "lib/f24.ts",
+    "x"
+   ],
+   [
+    "lib/f25.ts",
+    "x"
+   ],
+   [
+    "lib/f26.ts",
+    "x"
+   ],
+   [
+    "lib/f27.ts",
+    "x"
+   ],
+   [
+    "lib/f28.ts",
+    "x"
+   ],
+   [
+    "lib/f29.ts",
+    "x"
+   ],
+   [
+    "lib/f30.ts",
+    "x"
+   ],
+   [
+    "lib/f31.ts",
+    "x"
+   ],
+   [
+    "lib/f32.ts",
+    "x"
+   ],
+   [
+    "lib/f33.ts",
+    "x"
+   ],
+   [
+    "lib/f34.ts",
+    "x"
+   ],
+   [
+    "lib/f35.ts",
+    "x"
+   ],
+   [
+    "lib/f36.ts",
+    "x"
+   ],
+   [
+    "lib/f37.ts",
+    "x"
+   ],
+   [
+    "lib/f38.ts",
+    "x"
+   ],
+   [
+    "lib/f39.ts",
+    "x"
+   ],
+   [
+    "lib/f40.ts",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "*",
+    "message": "more than 48 files"
+   }
+  ],
+  "sha256": "e5279b6b4bcf0e2fba8780c0a482f8c46745d5f7121707d0396311a679b9e3b0"
+ },
+ {
+  "name": "total-too-large",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "lib/t0.ts",
+    {
+     "$gen": {
+      "repeat": "y",
+      "count": 60000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/t1.ts",
+    {
+     "$gen": {
+      "repeat": "y",
+      "count": 60000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/t2.ts",
+    {
+     "$gen": {
+      "repeat": "y",
+      "count": 60000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/t3.ts",
+    {
+     "$gen": {
+      "repeat": "y",
+      "count": 60000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/t4.ts",
+    {
+     "$gen": {
+      "repeat": "y",
+      "count": 60000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/t5.ts",
+    {
+     "$gen": {
+      "repeat": "y",
+      "count": 60000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/t6.ts",
+    {
+     "$gen": {
+      "repeat": "y",
+      "count": 60000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/t7.ts",
+    {
+     "$gen": {
+      "repeat": "y",
+      "count": 60000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/t8.ts",
+    {
+     "$gen": {
+      "repeat": "y",
+      "count": 60000,
+      "suffix": ""
+     }
+    }
+   ]
+  ],
+  "issues": [
+   {
+    "file": "*",
+    "message": "package larger than 524288 bytes"
+   }
+  ],
+  "sha256": "bbf0318a71a77dcae8c9b1640043d4b62a890cd6eecfc23673a2503fc0c9c77d"
+ },
+ {
+  "name": "everything-wrong",
+  "files": [
+   [
+    "fixtures/a.json",
+    {
+     "$gen": {
+      "repeat": "z",
+      "count": 70000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "bad path",
+    "x"
+   ],
+   [
+    "lib/g0.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g1.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g2.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g3.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g4.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g5.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g6.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g7.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g8.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g9.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g10.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g11.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g12.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g13.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g14.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g15.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g16.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g17.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g18.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g19.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g20.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g21.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g22.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g23.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g24.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g25.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g26.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g27.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g28.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g29.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g30.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g31.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g32.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g33.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g34.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g35.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g36.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g37.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g38.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g39.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g40.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g41.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g42.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g43.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g44.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g45.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g46.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ],
+   [
+    "lib/g47.ts",
+    {
+     "$gen": {
+      "repeat": "q",
+      "count": 12000,
+      "suffix": ""
+     }
+    }
+   ]
+  ],
+  "issues": [
+   {
+    "file": "fixtures/a.json",
+    "message": "larger than 65536 bytes"
+   },
+   {
+    "file": "bad path",
+    "message": "path not allowed"
+   },
+   {
+    "file": "manifest.ts",
+    "message": "required file missing"
+   },
+   {
+    "file": "schema.ts",
+    "message": "required file missing"
+   },
+   {
+    "file": "Template.tsx",
+    "message": "required file missing"
+   },
+   {
+    "file": "validate.ts",
+    "message": "required file missing"
+   },
+   {
+    "file": "writing-guide.md",
+    "message": "required file missing"
+   },
+   {
+    "file": "fixtures/",
+    "message": "at least 3 fixtures required"
+   },
+   {
+    "file": "*",
+    "message": "more than 48 files"
+   },
+   {
+    "file": "*",
+    "message": "package larger than 524288 bytes"
+   }
+  ],
+  "sha256": "cbefe0693286396f7b3f4f914feeb69c497fe31d0a8f9bc4b75a55351ab88803"
+ },
+ {
+  "name": "sort-order-utf16",
+  "files": [
+   [
+    "￿",
+    "a"
+   ],
+   [
+    "𐀀",
+    "b"
+   ],
+   [
+    "a",
+    "c"
+   ],
+   [
+    "é",
+    "d"
+   ],
+   [
+    "B",
+    "e"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "￿",
+    "message": "path not allowed"
+   },
+   {
+    "file": "𐀀",
+    "message": "path not allowed"
+   },
+   {
+    "file": "a",
+    "message": "path not allowed"
+   },
+   {
+    "file": "é",
+    "message": "path not allowed"
+   },
+   {
+    "file": "B",
+    "message": "path not allowed"
+   },
+   {
+    "file": "manifest.ts",
+    "message": "required file missing"
+   },
+   {
+    "file": "schema.ts",
+    "message": "required file missing"
+   },
+   {
+    "file": "Template.tsx",
+    "message": "required file missing"
+   },
+   {
+    "file": "validate.ts",
+    "message": "required file missing"
+   },
+   {
+    "file": "writing-guide.md",
+    "message": "required file missing"
+   },
+   {
+    "file": "fixtures/",
+    "message": "at least 3 fixtures required"
+   }
+  ],
+  "sha256": "0aea90f4e225e64349fa8fa5fae58917daf89845e1e72e897b8586ee4475d310"
+ },
+ {
+  "name": "sort-order-utf16-contents",
+  "files": [
+   [
+    "z",
+    "😀"
+   ],
+   [
+    "y",
+    "\ud800"
+   ],
+   [
+    "x",
+    "\udfff\ud800"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "z",
+    "message": "path not allowed"
+   },
+   {
+    "file": "y",
+    "message": "path not allowed"
+   },
+   {
+    "file": "x",
+    "message": "path not allowed"
+   },
+   {
+    "file": "manifest.ts",
+    "message": "required file missing"
+   },
+   {
+    "file": "schema.ts",
+    "message": "required file missing"
+   },
+   {
+    "file": "Template.tsx",
+    "message": "required file missing"
+   },
+   {
+    "file": "validate.ts",
+    "message": "required file missing"
+   },
+   {
+    "file": "writing-guide.md",
+    "message": "required file missing"
+   },
+   {
+    "file": "fixtures/",
+    "message": "at least 3 fixtures required"
+   }
+  ],
+  "sha256": "8bbc3198e82a060078eef371f8cfc1e1ae17f3d4be858f65519e4e18db37bc20"
+ }
+]

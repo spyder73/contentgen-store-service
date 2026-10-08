@@ -161,6 +161,10 @@ class RenderTemplate(Base):
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
     preview_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    validation_report_json: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_from_clip_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_from_instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -176,11 +180,21 @@ class RenderTemplate(Base):
             name="render_templates_source_valid",
         ),
         CheckConstraint(
-            "status IN ('draft','active','archived')",
+            "status IN ('draft','active','archived','validated','approved','rejected')",
             name="render_templates_status_valid",
         ),
         Index("ix_render_templates_user_id", "user_id"),
         Index("ix_render_templates_kind_status", "kind", "status"),
+        # One approved row per package id@version (migration 0037). `sqlite_where` keeps the index
+        # partial on the sqlite test engine too; Postgres is the deployed guarantee.
+        Index(
+            "ux_render_templates_approved_package_version",
+            text("(config->'manifest'->>'id')"),
+            text("(config->'manifest'->>'version')"),
+            unique=True,
+            postgresql_where=text("kind = 'clipstyle_package' AND status = 'approved'"),
+            sqlite_where=text("kind = 'clipstyle_package' AND status = 'approved'"),
+        ),
     )
 
 

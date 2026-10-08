@@ -196,6 +196,30 @@ class TestRenderTemplates:
         assert resp.json()["id"] == clone_id
         assert m.call_args.kwargs["user_id"] == uid
 
+    def test_create_with_a_colliding_id_is_a_conflict(self, client):
+        with patch(
+            "app.stores.render_templates.create_template",
+            new=AsyncMock(side_effect=ValueError("render_template_id_taken")),
+        ):
+            resp = client.post(
+                "/v1/render-templates",
+                headers=_headers(_id(1)),
+                json={"name": "p", "config": {}},
+            )
+        assert (resp.status_code, resp.json()["detail"]) == (409, "render_template_id_taken")
+
+    def test_clone_into_a_colliding_id_is_a_conflict(self, client):
+        with patch(
+            "app.stores.render_templates.clone_template",
+            new=AsyncMock(side_effect=ValueError("render_template_id_taken")),
+        ):
+            resp = client.post(
+                f"/v1/render-templates/{_id(1)}/clone",
+                headers=_headers(_id(1)),
+                json={"id": "dup"},
+            )
+        assert (resp.status_code, resp.json()["detail"]) == (409, "render_template_id_taken")
+
 
 class TestRenderProposals:
     def test_create_proposal(self, client):

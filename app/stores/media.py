@@ -29,6 +29,13 @@ from ..schemas import (
 # and the client's mental model agree.
 _UPLOAD_SOURCES = ("manual_upload", "upload", "upload_pool", "uploaded")
 
+# The clipstyle validation bridge (modal_bridge/clients.py `upload_preview`) marks every contact
+# sheet / per-fixture preview PNG it uploads during a package validation with this metadata.kind.
+# Those rows are bridge-internal scratch media (clipstyle_packages.py deletes them once the report
+# that referenced them is reset or replaced): never part of the user's library, hidden from every
+# listing (see `_not_clipstyle_preview_filter_expr`), though a direct GET by id still resolves them.
+CLIPSTYLE_PREVIEW_KIND = "clipstyle_preview"
+
 # Generated videos are stored with type "ai_video", but the library's type chip
 # (and the per-type facet counts) speak of "video". Bucket both raw column values
 # under the "video" facet so a ``type=video`` filter and the video count include
@@ -84,6 +91,17 @@ def _has_controlnet_filter_expr():
     return meaningful(direct) | meaningful(recipe)
 
 
+def _not_clipstyle_preview_filter_expr():
+    """Exclude bridge-uploaded clipstyle preview media (CLIPSTYLE_PREVIEW_KIND) from listings.
+
+    NULL-safe on purpose: a row with no metadata, or metadata with no `kind` key, is not a preview
+    and must stay included. A bare ``!= CLIPSTYLE_PREVIEW_KIND`` would evaluate to NULL (and so drop
+    the row) whenever `kind` is missing, since SQL NULL comparisons are never true.
+    """
+    kind = MediaItem.metadata_["kind"].astext
+    return kind.is_(None) | (kind != CLIPSTYLE_PREVIEW_KIND)
+
+
 def _order_by(sort: str):
     """Return a deterministic global ordering for a paged media query."""
     if sort == "oldest":
@@ -132,10 +150,14 @@ async def list_media(
     # mime-type columns — so no lazy-load is triggered.
     query = (
         select(MediaItem)
-        .where(MediaItem.user_id == user_id)
+        .where(MediaItem.user_id == user_id, _not_clipstyle_preview_filter_expr())
         .options(defer(MediaItem.file_data), defer(MediaItem.thumbnail_data))
     )
-    count_query = select(func.count()).select_from(MediaItem).where(MediaItem.user_id == user_id)
+    count_query = (
+        select(func.count())
+        .select_from(MediaItem)
+        .where(MediaItem.user_id == user_id, _not_clipstyle_preview_filter_expr())
+    )
 
     if clip_id:
         query = query.where(MediaItem.clip_id == clip_id)
@@ -397,6 +419,27 @@ async def delete_media(
     result = await session.execute(stmt)
     await session.commit()
     return result.rowcount > 0
+
+
+async def delete_clipstyle_preview_media(session: AsyncSession, user_id: str, ids) -> int:
+    """Bulk-deletes bridge preview media (CLIPSTYLE_PREVIEW_KIND) by id, scoped to `user_id` and the
+    marker itself so this can never reach anything else, even if a caller's id list is wrong.
+
+    Deliberately does NOT commit, unlike `delete_media` above: the caller (clipstyle_packages, when
+    a package's report that referenced these ids is reset or replaced) folds this into its own
+    transaction — typically inside a savepoint, so a delete failure here never fails the edit that
+    orphaned the media (final fix wave M3/I-1 residual).
+    """
+    ids = list(ids)
+    if not ids:
+        return 0
+    stmt = delete(MediaItem).where(
+        MediaItem.id.in_(ids),
+        MediaItem.user_id == user_id,
+        MediaItem.metadata_["kind"].astext == CLIPSTYLE_PREVIEW_KIND,
+    )
+    result = await session.execute(stmt)
+    return result.rowcount
 
 
 async def toggle_favourite(

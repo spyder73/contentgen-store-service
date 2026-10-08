@@ -4,14 +4,18 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import defer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import RenderProposal, RenderTemplate
+from . import clipstyle_packages
 from ..schemas import (
     RenderProposalIn,
     RenderProposalOut,
     RenderTemplateCloneIn,
     RenderTemplateIn,
+    RenderTemplateListOut,
     RenderTemplateOut,
 )
 
@@ -44,17 +48,24 @@ async def list_templates(
     user_id: str,
     kind: str | None = None,
     include_archived: bool = False,
-) -> list[RenderTemplateOut]:
-    stmt = select(RenderTemplate).where(
-        or_(RenderTemplate.user_id == user_id, RenderTemplate.user_id.is_(None))
+) -> list[RenderTemplateListOut]:
+    # Lists never carry validation reports (up to 2 MiB each): the column is not even loaded.
+    stmt = (
+        select(RenderTemplate)
+        .options(defer(RenderTemplate.validation_report_json))
+        .where(or_(RenderTemplate.user_id == user_id, RenderTemplate.user_id.is_(None)))
     )
     if kind:
         stmt = stmt.where(RenderTemplate.kind == kind)
+    else:
+        # Clipstyle packages are listed only when asked for by kind, so unfiltered clients keep
+        # seeing just the templates they always did.
+        stmt = stmt.where(RenderTemplate.kind != clipstyle_packages.PACKAGE_KIND)
     if not include_archived:
         stmt = stmt.where(RenderTemplate.status != "archived")
     stmt = stmt.order_by(RenderTemplate.created_at.desc(), RenderTemplate.name)
     result = await session.execute(stmt)
-    return [_template_out(row) for row in result.scalars()]
+    return [RenderTemplateListOut.model_validate(row) for row in result.scalars()]
 
 
 async def get_template(
@@ -75,7 +86,11 @@ async def create_template(
     _apply_template_body(row, body)
     row.user_id = user_id
     session.add(row)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as exc:  # a client-supplied id collides with an existing row
+        await session.rollback()
+        raise ValueError("render_template_id_taken") from exc
     await session.refresh(row)
     return _template_out(row)
 
@@ -86,8 +101,14 @@ async def update_template(
     row = await session.get(RenderTemplate, id)
     if row is None or row.user_id != user_id:
         return None
+    # Before `_apply_template_body` reassigns `kind`, so an approved package cannot escape by switching kind.
+    clipstyle_packages.guard_package_update(row, new_kind=body.kind or "carousel")
+    old_report = row.validation_report_json
     _apply_template_body(row, body)
     row.user_id = user_id
+    # A package body edit, or a kind change away from a package, resets the report to {} above:
+    # drop whatever preview media the old report referenced (M3/I-1 residual) in the same transaction.
+    await clipstyle_packages.drop_stale_preview_media(session, id, user_id, old_report, row.validation_report_json)
     await session.commit()
     await session.refresh(row)
     return _template_out(row)
@@ -97,6 +118,7 @@ async def archive_template(session: AsyncSession, id: str, *, user_id: str) -> b
     row = await session.get(RenderTemplate, id)
     if row is None or row.user_id != user_id:
         return False
+    clipstyle_packages.guard_package_archive(row)
     row.status = "archived"
     await session.commit()
     return True
@@ -117,14 +139,20 @@ async def clone_template(
         description=source.description or "",
         kind=source.kind or "carousel",
         source="user_saved",
-        status="active",
+        # A cloned package is the "new version = new row" path: it starts over in draft, no report.
+        status="draft" if source.kind == clipstyle_packages.PACKAGE_KIND else "active",
         config=dict(source.config or {}),
-        preview_url=source.preview_url,
+        # A package preview shows the approved files, not the new draft's: it is re-rendered on validation.
+        preview_url=None if source.kind == clipstyle_packages.PACKAGE_KIND else source.preview_url,
         created_from_clip_id=source.created_from_clip_id,
         created_from_instruction=source.created_from_instruction,
     )
     session.add(row)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as exc:  # a client-supplied clone id collides with an existing row
+        await session.rollback()
+        raise ValueError("render_template_id_taken") from exc
     await session.refresh(row)
     return _template_out(row)
 
@@ -134,9 +162,17 @@ def _apply_template_body(row: RenderTemplate, body: RenderTemplateIn) -> None:
     row.description = body.description
     row.kind = body.kind or "carousel"
     row.source = _require_valid(body.source or "user_saved", VALID_TEMPLATE_SOURCES, "source")
-    row.status = _require_valid(body.status or "active", VALID_TEMPLATE_STATUSES, "status")
+    if row.kind == clipstyle_packages.PACKAGE_KIND:
+        # preview_url is bridge-owned for packages (ruling F-I3): apply_package_body ignores any
+        # client-supplied value and resets the field, so it is never assigned from body here.
+        clipstyle_packages.apply_package_body(row, body)
+    else:
+        row.status = _require_valid(body.status or "active", VALID_TEMPLATE_STATUSES, "status")
+        # Package-only fields (a draft package may become a normal template): never carried over.
+        row.validation_report_json = {}
+        row.approved_at = None
+        row.preview_url = body.preview_url
     row.config = body.config or {}
-    row.preview_url = body.preview_url
     row.created_from_clip_id = body.created_from_clip_id
     row.created_from_instruction = body.created_from_instruction
 
