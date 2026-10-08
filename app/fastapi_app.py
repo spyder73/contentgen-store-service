@@ -482,7 +482,7 @@ def create_fastapi_app() -> FastAPI:
         request: Request,
         session: SessionDep,
         include_archived: bool = Query(False),
-        page: int = Query(1, ge=1),
+        page: int = Query(1, ge=1, le=clipstyle_package_metadata.MAX_PAGE),
         limit: int = Query(clipstyle_package_metadata.DEFAULT_LIMIT, ge=1, le=clipstyle_package_metadata.MAX_LIMIT),
     ) -> Any:
         """The caller's own clipstyle package rows, without their package files, a page at a time."""

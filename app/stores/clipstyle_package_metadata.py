@@ -21,6 +21,11 @@ PACKAGE_KIND = "clipstyle_package"
 # within its own time budget (fail-closed for anything it does not reach).
 DEFAULT_LIMIT = 500
 MAX_LIMIT = 1000
+# Task 19 re-review N2: offset = (page - 1) * limit is bound to Postgres' int4 column. Without a
+# cap, a page far past what any caller sends (the Go client reads at most 20 pages) overflows it
+# and raises a DataError (500) instead of a clean validation error. MAX_PAGE keeps
+# (MAX_PAGE - 1) * MAX_LIMIT far inside int4 range regardless of the limit requested.
+MAX_PAGE = 10_000
 
 _INTEGER_TEXT = re.compile(r"-?\d+")
 

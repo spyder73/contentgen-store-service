@@ -123,6 +123,39 @@ class TestClipstylePackageMetadataRoute:
         assert resp.status_code == 422
         m.assert_not_called()
 
+    # Carry 3 (Task 19 re-review, N2): page has no upper bound today, so
+    # offset = (page - 1) * limit can exceed Postgres' int4 column and raise
+    # a DataError (500) instead of a clean validation error. A page past
+    # MAX_PAGE must 422 before the query ever runs; MAX_PAGE itself must
+    # still be accepted (never a DB overflow regardless of limit, since
+    # (MAX_PAGE - 1) * MAX_LIMIT stays far inside int4).
+    def test_rejects_a_page_too_large_for_the_offset_math(self, client):
+        with patch(
+            "app.stores.clipstyle_package_metadata.list_package_metadata",
+            new=AsyncMock(return_value=_page()),
+        ) as m:
+            resp = client.get(
+                "/v1/clipstyle-packages/metadata",
+                headers=_headers(OWNER),
+                params={"page": str(metadata_store.MAX_PAGE + 1)},
+            )
+        assert resp.status_code == 422
+        m.assert_not_called()
+        assert (metadata_store.MAX_PAGE - 1) * metadata_store.MAX_LIMIT < 2**31 - 1
+
+    def test_accepts_the_largest_allowed_page(self, client):
+        with patch(
+            "app.stores.clipstyle_package_metadata.list_package_metadata",
+            new=AsyncMock(return_value=_page(page=metadata_store.MAX_PAGE)),
+        ) as m:
+            resp = client.get(
+                "/v1/clipstyle-packages/metadata",
+                headers=_headers(OWNER),
+                params={"page": str(metadata_store.MAX_PAGE), "limit": str(metadata_store.MAX_LIMIT)},
+            )
+        assert resp.status_code == 200
+        assert m.call_args.kwargs["page"] == metadata_store.MAX_PAGE
+
     def test_requires_a_user(self, client):
         with patch(
             "app.stores.clipstyle_package_metadata.list_package_metadata",
