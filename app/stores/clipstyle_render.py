@@ -53,10 +53,14 @@ async def add_bundle(session: AsyncSession, template_id: str, body: ClipstyleRen
     session.add(bundle)
     try:
         await session.commit()
-    except IntegrityError:  # a concurrent freeze for the same image won the unique index
+    except IntegrityError:  # a concurrent freeze for the same image may have won the unique index
         await session.rollback()
         existing = await _for_image(session, template_id, body.image_ref)
-        if existing is not None and _same(existing, body):
+        if existing is None:
+            # Not the (template_id, image_ref) uniqueness conflict after all (e.g. a missing FK
+            # target) — surface the real error instead of misreporting it as bundle_frozen.
+            raise
+        if _same(existing, body):
             return _out(existing)
         raise ValueError("bundle_frozen") from None
     await session.refresh(bundle)

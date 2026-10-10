@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.schema import CreateTable
@@ -122,6 +123,30 @@ class TestAddBundle:
             await render_store.add_bundle(s, "tpl-1", _bundle(sha="b" * 64, media_id="m-2"))
 
         with pytest.raises(ValueError, match="bundle_frozen"):
+            _run([_row("tpl-1")], fn)
+
+    @pytest.mark.parametrize("sha,media_id", [(SHA, "m-2"), ("b" * 64, "m-1")])
+    def test_a_partial_mismatch_resend_is_also_refused(self, sha, media_id):
+        """Same image_ref, but only bundle_sha256 OR only media_id differs from the frozen row —
+        either mismatch alone is enough to refuse, not just a fully different resend."""
+        async def fn(s):
+            await render_store.add_bundle(s, "tpl-1", _bundle())
+            await render_store.add_bundle(s, "tpl-1", _bundle(sha=sha, media_id=media_id))
+
+        with pytest.raises(ValueError, match="bundle_frozen"):
+            _run([_row("tpl-1")], fn)
+
+    def test_a_non_uniqueness_integrity_error_is_not_mistaken_for_bundle_frozen(self):
+        """An IntegrityError that isn't the (template_id, image_ref) uniqueness conflict (e.g. a
+        missing FK target) must propagate as-is, not be swallowed into a 409 bundle_frozen."""
+        async def fn(s):
+            async def _boom():
+                raise IntegrityError("INSERT", {}, Exception("simulated fk violation"))
+
+            s.commit = _boom
+            await render_store.add_bundle(s, "tpl-1", _bundle())
+
+        with pytest.raises(IntegrityError):
             _run([_row("tpl-1")], fn)
 
     def test_a_new_image_adds_a_row(self):
