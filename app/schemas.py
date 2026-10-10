@@ -1074,3 +1074,19 @@ class ClipstyleRenderBundleOut(ClipstyleRenderBundleIn):
 
     template_id: str
     created_at: datetime
+
+
+class ClipstylePackageResolveOut(BaseModel):
+    """GET /v1/clipstyle-packages/resolve: the facts about one approved package version, as the
+    caller asked. The store does not decide access; the backend does (owner OR published, never
+    revoked, with a bundle for rendering)."""
+
+    template_id: str
+    owner: str | None = None
+    caller_is_owner: bool
+    visibility: str
+    style: str
+    version: int
+    has_bundle: bool
+    image_refs: list[str]
+    implements: str | None = None

@@ -79,6 +79,7 @@ from .schemas import (
     ReviewTraceIn,
     ReviewTraceOut,
     ClipstylePackageMetadataPage,
+    ClipstylePackageResolveOut,
     ClipstyleRenderBundleIn,
     ClipstyleRenderBundleOut,
 )
@@ -552,6 +553,21 @@ def create_fastapi_app() -> FastAPI:
         return row
 
     # ── clipstyle packages ──────────────────────────────────────────────────
+
+    @app.get("/v1/clipstyle-packages/resolve", response_model=ClipstylePackageResolveOut)
+    async def resolve_clipstyle_package_handler(
+        request: Request,
+        session: SessionDep,
+        style: str = Query(..., pattern=r"^[a-z][A-Za-z0-9]{2,47}$"),
+        version: int | None = Query(None, ge=1),
+    ) -> Any:
+        """Phase 4: is `style@version` an approved package row, and what does the caller need to
+        know to decide access and routing. Facts only; the backend decides."""
+        caller = _require_user_id(request)
+        row = await clipstyle_render.resolve_package(session, style=style, version=version, caller=caller)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_a_package")
+        return row
 
     @app.get("/v1/clipstyle-packages/metadata", response_model=ClipstylePackageMetadataPage)
     async def list_clipstyle_package_metadata_handler(

@@ -7,6 +7,7 @@ import asyncio
 import os
 import subprocess
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -33,7 +34,8 @@ def _uuid_sqlite(element, compiler, **kw):  # pragma: no cover - trivial
 
 from app.db import get_session  # noqa: E402
 from app.fastapi_app import create_fastapi_app  # noqa: E402
-from app.models import ClipstyleRenderBundle, RenderTemplate  # noqa: E402
+from app.models import ClipstyleRenderBundle, MediaItem, RenderTemplate  # noqa: E402
+from app.schemas import ClipstylePackageResolveOut  # noqa: E402
 from app.schemas import ClipstyleRenderBundleIn, ClipstyleRenderBundleOut  # noqa: E402
 from app.stores import clipstyle_packages as cp  # noqa: E402
 from app.stores import clipstyle_render as render_store  # noqa: E402
@@ -244,6 +246,125 @@ class TestBundleMedia:
     def test_a_malformed_render_bundle_key_names_no_media(self):
         assert cp._bridge_media_ids({"render_bundle": {"media_id": "../evil"}}) == []
         assert cp._bridge_media_ids({"render_bundle": "x"}) == []
+
+
+OTHER = "00000000-0000-0000-0000-000000000002"
+
+
+class TestResolvePackage:
+    def test_the_highest_approved_version_with_its_bundles(self):
+        rows = [_row("v1", version=1), _row("v2", version=2), _row("v3", version=3, status="validated")]
+
+        async def fn(s):
+            await render_store.add_bundle(s, "v2", _bundle())
+            return await render_store.resolve_package(s, style="miniCard", version=None, caller=OWNER)
+
+        out = _run(rows, fn)
+        assert (out.template_id, out.version, out.owner, out.caller_is_owner) == ("v2", 2, OWNER, True)
+        assert (out.has_bundle, out.image_refs, out.visibility, out.implements) == (True, [REF], "private", None)
+
+    def test_a_pinned_version(self):
+        rows = [_row("v1", version=1), _row("v2", version=2)]
+        out = _run(rows, lambda s: render_store.resolve_package(s, style="miniCard", version=1, caller=OTHER))
+        assert (out.template_id, out.caller_is_owner, out.has_bundle, out.image_refs) == ("v1", False, False, [])
+
+    def test_states_visibility_and_implements_as_stored(self):
+        rows = [_row("v1", visibility="revoked", extra={"implements": "technologyCarousel@1"})]
+        out = _run(rows, lambda s: render_store.resolve_package(s, style="miniCard", version=None, caller=OWNER))
+        assert (out.visibility, out.implements) == ("revoked", "technologyCarousel@1")
+
+    @pytest.mark.parametrize("rows,version", [
+        ([], None),
+        ([_row("v1", status="draft")], None),
+        ([_row("v1", style="otherStyle")], None),
+        ([_row("v1", version=1)], 2),
+    ])
+    def test_none_without_an_approved_package_row(self, rows, version):
+        assert _run(rows, lambda s: render_store.resolve_package(s, style="miniCard", version=version, caller=OWNER)) is None
+
+
+class TestResolveRoute:
+    URL = "/v1/clipstyle-packages/resolve"
+
+    def _out(self):
+        return ClipstylePackageResolveOut(template_id="v2", owner=OWNER, caller_is_owner=True, visibility="private",
+                                          style="miniCard", version=2, has_bundle=True, image_refs=[REF], implements=None)
+
+    def test_answers_as_the_caller(self, client):
+        with patch("app.stores.clipstyle_render.resolve_package", new=AsyncMock(return_value=self._out())) as resolve:
+            resp = client.get(self.URL, params={"style": "miniCard", "version": "2"},
+                              headers={"X-Internal-Secret": SECRET, "X-User-ID": OWNER})
+        assert resp.status_code == 200 and resp.json()["template_id"] == "v2"
+        assert resolve.call_args.kwargs == {"style": "miniCard", "version": 2, "caller": OWNER}
+
+    def test_not_a_package_is_404(self, client):
+        with patch("app.stores.clipstyle_render.resolve_package", new=AsyncMock(return_value=None)):
+            resp = client.get(self.URL, params={"style": "miniCard"}, headers={"X-Internal-Secret": SECRET, "X-User-ID": OWNER})
+        assert resp.status_code == 404 and resp.json()["detail"] == "not_a_package"
+
+    def test_needs_a_user(self, client):
+        resp = client.get(self.URL, params={"style": "miniCard"}, headers={"X-Internal-Secret": SECRET})
+        assert resp.status_code == 401
+
+    @pytest.mark.parametrize("params", [{"style": "Mini"}, {"style": "mi"}, {"style": "a%2Fb"}, {"style": "miniCard", "version": "0"}])
+    def test_refuses_a_malformed_query(self, client, params):
+        resp = client.get(self.URL, params=params, headers={"X-Internal-Secret": SECRET, "X-User-ID": OWNER})
+        assert resp.status_code == 422
+
+
+# ── CT-12/C3 (Task 1.2's follow-up for 1.1): the two bridge-media kinds behave identically on a
+# real listing and a real delete, not just by sharing the same BRIDGE_MEDIA_KINDS tuple. ──────────
+
+
+async def _seed_media_items(rows):
+    engine = create_async_engine("sqlite+aiosqlite://")
+    async with engine.begin() as conn:
+        await conn.run_sync(lambda c: MediaItem.__table__.create(c))
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        for r in rows:
+            s.add(MediaItem(**r))
+        await s.commit()
+    return engine, factory
+
+
+class TestBridgeMediaOnARealSqliteTable:
+    def test_a_listing_excludes_a_clipstyle_bundle_row_too(self):
+        async def go():
+            engine, factory = await _seed_media_items([
+                dict(id=str(uuid.uuid4()), user_id=OWNER, type="image", file_url="/m/normal.png", metadata_={}),
+                dict(id=str(uuid.uuid4()), user_id=OWNER, type="image", file_url="/m/bundle.tar",
+                     metadata_={"kind": media_store.CLIPSTYLE_BUNDLE_KIND}),
+            ])
+            try:
+                async with factory() as s:
+                    listed = await media_store.list_media(s, user_id=OWNER, page=1, limit=50)
+                return {it.file_url for it in listed.items}
+            finally:
+                await engine.dispose()
+
+        assert asyncio.run(go()) == {"/m/normal.png"}
+
+    def test_the_real_delete_path_removes_a_clipstyle_bundle_row(self):
+        bundle_id = str(uuid.uuid4())
+
+        async def go():
+            engine, factory = await _seed_media_items([
+                dict(id=bundle_id, user_id=OWNER, type="image", file_url="/m/bundle.tar",
+                     metadata_={"kind": media_store.CLIPSTYLE_BUNDLE_KIND}),
+            ])
+            try:
+                async with factory() as s:
+                    removed = await media_store.delete_clipstyle_preview_media(s, OWNER, [bundle_id])
+                    await s.commit()
+                async with factory() as s:
+                    remaining = await s.get(MediaItem, bundle_id)
+                return removed, remaining
+            finally:
+                await engine.dispose()
+
+        removed, remaining = asyncio.run(go())
+        assert removed == 1 and remaining is None
 
 
 def test_migration_0038_is_additive_and_its_downgrade_refuses_while_bundles_exist():

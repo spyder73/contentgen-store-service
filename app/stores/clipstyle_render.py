@@ -8,12 +8,12 @@ re-validates an approved version on a new image. Rows are append-only (migration
 """
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import JSON, select, type_coerce
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import ClipstyleRenderBundle, RenderTemplate
-from ..schemas import ClipstyleRenderBundleIn, ClipstyleRenderBundleOut
+from ..schemas import ClipstylePackageResolveOut, ClipstyleRenderBundleIn, ClipstyleRenderBundleOut
 from .clipstyle_packages import PACKAGE_KIND
 
 
@@ -74,3 +74,53 @@ async def list_bundles(session: AsyncSession, template_id: str) -> list[Clipstyl
         .order_by(ClipstyleRenderBundle.created_at, ClipstyleRenderBundle.id)
     )
     return [_out(row) for row in (await session.execute(stmt)).scalars()]
+
+
+def _manifest_version(value: object) -> int:
+    """A manifest version as selected (Postgres hands JSON back as text): an integer, else 0."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return 0
+
+
+async def resolve_package(
+    session: AsyncSession, *, style: str, version: int | None, caller: str
+) -> ClipstylePackageResolveOut | None:
+    """The approved package row of `style` (pinned `version`, else the highest approved one) and its
+    frozen bundles; None when no approved package row has that style (and version). Selects only
+    the columns it answers with, as clipstyle_package_metadata.py does: a row's config carries up
+    to 512 KiB of files, and this runs on every render and fit check (M-22)."""
+    config = type_coerce(RenderTemplate.config, JSON)
+    stmt = select(
+        RenderTemplate.id,
+        RenderTemplate.user_id,
+        RenderTemplate.visibility,
+        config[("manifest", "version")].as_string().label("version"),
+        config["implements"].as_string().label("implements"),
+    ).where(
+        RenderTemplate.kind == PACKAGE_KIND,
+        RenderTemplate.status == "approved",
+        config[("manifest", "id")].as_string() == style,
+    )
+    rows = [r for r in (await session.execute(stmt)) if version is None or _manifest_version(r.version) == version]
+    if not rows:
+        return None
+    row = max(rows, key=lambda r: _manifest_version(r.version))
+    bundles = await list_bundles(session, row.id)
+    implements = row.implements
+    owner = None if row.user_id is None else str(row.user_id)
+    return ClipstylePackageResolveOut(
+        template_id=row.id,
+        owner=owner,
+        caller_is_owner=owner is not None and owner == caller,
+        visibility=row.visibility,
+        style=style,
+        version=_manifest_version(row.version),
+        has_bundle=bool(bundles),
+        image_refs=[b.image_ref for b in bundles],
+        implements=implements if isinstance(implements, str) else None,
+    )
