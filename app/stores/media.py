@@ -29,12 +29,14 @@ from ..schemas import (
 # and the client's mental model agree.
 _UPLOAD_SOURCES = ("manual_upload", "upload", "upload_pool", "uploaded")
 
-# The clipstyle validation bridge (modal_bridge/clients.py `upload_preview`) marks every contact
-# sheet / per-fixture preview PNG it uploads during a package validation with this metadata.kind.
-# Those rows are bridge-internal scratch media (clipstyle_packages.py deletes them once the report
-# that referenced them is reset or replaced): never part of the user's library, hidden from every
-# listing (see `_not_clipstyle_preview_filter_expr`), though a direct GET by id still resolves them.
+# The clipstyle validation bridge (modal_bridge/clients.py) uploads two kinds of scratch media for a
+# package validation: contact sheet / per-fixture preview PNGs, and (Phase 4) the compiled render
+# bundle of a passing verdict. Both are bridge-internal: never part of the user's library, hidden
+# from every listing (see `_not_clipstyle_preview_filter_expr`), deleted by clipstyle_packages.py
+# once the report that referenced them is reset or replaced; a direct GET by id still resolves them.
 CLIPSTYLE_PREVIEW_KIND = "clipstyle_preview"
+CLIPSTYLE_BUNDLE_KIND = "clipstyle_bundle"
+BRIDGE_MEDIA_KINDS = (CLIPSTYLE_PREVIEW_KIND, CLIPSTYLE_BUNDLE_KIND)
 
 # Generated videos are stored with type "ai_video", but the library's type chip
 # (and the per-type facet counts) speak of "video". Bucket both raw column values
@@ -99,7 +101,7 @@ def _not_clipstyle_preview_filter_expr():
     the row) whenever `kind` is missing, since SQL NULL comparisons are never true.
     """
     kind = MediaItem.metadata_["kind"].astext
-    return kind.is_(None) | (kind != CLIPSTYLE_PREVIEW_KIND)
+    return kind.is_(None) | kind.notin_(BRIDGE_MEDIA_KINDS)
 
 
 def _order_by(sort: str):
@@ -422,8 +424,9 @@ async def delete_media(
 
 
 async def delete_clipstyle_preview_media(session: AsyncSession, user_id: str, ids) -> int:
-    """Bulk-deletes bridge preview media (CLIPSTYLE_PREVIEW_KIND) by id, scoped to `user_id` and the
-    marker itself so this can never reach anything else, even if a caller's id list is wrong.
+    """Bulk-deletes bridge media (`BRIDGE_MEDIA_KINDS`: previews and render bundles) by id, scoped to
+    `user_id` and the markers themselves so this can never reach anything else, even if a caller's
+    id list is wrong.
 
     Deliberately does NOT commit, unlike `delete_media` above: the caller (clipstyle_packages, when
     a package's report that referenced these ids is reset or replaced) folds this into its own
@@ -436,7 +439,7 @@ async def delete_clipstyle_preview_media(session: AsyncSession, user_id: str, id
     stmt = delete(MediaItem).where(
         MediaItem.id.in_(ids),
         MediaItem.user_id == user_id,
-        MediaItem.metadata_["kind"].astext == CLIPSTYLE_PREVIEW_KIND,
+        MediaItem.metadata_["kind"].astext.in_(BRIDGE_MEDIA_KINDS),
     )
     result = await session.execute(stmt)
     return result.rowcount

@@ -144,19 +144,26 @@ def guard_package_archive(row: RenderTemplate) -> None:
 _MEDIA_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,63}")
 
 
-def _preview_media_ids(report: dict | None) -> list[str]:
-    """Media ids in a report's bridge-owned `preview_media` key (contact sheet + previews) — the
-    only shape the bridge writes (mirrors modal_bridge/previews.py `media_ids`). Any other shape,
-    including a report with no `preview_media` at all, yields []."""
+def _bridge_media_ids(report: dict | None) -> list[str]:
+    """Media ids the bridge wrote into a report: the `preview_media` key (contact sheet +
+    previews, modal_bridge/previews.py `media_ids`) and, from Phase 4, the `render_bundle` key
+    (modal_bridge/bundles.py). Any other shape yields nothing for that key; one malformed id makes
+    the whole preview list unusable, as before."""
     if not isinstance(report, dict):
         return []
+    ids: list[str] = []
     preview_media = report.get("preview_media")
-    if not isinstance(preview_media, dict):
-        return []
-    sheet, previews = preview_media.get("contact_sheet"), preview_media.get("previews")
-    entries = ([sheet] if sheet is not None else []) + (previews if isinstance(previews, list) else [])
-    ids = [e.get("media_id") if isinstance(e, dict) else None for e in entries]
-    return ids if all(isinstance(i, str) and _MEDIA_ID.fullmatch(i) for i in ids) else []
+    if isinstance(preview_media, dict):
+        sheet, previews = preview_media.get("contact_sheet"), preview_media.get("previews")
+        entries = ([sheet] if sheet is not None else []) + (previews if isinstance(previews, list) else [])
+        found = [e.get("media_id") if isinstance(e, dict) else None for e in entries]
+        if all(isinstance(i, str) and _MEDIA_ID.fullmatch(i) for i in found):
+            ids.extend(found)
+    bundle = report.get("render_bundle")
+    bundle_id = bundle.get("media_id") if isinstance(bundle, dict) else None
+    if isinstance(bundle_id, str) and _MEDIA_ID.fullmatch(bundle_id):
+        ids.append(bundle_id)
+    return ids
 
 
 async def drop_stale_preview_media(session: AsyncSession, template_id: str, user_id: str, old_report: dict | None, new_report: dict | None) -> None:
@@ -171,7 +178,7 @@ async def drop_stale_preview_media(session: AsyncSession, template_id: str, user
     The delete runs inside a savepoint: a failure there is isolated and only logged, never allowed
     to fail the edit that orphaned the media (final fix wave M3/I-1 residual).
     """
-    old_ids = set(_preview_media_ids(old_report)) - set(_preview_media_ids(new_report))
+    old_ids = set(_bridge_media_ids(old_report)) - set(_bridge_media_ids(new_report))
     if not old_ids:
         return
     try:

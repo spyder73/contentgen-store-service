@@ -1054,3 +1054,23 @@ class ClipstylePackageMetadataPage(BaseModel):
     total: int
     page: int
     limit: int
+
+
+# Phase 4: a frozen render bundle (migration 0038). The patterns mirror the bridge's own checks
+# (modal_bridge/bundles.py): a lowercase sha256, a store media id, and an image ref.
+_BUNDLE_SHA256 = r"^[0-9a-f]{64}$"
+_BUNDLE_MEDIA_ID = r"^[A-Za-z0-9][A-Za-z0-9-]{0,63}$"
+_BUNDLE_IMAGE_REF = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+
+
+class ClipstyleRenderBundleIn(BaseModel):
+    bundle_sha256: str = Field(pattern=_BUNDLE_SHA256)
+    media_id: str = Field(pattern=_BUNDLE_MEDIA_ID)
+    image_ref: str = Field(pattern=_BUNDLE_IMAGE_REF)
+
+
+class ClipstyleRenderBundleOut(ClipstyleRenderBundleIn):
+    model_config = ConfigDict(from_attributes=True)
+
+    template_id: str
+    created_at: datetime

@@ -165,6 +165,9 @@ class RenderTemplate(Base):
         JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
     )
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Phase 4 (migration 0038): who may use an approved package version. Only the owner while
+    # private; everyone while published; nobody (owner included) once revoked.
+    visibility: Mapped[str] = mapped_column(Text, nullable=False, default="private", server_default="private")
     created_from_clip_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_from_instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -182,6 +185,10 @@ class RenderTemplate(Base):
         CheckConstraint(
             "status IN ('draft','active','archived','validated','approved','rejected')",
             name="render_templates_status_valid",
+        ),
+        CheckConstraint(
+            "visibility IN ('private','published','revoked')",
+            name="render_templates_visibility_valid",
         ),
         Index("ix_render_templates_user_id", "user_id"),
         Index("ix_render_templates_kind_status", "kind", "status"),
@@ -868,4 +875,25 @@ class DatasetTemplate(Base):
             "is_default",
             postgresql_where=text("is_default = true"),
         ),
+    )
+
+
+class ClipstyleRenderBundle(Base):
+    """A frozen render bundle of an approved clipstyle package version (migration 0038).
+
+    Append-only: the bridge inserts one row per (package version, runtime image); the database
+    trigger refuses UPDATE and DELETE. The sha256 format CHECK lives in the migration only (sqlite
+    test engines cannot parse it); the API validates the same pattern."""
+
+    __tablename__ = "clipstyle_render_bundles"
+
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    template_id: Mapped[str] = mapped_column(Text, ForeignKey("render_templates.id", ondelete="RESTRICT"), nullable=False)
+    bundle_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    media_id: Mapped[str] = mapped_column(Text, nullable=False)
+    image_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("template_id", "image_ref", name="ux_clipstyle_render_bundles_template_image"),
     )

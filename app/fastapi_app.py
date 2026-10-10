@@ -79,12 +79,15 @@ from .schemas import (
     ReviewTraceIn,
     ReviewTraceOut,
     ClipstylePackageMetadataPage,
+    ClipstyleRenderBundleIn,
+    ClipstyleRenderBundleOut,
 )
 
 from .stores import (
     access,
     characters,
     clipstyle_packages,
+    clipstyle_render,
     clips,
     credits,
     credits_spent,
@@ -134,6 +137,8 @@ _TEMPLATE_CONFLICTS = (
     "validation_report_stale",
     "validation_report_contract_version",
     "render_template_id_taken",
+    "package_not_approved",
+    "bundle_frozen",
 )
 
 
@@ -481,6 +486,22 @@ def create_fastapi_app() -> FastAPI:
         # Internal-secret gate only (middleware), across all users: the bridge re-registers every
         # approved package after a registry restart (the registry keeps styles in memory).
         return await clipstyle_packages.list_approved_packages(session)
+
+    @app.post("/v1/internal/clipstyle-packages/{id}/bundles", response_model=ClipstyleRenderBundleOut)
+    async def add_clipstyle_render_bundle_handler(id: str, body: ClipstyleRenderBundleIn, session: SessionDep) -> Any:
+        # Internal-secret gate only (middleware): the bridge freezes the render bundle of a version
+        # it just approved (or backfills one on a new image), whoever owns the package.
+        try:
+            row = await clipstyle_render.add_bundle(session, id, body)
+        except ValueError as exc:
+            raise _template_error(exc)
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
+
+    @app.get("/v1/internal/clipstyle-packages/{id}/bundles", response_model=list[ClipstyleRenderBundleOut])
+    async def list_clipstyle_render_bundles_handler(id: str, session: SessionDep) -> Any:
+        return await clipstyle_render.list_bundles(session, id)
 
     # ── render proposals ────────────────────────────────────────────────────
 
