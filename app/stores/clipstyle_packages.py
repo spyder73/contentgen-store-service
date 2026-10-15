@@ -48,6 +48,8 @@ _ALLOWED = {
     ("approved", "approved"),
 }
 _MANIFEST_ID = re.compile(r"[a-z][A-Za-z0-9]{2,47}")
+# Phase 4: the contract a style renders (design: "implements: <contract>@<version>").
+_IMPLEMENTS = re.compile(r"[a-z][A-Za-z0-9]{2,47}@[1-9][0-9]{0,5}")
 
 
 def _template_out(row: RenderTemplate) -> RenderTemplateOut:
@@ -97,6 +99,10 @@ def check_package_config(config: dict) -> None:
         total += size
     if total > MAX_TOTAL_BYTES:
         raise ValueError("invalid_package_config:files.size")
+    if "implements" in config:
+        implements = config["implements"]
+        if not isinstance(implements, str) or not _IMPLEMENTS.fullmatch(implements) or implements.split("@", 1)[0] == manifest["id"]:
+            raise ValueError("invalid_package_config:implements")
 
 
 def _check_report_ok_and_fresh(report: dict | None, files: dict[str, str]) -> None:
