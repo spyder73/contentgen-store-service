@@ -141,6 +141,10 @@ async def clone_template(
         source="user_saved",
         # A cloned package is the "new version = new row" path: it starts over in draft, no report.
         status="draft" if source.kind == clipstyle_packages.PACKAGE_KIND else "active",
+        # M15: a revoked version's "New version" stays revoked through approval, so publishing it
+        # is refused and nobody, the owner included, can use it — an admin's revoke cannot be
+        # routed around by cloning.
+        visibility="revoked" if source.visibility == "revoked" else "private",
         config=dict(source.config or {}),
         # A package preview shows the approved files, not the new draft's: it is re-rendered on validation.
         preview_url=None if source.kind == clipstyle_packages.PACKAGE_KIND else source.preview_url,

@@ -78,10 +78,13 @@ from .schemas import (
     ReviewCorrectionOut,
     ReviewTraceIn,
     ReviewTraceOut,
+    ClipstyleCatalogOut,
     ClipstylePackageMetadataPage,
     ClipstylePackageResolveOut,
     ClipstyleRenderBundleIn,
     ClipstyleRenderBundleOut,
+    ClipstyleUsableOut,
+    VisibilityPatch,
 )
 
 from .stores import (
@@ -139,6 +142,7 @@ _TEMPLATE_CONFLICTS = (
     "validation_report_contract_version",
     "render_template_id_taken",
     "package_not_approved",
+    "package_revoked",
     "bundle_frozen",
 )
 
@@ -482,6 +486,37 @@ def create_fastapi_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="not_found")
         return row
 
+    @app.patch("/v1/render-templates/{id}/visibility")
+    async def set_render_template_visibility_handler(id: str, body: VisibilityPatch, request: Request, session: SessionDep) -> Any:
+        # The owner's route (design § Visibility and publishing, P4R-46): toggles private <-> published
+        # of their own approved version, never a revoked one. Two routes, two jobs: an admin uses the
+        # internal route below instead.
+        owner = _require_user_id(request)
+        try:
+            out = await clipstyle_render.set_visibility(session, id, body.visibility, owner=owner)
+        except ValueError as exc:
+            if str(exc) == "invalid_visibility":
+                raise HTTPException(status_code=422, detail="invalid_visibility") from exc
+            raise _template_error(exc)
+        if out is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return out
+
+    @app.patch("/v1/internal/render-templates/{id}/visibility")
+    async def admin_set_render_template_visibility_handler(id: str, body: VisibilityPatch, session: SessionDep) -> Any:
+        # Internal-secret gate only (middleware): the backend checks the caller is an admin before
+        # reaching this route. Sets private (unpublish, or lift a revoke) or revoked; never published
+        # — only the owner publishes.
+        try:
+            out = await clipstyle_render.set_visibility(session, id, body.visibility, admin=True)
+        except ValueError as exc:
+            if str(exc) == "invalid_visibility":
+                raise HTTPException(status_code=422, detail="invalid_visibility") from exc
+            raise _template_error(exc)
+        if out is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return out
+
     @app.get("/v1/internal/clipstyle-packages/approved", response_model=list[RenderTemplateOut])
     async def list_approved_clipstyle_packages_handler(session: SessionDep) -> Any:
         # Internal-secret gate only (middleware), across all users: the bridge re-registers every
@@ -503,6 +538,12 @@ def create_fastapi_app() -> FastAPI:
     @app.get("/v1/internal/clipstyle-packages/{id}/bundles", response_model=list[ClipstyleRenderBundleOut])
     async def list_clipstyle_render_bundles_handler(id: str, session: SessionDep) -> Any:
         return await clipstyle_render.list_bundles(session, id)
+
+    @app.get("/v1/internal/clipstyle-packages/catalog", response_model=list[ClipstyleCatalogOut])
+    async def clipstyle_package_catalog_handler(session: SessionDep) -> Any:
+        # Internal-secret gate only (middleware): the admin's catalog of every approved package
+        # version, across all users (design § Visibility and publishing). No package files.
+        return await clipstyle_render.list_catalog(session)
 
     # ── render proposals ────────────────────────────────────────────────────
 
@@ -568,6 +609,12 @@ def create_fastapi_app() -> FastAPI:
         if row is None:
             raise HTTPException(status_code=404, detail="not_a_package")
         return row
+
+    @app.get("/v1/clipstyle-packages/usable", response_model=list[ClipstyleUsableOut])
+    async def list_usable_clipstyle_packages_handler(request: Request, session: SessionDep) -> Any:
+        # Registered before any /v1/clipstyle-packages/{id} route, so "usable" is never captured as
+        # an id. The caller's own unrevoked approved versions, plus everyone's published ones.
+        return await clipstyle_render.list_usable(session, caller=_require_user_id(request))
 
     @app.get("/v1/clipstyle-packages/metadata", response_model=ClipstylePackageMetadataPage)
     async def list_clipstyle_package_metadata_handler(

@@ -247,6 +247,7 @@ class RenderTemplateListOut(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
     preview_url: str | None = None
     approved_at: datetime | None = None
+    visibility: str = "private"
     created_from_clip_id: str | None = None
     created_from_instruction: str | None = None
     created_at: datetime
@@ -1090,3 +1091,33 @@ class ClipstylePackageResolveOut(BaseModel):
     has_bundle: bool
     image_refs: list[str]
     implements: str | None = None
+
+
+class VisibilityPatch(BaseModel):
+    visibility: Literal["private", "published", "revoked"]
+
+
+class ClipstyleUsableOut(BaseModel):
+    """GET /v1/clipstyle-packages/usable: the caller's own unrevoked approved versions, plus
+    everyone's published ones (design § Visibility and publishing). No package files."""
+
+    template_id: str
+    owner: str | None = None
+    caller_is_owner: bool
+    style: str
+    version: int
+    visibility: str
+    implements: str | None = None
+
+
+class ClipstyleCatalogOut(BaseModel):
+    """GET /v1/internal/clipstyle-packages/catalog: every approved package row, for the admin.
+    No package files."""
+
+    template_id: str
+    owner: str | None = None
+    name: str
+    style: str | None = None
+    version: int | None = None
+    visibility: str
+    approved_at: datetime | None = None
