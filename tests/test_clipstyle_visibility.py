@@ -146,19 +146,59 @@ def test_the_catalog_lists_every_approved_version_without_files():
     assert [c["template_id"] for c in out] == ["v1"] and "config" not in out[0] and out[0]["owner"] == OWNER
 
 
-def test_an_owner_publish_after_an_admin_revoke_leaves_the_row_revoked():
-    # Review round 1, I-2: set_visibility is a single conditional UPDATE, not session.get ->
-    # mutate -> commit, so an owner's write can never land after (or race past) an admin's
-    # revoke of the same row. Simulated here as a sequential ordering: admin revokes first, then
-    # the owner's publish must both refuse AND leave the persisted row revoked, not overwritten.
-    async def fn(s):
-        await store.set_visibility(s, "v1", "revoked", admin=True)
-        with pytest.raises(ValueError, match="package_revoked"):
-            await store.set_visibility(s, "v1", "published", owner=OWNER)
-        row = await s.get(RenderTemplate, "v1", populate_existing=True)
-        return row.visibility
+def test_an_owner_publish_races_an_admin_revoke_across_two_sessions_and_loses():
+    # Re-review round 2, I-2: a single shared AsyncSession (as the round-1 test used) can't
+    # expose the lost-update race — both calls see the same in-process identity map, so the
+    # second call's read is never stale regardless of which code is under test. A genuine
+    # regression needs two independent sessions, matching two independent request-scoped
+    # sessions in production:
+    #   1. Session A (the owner) loads the row first, into its OWN identity map, while it is
+    #      still "private" — exactly what the old session.get -> mutate -> commit code did as
+    #      its first line.
+    #   2. Session B (the admin) revokes and commits, independently of A.
+    #   3. Session A then calls set_visibility("published") on its own (now stale) session.
+    #   4. The persisted row must stay "revoked", and A's call must be refused.
+    # Against the pre-fix code (44ede86), step 3's `session.get` returns A's cached pre-revoke
+    # object (SQLAlchemy's identity map short-circuits the query), so the old code sees
+    # visibility="private", never raises, and overwrites B's revoke with "published" — proven by
+    # running this exact scenario against a copy of the pre-fix function (see task-4.1-report.md,
+    # "Fix round 2"): it raises nothing and persists "published". The fixed code's UPDATE ...
+    # WHERE visibility != 'revoked' is evaluated by the database against the current row, not
+    # against A's cached copy, so it correctly matches 0 rows and refuses.
+    async def go():
+        engine = create_async_engine("sqlite+aiosqlite://")
+        async with engine.begin() as conn:
+            def ddl(sync_conn):
+                for table in (RenderTemplate.__table__, ClipstyleRenderBundle.__table__):
+                    sync_conn.exec_driver_sql(str(CreateTable(table).compile(dialect=sync_conn.dialect)).replace("'{}'::jsonb", "'{}'"))
+            await conn.run_sync(ddl)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as seed:
+            seed.add(_row("v1"))
+            await seed.commit()
 
-    assert _run([_row("v1")], fn) == "revoked"
+        session_a = factory()
+        session_b = factory()
+        try:
+            row_a = await session_a.get(RenderTemplate, "v1")  # 1: A's own, now-stale, read.
+            assert row_a.visibility == "private"
+
+            revoked = await store.set_visibility(session_b, "v1", "revoked", admin=True)  # 2
+            assert revoked == {"id": "v1", "visibility": "revoked"}
+
+            with pytest.raises(ValueError, match="package_revoked"):  # 3
+                await store.set_visibility(session_a, "v1", "published", owner=OWNER)
+        finally:
+            await session_a.close()
+            await session_b.close()
+
+        async with factory() as verify:  # 4: never overwritten.
+            row = await verify.get(RenderTemplate, "v1", populate_existing=True)
+            persisted = row.visibility
+        await engine.dispose()
+        return persisted
+
+    assert asyncio.run(go()) == "revoked"
 
 
 class TestAdminVisibilityRouteRequiresAVerifiedAdmin:
