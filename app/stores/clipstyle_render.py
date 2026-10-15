@@ -8,7 +8,7 @@ re-validates an approved version on a new image. Rows are append-only (migration
 """
 from __future__ import annotations
 
-from sqlalchemy import JSON, select, type_coerce
+from sqlalchemy import JSON, select, type_coerce, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -142,20 +142,33 @@ async def set_visibility(
 ) -> dict | None:
     """The only writer of render_templates.visibility (design § Visibility and publishing): the
     owner toggles private <-> published of their approved version (never a revoked one); an admin
-    sets private (unpublish, or lift a revoke) or revoked. Content is never touched."""
+    sets private (unpublish, or lift a revoke) or revoked. Content is never touched.
+
+    A single conditional UPDATE, never session.get -> mutate -> commit (review round 1, I-2): an
+    owner's write only ever lands WHERE visibility != 'revoked' (besides owning the approved row),
+    so it cannot land after, or race past, an admin's concurrent revoke of the same row — whoever
+    commits first makes the other's WHERE miss. 0 rows affected means someone else's write (or no
+    row) won; the row is re-read, unexpired, to answer the right refusal."""
     allowed = ADMIN_VISIBILITY if admin else OWNER_VISIBILITY
     if visibility not in allowed:
         raise ValueError("invalid_visibility")
-    row = await session.get(RenderTemplate, id)
-    if row is None or row.kind != PACKAGE_KIND or (not admin and (row.user_id is None or str(row.user_id) != owner)):
+    conditions = [RenderTemplate.id == id, RenderTemplate.kind == PACKAGE_KIND, RenderTemplate.status == "approved"]
+    if not admin:
+        conditions += [RenderTemplate.user_id == owner, RenderTemplate.visibility != "revoked"]
+    stmt = update(RenderTemplate).where(*conditions).values(visibility=visibility).returning(RenderTemplate.id)
+    result = await session.execute(stmt)
+    if result.scalar_one_or_none() is None:
+        await session.rollback()
+        existing = await session.get(RenderTemplate, id, populate_existing=True)
+        if existing is None or existing.kind != PACKAGE_KIND or (not admin and (existing.user_id is None or str(existing.user_id) != owner)):
+            return None
+        if existing.status != "approved":
+            raise ValueError("package_not_approved")
+        if not admin and existing.visibility == "revoked":
+            raise ValueError("package_revoked")
         return None
-    if row.status != "approved":
-        raise ValueError("package_not_approved")
-    if not admin and row.visibility == "revoked":
-        raise ValueError("package_revoked")
-    row.visibility = visibility
     await session.commit()
-    return {"id": row.id, "visibility": row.visibility}
+    return {"id": id, "visibility": visibility}
 
 
 async def list_usable(session: AsyncSession, *, caller: str) -> list[ClipstyleUsableOut]:

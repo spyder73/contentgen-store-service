@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.ext.compiler import compiles
@@ -22,12 +24,32 @@ def _uuid_sqlite(element, compiler, **kw):  # pragma: no cover - trivial
     return "VARCHAR(36)"
 
 
+from app.db import get_session  # noqa: E402
+from app.fastapi_app import create_fastapi_app  # noqa: E402
 from app.models import ClipstyleRenderBundle, RenderTemplate  # noqa: E402
 from app.stores import clipstyle_render as store  # noqa: E402
 
 OWNER = "00000000-0000-0000-0000-000000000001"
 OTHER = "00000000-0000-0000-0000-000000000002"
 T0 = datetime(2026, 10, 10, tzinfo=timezone.utc)
+SECRET = "test-secret-visibility"
+
+
+async def _mock_session():
+    yield MagicMock()
+
+
+@pytest.fixture(autouse=True)
+def _secret(monkeypatch):
+    monkeypatch.setenv("INTERNAL_API_SECRET", SECRET)
+
+
+@pytest.fixture()
+def client():
+    app = create_fastapi_app()
+    app.dependency_overrides[get_session] = _mock_session
+    with TestClient(app, raise_server_exceptions=True) as c:
+        yield c
 
 
 def _row(id_, *, style="neonKit", version=1, user_id=OWNER, status="approved", visibility="private", age=0):
@@ -122,3 +144,53 @@ def test_the_catalog_lists_every_approved_version_without_files():
 
     out = _run([_row("v1", visibility="published"), _row("d1", status="draft")], fn)
     assert [c["template_id"] for c in out] == ["v1"] and "config" not in out[0] and out[0]["owner"] == OWNER
+
+
+def test_an_owner_publish_after_an_admin_revoke_leaves_the_row_revoked():
+    # Review round 1, I-2: set_visibility is a single conditional UPDATE, not session.get ->
+    # mutate -> commit, so an owner's write can never land after (or race past) an admin's
+    # revoke of the same row. Simulated here as a sequential ordering: admin revokes first, then
+    # the owner's publish must both refuse AND leave the persisted row revoked, not overwritten.
+    async def fn(s):
+        await store.set_visibility(s, "v1", "revoked", admin=True)
+        with pytest.raises(ValueError, match="package_revoked"):
+            await store.set_visibility(s, "v1", "published", owner=OWNER)
+        row = await s.get(RenderTemplate, "v1", populate_existing=True)
+        return row.visibility
+
+    assert _run([_row("v1")], fn) == "revoked"
+
+
+class TestAdminVisibilityRouteRequiresAVerifiedAdmin:
+    """Review round 1, I-1: the admin route follows its sibling /v1/internal/admin/* routes (e.g.
+    admin_pipeline_visibility_handler) — internal secret AND a verified admin, not just any holder
+    of the shared secret."""
+
+    URL = "/v1/internal/admin/render-templates/v1/visibility"
+
+    def test_non_admin_caller_is_refused(self, client):
+        with patch("app.stores.credits.is_admin", new=AsyncMock(return_value=False)):
+            resp = client.patch(
+                self.URL,
+                json={"visibility": "revoked"},
+                headers={"X-Internal-Secret": SECRET, "X-User-ID": OWNER},
+            )
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "not_admin"
+
+    def test_a_verified_admin_succeeds(self, client):
+        set_visibility = AsyncMock(return_value={"id": "v1", "visibility": "revoked"})
+        with patch("app.stores.credits.is_admin", new=AsyncMock(return_value=True)), \
+             patch("app.stores.clipstyle_render.set_visibility", new=set_visibility):
+            resp = client.patch(
+                self.URL,
+                json={"visibility": "revoked"},
+                headers={"X-Internal-Secret": SECRET, "X-User-ID": OWNER},
+            )
+        assert resp.status_code == 200
+        assert resp.json() == {"id": "v1", "visibility": "revoked"}
+        set_visibility.assert_awaited_once_with(ANY, "v1", "revoked", admin=True)
+
+    def test_needs_the_internal_secret_even_before_the_admin_check(self, client):
+        resp = client.patch(self.URL, json={"visibility": "revoked"}, headers={"X-User-ID": OWNER})
+        assert resp.status_code == 401

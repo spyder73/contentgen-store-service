@@ -154,6 +154,15 @@ def _template_error(exc: ValueError) -> HTTPException:
     return HTTPException(status_code=409 if detail.startswith(_TEMPLATE_CONFLICTS) else 400, detail=detail)
 
 
+def _visibility_error(exc: ValueError) -> HTTPException:
+    """Shared by the owner's and the admin's visibility routes (review round 1, M1):
+    invalid_visibility is a 422 from the handler itself; every other refusal (package_not_approved,
+    package_revoked, not_found-shaped ValueErrors) goes through _template_error as usual."""
+    if str(exc) == "invalid_visibility":
+        return HTTPException(status_code=422, detail="invalid_visibility")
+    return _template_error(exc)
+
+
 def _require_internal_secret(x_internal_secret: str | None) -> None:
     expected = os.environ.get("INTERNAL_API_SECRET", "").strip()
     if not expected:
@@ -490,29 +499,29 @@ def create_fastapi_app() -> FastAPI:
     async def set_render_template_visibility_handler(id: str, body: VisibilityPatch, request: Request, session: SessionDep) -> Any:
         # The owner's route (design § Visibility and publishing, P4R-46): toggles private <-> published
         # of their own approved version, never a revoked one. Two routes, two jobs: an admin uses the
-        # internal route below instead.
+        # internal/admin route below instead.
         owner = _require_user_id(request)
         try:
             out = await clipstyle_render.set_visibility(session, id, body.visibility, owner=owner)
         except ValueError as exc:
-            if str(exc) == "invalid_visibility":
-                raise HTTPException(status_code=422, detail="invalid_visibility") from exc
-            raise _template_error(exc)
+            raise _visibility_error(exc) from exc
         if out is None:
             raise HTTPException(status_code=404, detail="not_found")
         return out
 
-    @app.patch("/v1/internal/render-templates/{id}/visibility")
-    async def admin_set_render_template_visibility_handler(id: str, body: VisibilityPatch, session: SessionDep) -> Any:
-        # Internal-secret gate only (middleware): the backend checks the caller is an admin before
-        # reaching this route. Sets private (unpublish, or lift a revoke) or revoked; never published
-        # — only the owner publishes.
+    @app.patch("/v1/internal/admin/render-templates/{id}/visibility")
+    async def admin_set_render_template_visibility_handler(id: str, body: VisibilityPatch, request: Request, session: SessionDep) -> Any:
+        # The admin's route (review round 1, I-1): same shape as its sibling admin routes, e.g.
+        # admin_pipeline_visibility_handler — internal-secret gated (middleware) AND the caller must
+        # be a verified admin (credits.is_admin), not merely any holder of the shared secret. Sets
+        # private (unpublish, or lift a revoke) or revoked; never published — only the owner publishes.
+        admin_id = _require_user_id(request)
+        if not await credits.is_admin(session, admin_id):
+            raise HTTPException(status_code=403, detail="not_admin")
         try:
             out = await clipstyle_render.set_visibility(session, id, body.visibility, admin=True)
         except ValueError as exc:
-            if str(exc) == "invalid_visibility":
-                raise HTTPException(status_code=422, detail="invalid_visibility") from exc
-            raise _template_error(exc)
+            raise _visibility_error(exc) from exc
         if out is None:
             raise HTTPException(status_code=404, detail="not_found")
         return out
