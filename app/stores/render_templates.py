@@ -119,6 +119,13 @@ async def archive_template(session: AsyncSession, id: str, *, user_id: str) -> b
     if row is None or row.user_id != user_id:
         return False
     clipstyle_packages.guard_package_archive(row)
+    if row.kind == clipstyle_packages.PACKAGE_KIND:
+        # Phase 4 (M-6): an archived draft keeps its small config, not its previews and render
+        # bundle (bridge media, megabytes each): the report that referenced them goes too.
+        old_report = row.validation_report_json
+        row.validation_report_json = {}
+        row.preview_url = None
+        await clipstyle_packages.drop_stale_preview_media(session, id, user_id, old_report, {})
     row.status = "archived"
     await session.commit()
     return True

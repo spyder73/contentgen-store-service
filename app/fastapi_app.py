@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated, Any, Literal
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request, Response
@@ -84,6 +84,7 @@ from .schemas import (
     ClipstyleRenderBundleIn,
     ClipstyleRenderBundleOut,
     ClipstyleUsableOut,
+    StaleHoldReapIn,
     VisibilityPatch,
 )
 
@@ -94,6 +95,7 @@ from .stores import (
     clipstyle_render,
     clips,
     credits,
+    credits_reaper,
     credits_spent,
     episodes,
     generator_profiles,
@@ -1359,6 +1361,13 @@ def create_fastapi_app() -> FastAPI:
             raise HTTPException(status_code=403, detail="not_admin")
         username = username.strip().lstrip("@") if username else None
         return await credits.ledger(session, user_id=user_id, username=username, since=since, limit=limit)
+
+    @app.post("/v1/internal/credits/reap-stale-holds")
+    async def reap_stale_holds_handler(body: StaleHoldReapIn, session: SessionDep) -> Any:
+        # Internal-secret gated only (middleware above): a backend cron caller, not a user action.
+        holds = await credits_reaper.reap_stale_holds(session, [r.model_dump() for r in body.rules],
+                                                      now=datetime.now(timezone.utc), limit=body.limit)
+        return {"released": len(holds), "holds": holds}
 
     # ── idea library ─────────────────────────────────────────────────────────
     #

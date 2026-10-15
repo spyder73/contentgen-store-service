@@ -234,3 +234,27 @@ class TestAdminVisibilityRouteRequiresAVerifiedAdmin:
     def test_needs_the_internal_secret_even_before_the_admin_check(self, client):
         resp = client.patch(self.URL, json={"visibility": "revoked"}, headers={"X-User-ID": OWNER})
         assert resp.status_code == 401
+
+
+def test_archiving_a_draft_package_drops_its_bridge_media(monkeypatch):
+    from app.stores import clipstyle_packages as cp
+    from app.stores import render_templates
+
+    dropped = []
+
+    async def fake_drop(session, template_id, user_id, old, new):
+        dropped.append((template_id, cp._bridge_media_ids(old), new))
+
+    monkeypatch.setattr(cp, "drop_stale_preview_media", fake_drop)
+    row = _row("d1", status="validated")
+    row.validation_report_json = {"preview_media": {"contact_sheet": {"media_id": "p-1"}, "previews": []},
+                                  "render_bundle": {"sha256": "a" * 64, "media_id": "b-1", "image_ref": "r"}}
+
+    async def fn(s):
+        assert await render_templates.archive_template(s, "d1", user_id=OWNER) is True
+        archived = await s.get(RenderTemplate, "d1")
+        return archived.status, archived.validation_report_json
+
+    status, report = _run([row], fn)
+    assert status == "archived" and report == {}
+    assert dropped == [("d1", ["p-1", "b-1"], {})]

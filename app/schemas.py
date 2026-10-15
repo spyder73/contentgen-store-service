@@ -1121,3 +1121,17 @@ class ClipstyleCatalogOut(BaseModel):
     version: int | None = None
     visibility: str
     approved_at: datetime | None = None
+
+
+class StaleHoldRule(BaseModel):
+    """One rule of POST /v1/internal/credits/reap-stale-holds: release open holds of this
+    checkpoint kind once they are older than `older_than_s`."""
+
+    checkpoint: str = Field(pattern=r"^[a-z][a-z0-9_:.-]{1,63}$")
+    match: Literal["prefix", "exact"]
+    older_than_s: int = Field(ge=600, le=30 * 86400)
+
+
+class StaleHoldReapIn(BaseModel):
+    rules: list[StaleHoldRule] = Field(min_length=1, max_length=10)
+    limit: int = Field(default=200, ge=1, le=500)
