@@ -33,7 +33,7 @@ VECTORS = json.loads((Path(__file__).parent / "fixtures" / "package-files-vector
 # final fix wave M11/N4: pin the vector file's own hash so a regeneration on just one side (store or
 # remotion) fails loudly here instead of the two copies silently drifting apart. The remotion copy
 # pins the same value (modal_bridge/tests/test_validator_types.py VECTORS_SHA256).
-VECTORS_SHA256 = "08e2986cfd43af3c233cb7172ef42843c3ba437b9e4790e91d5ff6362845f2a1"
+VECTORS_SHA256 = "19e11500411dbcbe297c23b5e00bd153614e048df360fdf5a9ffbe0aeff1d768"
 
 
 def test_the_vector_file_is_the_one_both_repos_pin():
@@ -113,6 +113,21 @@ def test_check_package_config_takes_the_settings_files_and_caps_settings_json():
     for bad in ("Settings.ts", "settings.jsonc", "lib/settings.json"):
         with pytest.raises(ValueError, match="invalid_package_config:files.path$"):
             cp.check_package_config({**CONFIG, "files": {**FILES, bad: "x"}})
+
+
+def test_settings_json_cap_counts_bytes_not_characters():
+    """Review M2: a multibyte settings.json can be under MAX_SETTINGS_BYTES characters but over it in
+    bytes, and must still be refused; one of exactly 8192 bytes is accepted."""
+    at_cap = "é" * (cp.MAX_SETTINGS_BYTES // 2)  # 4096 chars, 8192 bytes ("é" is 2 UTF-8 bytes)
+    assert len(at_cap) < cp.MAX_SETTINGS_BYTES
+    assert len(at_cap.encode("utf-8")) == cp.MAX_SETTINGS_BYTES
+    cp.check_package_config({**CONFIG, "files": {**FILES, "settings.ts": "x", "settings.json": at_cap}})
+
+    over_cap = "é" * (cp.MAX_SETTINGS_BYTES // 2 + 1)  # 4097 chars (still < cap), 8194 bytes (> cap)
+    assert len(over_cap) < cp.MAX_SETTINGS_BYTES
+    assert len(over_cap.encode("utf-8")) > cp.MAX_SETTINGS_BYTES
+    with pytest.raises(ValueError, match="invalid_package_config:files.size$"):
+        cp.check_package_config({**CONFIG, "files": {**FILES, "settings.ts": "x", "settings.json": over_cap}})
 
 
 @pytest.mark.parametrize(

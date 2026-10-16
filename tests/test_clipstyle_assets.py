@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -65,7 +66,7 @@ def test_config_assets_shape_accepts_named_icons_up_to_twelve():
     """A1 (named icon assets): `icon-<name>`, name [a-z0-9]{1,24}, up to MAX_ICON_ASSETS per style."""
     icon_entry = {"sha256": SHA, "media_id": M1, "mime": "image/png"}
     cp.check_package_config({**_config(), "assets": {"icon-claude": icon_entry}})
-    for bad_label in ("icon-Claude", "icon-", "icon-" + "a" * 25):
+    for bad_label in ("icon-Claude", "icon-", "icon-a_b", "icon-" + "a" * 25):
         with pytest.raises(ValueError, match="invalid_package_config:assets"):
             cp.check_package_config({**_config(), "assets": {bad_label: icon_entry}})
     twelve_icons = {f"icon-i{i}": icon_entry for i in range(cp.MAX_ICON_ASSETS)}
@@ -308,3 +309,21 @@ def test_migration_0040_sql_relaxes_the_label_check():
     down = subprocess.run([sys.executable, "-m", "alembic", "downgrade", "0040:0039", "--sql"],
                           cwd=root, env=env, capture_output=True, text=True, check=True).stdout
     assert "downgrade 0040 refused" in down
+
+
+def test_migration_0040_check_refuses_an_underscore_in_the_icon_name():
+    """Review M1: `icon-a_b` (underscore is outside [a-z0-9]) is refused both by the Python label
+    validator (`_ASSET_LABEL`) and by the migration's Postgres CHECK — same pattern text, so the
+    regex extracted straight from the `--sql` dry run is applied here with Python's `re` (there is no
+    live Postgres in this sandbox, and a migration is never run against a shared database)."""
+    icon_entry = {"sha256": SHA, "media_id": M1, "mime": "image/png"}
+    with pytest.raises(ValueError, match="invalid_package_config:assets"):
+        cp.check_package_config({**_config(), "assets": {"icon-a_b": icon_entry}})
+
+    root = Path(__file__).resolve().parent.parent
+    env = {**os.environ, "DATABASE_URL": "postgresql+asyncpg://u:p@localhost/x"}
+    up = subprocess.run([sys.executable, "-m", "alembic", "upgrade", "0039:0040", "--sql"],
+                        cwd=root, env=env, capture_output=True, text=True, check=True).stdout
+    pattern = re.search(r"label ~ '(\^.*\$)'", up).group(1)
+    assert re.search(pattern, "icon-a_b") is None
+    assert re.search(pattern, "icon-claude") is not None

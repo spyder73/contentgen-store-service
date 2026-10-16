@@ -2578,6 +2578,404 @@
   "sha256": "cbefe0693286396f7b3f4f914feeb69c497fe31d0a8f9bc4b75a55351ab88803"
  },
  {
+  "name": "settings-files",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "settings.ts",
+    "export const settings = {};\n"
+   ],
+   [
+    "settings.json",
+    "{}\n"
+   ]
+  ],
+  "issues": [],
+  "sha256": "cfe8b1c70071e39fa630a5d10b1ae240e946d2a3aeb758e78bd90be1e37853be"
+ },
+ {
+  "name": "settings-json-at-cap",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "settings.ts",
+    "x"
+   ],
+   [
+    "settings.json",
+    {
+     "$gen": {
+      "repeat": "x",
+      "count": 8192,
+      "suffix": ""
+     }
+    }
+   ]
+  ],
+  "issues": [],
+  "sha256": "168cce151a27ae1b905d9ead972c8e1663f774e93d17877c596eb10c75c476f0"
+ },
+ {
+  "name": "settings-json-over-cap",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "settings.ts",
+    "x"
+   ],
+   [
+    "settings.json",
+    {
+     "$gen": {
+      "repeat": "x",
+      "count": 8193,
+      "suffix": ""
+     }
+    }
+   ]
+  ],
+  "issues": [
+   {
+    "file": "settings.json",
+    "message": "larger than 8192 bytes"
+   }
+  ],
+  "sha256": "2981c6090f1884c7e24793a0bca4597d9872fc9156970d8dd6bb5a40acd5b028"
+ },
+ {
+  "name": "bad-settings-path \"Settings.ts\"",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "Settings.ts",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "Settings.ts",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "962300cd086d5a4bf5bae462af2c9d2623501b41ff623ff9039f68018f94c4d2"
+ },
+ {
+  "name": "bad-settings-path \"settings.jsonc\"",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "settings.jsonc",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "settings.jsonc",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "813f2d0132af22540c8f075d4068f5717fe8a99b747ad88b5f1ebc9be8517c9a"
+ },
+ {
+  "name": "bad-settings-path \"lib/settings.json\"",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "lib/settings.json",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "lib/settings.json",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "9b8086eef6a30f439bf8df613c68a06b14c9eab1339f273feeb752803bb716e5"
+ },
+ {
+  "name": "bad-settings-path \"fixtures/settings.ts\"",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "fixtures/settings.ts",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "fixtures/settings.ts",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "e6bd006c5ecfae16cfeec46685e73c7e8cded8e6700dfc125a5d6267bdcf3865"
+ },
+ {
+  "name": "bad-settings-path \"settings.tsx\"",
+  "files": [
+   [
+    "manifest.ts",
+    "export const manifest = {};\n"
+   ],
+   [
+    "schema.ts",
+    "export const schema = {};\n"
+   ],
+   [
+    "Template.tsx",
+    "export const Template = () => null;\n"
+   ],
+   [
+    "validate.ts",
+    "export const validate = () => [];\n"
+   ],
+   [
+    "writing-guide.md",
+    "# Guide\n"
+   ],
+   [
+    "fixtures/a.json",
+    "{}"
+   ],
+   [
+    "fixtures/b-edge.json",
+    "{}"
+   ],
+   [
+    "fixtures/c.json",
+    "{}"
+   ],
+   [
+    "settings.tsx",
+    "x"
+   ]
+  ],
+  "issues": [
+   {
+    "file": "settings.tsx",
+    "message": "path not allowed"
+   }
+  ],
+  "sha256": "a1c73a9fffd8f390157901adb1bd21e25fb1e942953fa847e912b28ccf42b3f8"
+ },
+ {
   "name": "sort-order-utf16",
   "files": [
    [
