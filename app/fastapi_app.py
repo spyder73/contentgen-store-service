@@ -753,7 +753,10 @@ def create_fastapi_app() -> FastAPI:
         if not data:
             raise HTTPException(status_code=400, detail="empty body")
         mime_type = request.headers.get("Content-Type", "application/octet-stream")
-        ok = await media.store_file_data(session, id, data, mime_type, user_id=user_id)
+        try:
+            ok = await media.store_file_data(session, id, data, mime_type, user_id=user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if not ok:
             raise HTTPException(status_code=404, detail="not_found")
 
@@ -910,7 +913,10 @@ def create_fastapi_app() -> FastAPI:
     async def upsert_media_handler(id: str, body: MediaItemIn, request: Request, session: SessionDep) -> Any:
         user_id = _require_user_id(request)
         body.id = id
-        return await media.upsert_media(session, body, user_id=user_id)
+        try:
+            return await media.upsert_media(session, body, user_id=user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.patch("/v1/media/{id}", response_model=MediaItemOut)
     async def patch_media_handler(
@@ -920,7 +926,10 @@ def create_fastapi_app() -> FastAPI:
         session: SessionDep,
     ) -> Any:
         user_id = _require_user_id(request)
-        result = await media.patch_media(session, id, body, user_id=user_id)
+        try:
+            result = await media.patch_media(session, id, body, user_id=user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if result is None:
             raise HTTPException(status_code=404, detail="not_found")
         return result

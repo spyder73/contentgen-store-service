@@ -341,6 +341,14 @@ async def get_related_media(
 async def upsert_media(
     session: AsyncSession, body: MediaItemIn, user_id: str | None = None
 ) -> MediaItemOut:
+    # A frozen asset's row is never overwritten (I1): `ON CONFLICT DO UPDATE` below would otherwise
+    # rewrite its bytes/metadata out from under an approved version. media_is_frozen is false for an
+    # id with no row yet, so a genuinely new id is unaffected.
+    from app.stores.clipstyle_assets import media_is_frozen  # local: clipstyle_assets imports this module
+
+    if await media_is_frozen(session, body.id):
+        raise ValueError("media_frozen_in_clipstyle")
+
     data = {
         "id": body.id,
         "clip_id": body.clip_id,
@@ -395,6 +403,20 @@ async def patch_media(
     if not values:
         return await get_media(session, id, user_id=user_id)
 
+    # A frozen asset's bytes or `kind` can never change (I1: `file_url` is the bytes a render
+    # stages; `kind` is what makes it hidden). Ownership is checked first (`_get_owned`), so a
+    # non-owner's id 404s instead of leaking frozen status for a row they can't see (M5), the same
+    # ordering `delete_media` uses.
+    if body.file_url is not None or (body.metadata_merge and "kind" in body.metadata_merge):
+        owned = await _get_owned(session, id, user_id)
+        if owned is None:
+            return None
+
+        from app.stores.clipstyle_assets import media_is_frozen  # local: clipstyle_assets imports this module
+
+        if await media_is_frozen(session, id):
+            raise ValueError("media_frozen_in_clipstyle")
+
     stmt = (
         update(MediaItem)
         .where(
@@ -420,6 +442,23 @@ async def delete_media(
 ) -> bool:
     if not user_id:
         raise ValueError("delete_media requires user_id")
+
+    # Ownership and the FOR UPDATE lock are taken together (I2, M5): the WHERE clause is the same
+    # ownership filter the DELETE itself uses, so a non-owner's id (or someone else's) comes back
+    # None here and 404s upstream, same as before, rather than leaking frozen status for a row the
+    # caller can't see. The lock then closes the delete/freeze race: `freeze_assets` takes FOR SHARE
+    # on the same media row, so under READ COMMITTED either this delete blocks until a concurrent
+    # approval's freeze commits (and then sees the row still present, so it must re-check frozen —
+    # see below) or the freeze blocks until this delete's outcome is decided (and then sees the row
+    # gone, raising package_asset_missing instead of inserting a dangling asset). sqlite ignores
+    # FOR UPDATE, so existing tests are unaffected.
+    locked = await session.execute(
+        select(MediaItem)
+        .where(MediaItem.id == id, (MediaItem.user_id == user_id) | (MediaItem.user_id.is_(None)))
+        .with_for_update()
+    )
+    if locked.scalar_one_or_none() is None:
+        return False
 
     from app.stores.clipstyle_assets import media_is_frozen  # local: clipstyle_assets imports this module
 
@@ -493,6 +532,12 @@ async def store_file_data(
     row = await _get_owned(session, id, user_id)
     if row is None:
         return False
+
+    from app.stores.clipstyle_assets import media_is_frozen  # local: clipstyle_assets imports this module
+
+    if await media_is_frozen(session, id):
+        raise ValueError("media_frozen_in_clipstyle")
+
     # AI-generated images (the backend stamps ai_generated into the row's
     # metadata before uploading bytes) get the XMP provenance packet embedded
     # in the file itself; everything else — uploads included — passes through
@@ -629,8 +674,13 @@ async def get_media_stats(session: AsyncSession, user_id: str | None = None) -> 
     # facet totals the UI shows on the type/source chips — derived here over the
     # WHOLE library so a type/source absent from the current page never reads as
     # "0 videos". Counting both facets in one grouped pass keeps it a single scan.
+    # Hidden clipstyle media (HIDDEN_MEDIA_KINDS) never counts here either (M4): otherwise an
+    # owner's uploaded asset inflates the library total and its type chip while the grid, which
+    # applies the same filter, shows nothing for it.
     src = MediaItem.metadata_["source"].astext
-    query = select(MediaItem.type, src.label("source"), func.count().label("cnt"))
+    query = select(MediaItem.type, src.label("source"), func.count().label("cnt")).where(
+        _not_clipstyle_preview_filter_expr()
+    )
     if user_id:
         query = query.where(MediaItem.user_id == user_id)
     query = query.group_by(MediaItem.type, src)

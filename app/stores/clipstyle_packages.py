@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models import RenderTemplate
 from ..schemas import RenderTemplateIn, RenderTemplateOut
 from . import media as media_store
-from .clipstyle_assets import freeze_assets
+from .clipstyle_assets import check_assets_owned, freeze_assets
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +237,16 @@ def apply_package_body(row: RenderTemplate, body: RenderTemplateIn) -> None:
     row.validation_report_json = {}
     row.approved_at = None
     row.preview_url = None
+
+
+async def check_package_assets_owned(session: AsyncSession, row: RenderTemplate) -> None:
+    """The review's spec ⚠: `check_package_config` (called from `apply_package_body`, synchronously,
+    with no DB access) only checks `config.assets`' shape. The ownership/kind check — the same one
+    `freeze_assets` runs at approval — must also run here, with DB access, on every package
+    create/update (render_templates.create_template/update_template), not only at approval. So a
+    draft's config can never name another user's, or a non-asset, media id; its previews (staged by
+    the bridge using the internal secret, Task 3.7) can never render media that isn't the owner's."""
+    await check_assets_owned(session, row.config or {}, row.user_id)
 
 
 def _check_report_size(report: dict) -> None:

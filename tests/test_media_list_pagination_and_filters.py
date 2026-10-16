@@ -499,3 +499,32 @@ def test_single_get_still_returns_a_clipstyle_preview_row():
             await engine.dispose()
 
     asyncio.run(run())
+
+
+def test_media_stats_hides_clipstyle_asset_rows():
+    """M4 (3.6 fix round 1): get_media_stats applies the same HIDDEN_MEDIA_KINDS filter list_media
+    does. Before the fix, an owner's uploaded brand asset (clipstyle_asset) inflated the total and
+    image chips while the grid, which already filtered it out, showed nothing for it."""
+
+    async def run():
+        uid = str(uuid.uuid4())
+        engine, factory = await _make_engine_factory()
+        try:
+            base = datetime(2026, 6, 13, 10, 0, 0, tzinfo=timezone.utc)
+            await _seed(
+                factory,
+                [
+                    dict(id=str(uuid.uuid4()), user_id=uid, type="image",
+                         file_url="/m/normal.png", metadata_={}, created_at=base),
+                    dict(id=str(uuid.uuid4()), user_id=uid, type="image",
+                         file_url="/m/logo.png", metadata_={"kind": media_store.CLIPSTYLE_ASSET_KIND},
+                         created_at=base),
+                ],
+            )
+            async with factory() as s:
+                stats = await media_store.get_media_stats(s, user_id=uid)
+            assert (stats.total, stats.image) == (1, 1)
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())

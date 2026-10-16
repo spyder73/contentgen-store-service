@@ -50,7 +50,11 @@ def test_config_assets_shape():
                 {"logo": {"sha256": "x", "media_id": M1, "mime": "image/png"}},
                 {"logo": {"sha256": SHA, "media_id": M1, "mime": "image/svg+xml"}},
                 {"logo": {"sha256": SHA, "media_id": "", "mime": "image/png"}},
-                {"logo": {"sha256": SHA, "media_id": "m-1", "mime": "image/png"}}):
+                {"logo": {"sha256": SHA, "media_id": "m-1", "mime": "image/png"}},
+                # M6: an extra key, a non-dict entry, and a non-string sha.
+                {"logo": {"sha256": SHA, "media_id": M1, "mime": "image/png", "extra": "x"}},
+                {"logo": "not-a-dict"},
+                {"logo": {"sha256": 12345, "media_id": M1, "mime": "image/png"}}):
         with pytest.raises(ValueError, match="invalid_package_config:assets"):
             cp.check_package_config(_config(**bad))
     with pytest.raises(ValueError, match="invalid_package_config:assets"):
@@ -113,14 +117,121 @@ def test_approval_refuses_an_asset_that_is_not_the_owners_hidden_asset(media):
     assert _run([_row(logo=LOGO), *media], fn) == "validated"
 
 
-def test_a_frozen_asset_cannot_change_or_be_deleted():
+async def _approve(s):
+    await cp.set_package_status(s, "tpl-1", "approved", user_id=OWNER)
+
+
+def test_a_frozen_asset_cannot_be_deleted():
     async def fn(s):
-        await cp.set_package_status(s, "tpl-1", "approved", user_id=OWNER)
+        await _approve(s)
         with pytest.raises(ValueError, match="media_frozen_in_clipstyle"):
             await media_store.delete_media(s, M1, user_id=OWNER)
+        # M1: the media row itself survives the failed delete, not just the asset-row count.
+        assert await s.get(MediaItem, M1) is not None
         return len(await asset_store.list_assets(s, "tpl-1"))
 
     assert _run([_row(logo=LOGO), _media()], fn) == 1
+
+
+def test_deleting_someone_elses_frozen_asset_is_a_plain_404_not_a_409():
+    """M5: ownership is checked before the frozen check — a non-owner's id behaves like any other
+    id they don't own (not found), rather than leaking that it exists and is frozen."""
+    async def fn(s):
+        await _approve(s)
+        return await media_store.delete_media(s, M1, user_id=OTHER)
+
+    assert _run([_row(logo=LOGO), _media()], fn) is False
+
+
+def test_a_frozen_assets_bytes_cannot_be_overwritten():
+    """I1: PUT /v1/media/{id}/file -> store_file_data."""
+    async def fn(s):
+        await _approve(s)
+        with pytest.raises(ValueError, match="media_frozen_in_clipstyle"):
+            await media_store.store_file_data(s, M1, b"new-bytes", "image/png", user_id=OWNER)
+
+    _run([_row(logo=LOGO), _media()], fn)
+
+
+def test_a_frozen_assets_row_cannot_be_upserted():
+    """I1: PUT /v1/media/{id} -> upsert_media (ON CONFLICT DO UPDATE over every column)."""
+    from app.schemas import MediaItemIn
+
+    async def fn(s):
+        await _approve(s)
+        body = MediaItemIn(id=M1, type="image", metadata={"kind": "upload"})
+        with pytest.raises(ValueError, match="media_frozen_in_clipstyle"):
+            await media_store.upsert_media(s, body, user_id=OWNER)
+
+    _run([_row(logo=LOGO), _media()], fn)
+
+
+def test_a_frozen_assets_file_url_cannot_be_patched():
+    """I1: PATCH /v1/media/{id} -> patch_media, file_url set."""
+    from app.schemas import MediaItemPatch
+
+    async def fn(s):
+        await _approve(s)
+        with pytest.raises(ValueError, match="media_frozen_in_clipstyle"):
+            await media_store.patch_media(s, M1, MediaItemPatch(file_url="/media/uploads/new.png"), user_id=OWNER)
+
+    _run([_row(logo=LOGO), _media()], fn)
+
+
+def test_a_frozen_assets_kind_cannot_be_patched_away():
+    """I1: PATCH /v1/media/{id} -> patch_media, metadata_merge touching `kind` (would un-hide it)."""
+    from app.schemas import MediaItemPatch
+
+    async def fn(s):
+        await _approve(s)
+        with pytest.raises(ValueError, match="media_frozen_in_clipstyle"):
+            await media_store.patch_media(s, M1, MediaItemPatch(metadata_merge={"kind": "upload"}), user_id=OWNER)
+
+    _run([_row(logo=LOGO), _media()], fn)
+
+
+def test_a_draft_package_cannot_name_another_users_media_in_config_assets():
+    """The spec ⚠ (3.6 review): check_package_config checks only shape; the store must also check
+    ownership/kind at create/update time, refusing with the same error code the approval uses, so a
+    draft can never stage another user's media as a preview before it is ever approved."""
+    from app.schemas import RenderTemplateIn
+    from app.stores import render_templates
+
+    async def fn(s):
+        body = RenderTemplateIn(id="tpl-2", name="n", kind=cp.PACKAGE_KIND, source="agent_generated",
+                                 config=_config(logo=LOGO))
+        with pytest.raises(ValueError, match="package_asset_missing"):
+            await render_templates.create_template(s, body, user_id=OWNER)
+        await s.rollback()
+        return await s.get(RenderTemplate, "tpl-2")
+
+    assert _run([_media(user_id=OTHER)], fn) is None
+
+
+# ── HTTP: DELETE /v1/media/{id} -> 409 for a frozen asset (M3) ──────────────
+
+
+def test_deleting_a_frozen_asset_is_a_409_over_http(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from fastapi.testclient import TestClient
+
+    from app.db import get_session
+    from app.fastapi_app import create_fastapi_app
+
+    secret = "test-secret-xyz"
+    monkeypatch.setenv("INTERNAL_API_SECRET", secret)
+
+    async def _mock_session():
+        yield MagicMock()
+
+    app = create_fastapi_app()
+    app.dependency_overrides[get_session] = _mock_session
+    with TestClient(app) as client, patch(
+        "app.stores.media.delete_media", new=AsyncMock(side_effect=ValueError("media_frozen_in_clipstyle"))
+    ):
+        resp = client.delete(f"/v1/media/{M1}", headers={"X-User-ID": OWNER, "X-Internal-Secret": secret})
+    assert (resp.status_code, resp.json()["detail"]) == (409, "media_frozen_in_clipstyle")
 
 
 def test_asset_media_are_hidden_from_listings():

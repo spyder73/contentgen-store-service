@@ -85,6 +85,9 @@ async def create_template(
     row = RenderTemplate(id=body.id or _new_id())
     _apply_template_body(row, body)
     row.user_id = user_id
+    if row.kind == clipstyle_packages.PACKAGE_KIND:
+        # The spec ⚠ (3.6 review): check_package_config only checks config.assets' shape.
+        await clipstyle_packages.check_package_assets_owned(session, row)
     session.add(row)
     try:
         await session.commit()
@@ -106,6 +109,9 @@ async def update_template(
     old_report = row.validation_report_json
     _apply_template_body(row, body)
     row.user_id = user_id
+    if row.kind == clipstyle_packages.PACKAGE_KIND:
+        # The spec ⚠ (3.6 review): check_package_config only checks config.assets' shape.
+        await clipstyle_packages.check_package_assets_owned(session, row)
     # A package body edit, or a kind change away from a package, resets the report to {} above:
     # drop whatever preview media the old report referenced (M3/I-1 residual) in the same transaction.
     await clipstyle_packages.drop_stale_preview_media(session, id, user_id, old_report, row.validation_report_json)

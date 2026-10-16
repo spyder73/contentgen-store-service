@@ -43,6 +43,9 @@ def test_patch_media_compiles_to_one_owner_scoped_jsonb_merge_update():
     session = MagicMock()
     result = MagicMock()
     result.scalar_one_or_none.return_value = media_id
+    # `.first()` backs the I1 frozen check (media_is_frozen queries ClipstyleAsset via the same
+    # mocked session.execute): None means "not frozen", so the patch proceeds to the real UPDATE.
+    result.first.return_value = None
     session.execute = AsyncMock(return_value=result)
     session.commit = AsyncMock()
     session.rollback = AsyncMock()

@@ -32,7 +32,7 @@ def _uuid_sqlite(element, compiler, **kw):  # pragma: no cover - trivial
     return "VARCHAR(36)"
 
 
-from app.models import MediaItem  # noqa: E402  (after compiler registration)
+from app.models import ClipstyleAsset, MediaItem  # noqa: E402  (after compiler registration)
 from app.stores import media as media_store  # noqa: E402
 
 _PIL = derivatives._PIL_AVAILABLE
@@ -131,6 +131,9 @@ async def _make_factory():
     engine = create_async_engine("sqlite+aiosqlite://")
     async with engine.begin() as conn:
         await conn.run_sync(lambda c: MediaItem.__table__.create(c))
+        # store_file_data now checks ClipstyleAsset (I1, 3.6 fix round 1): the table must exist even
+        # though this test never freezes anything.
+        await conn.run_sync(lambda c: ClipstyleAsset.__table__.create(c))
     return engine, async_sessionmaker(engine, expire_on_commit=False)
 
 
