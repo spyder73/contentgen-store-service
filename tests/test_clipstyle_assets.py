@@ -61,6 +61,20 @@ def test_config_assets_shape():
         cp.check_package_config({**_config(), "assets": ["logo"]})
 
 
+def test_config_assets_shape_accepts_named_icons_up_to_twelve():
+    """A1 (named icon assets): `icon-<name>`, name [a-z0-9]{1,24}, up to MAX_ICON_ASSETS per style."""
+    icon_entry = {"sha256": SHA, "media_id": M1, "mime": "image/png"}
+    cp.check_package_config({**_config(), "assets": {"icon-claude": icon_entry}})
+    for bad_label in ("icon-Claude", "icon-", "icon-" + "a" * 25):
+        with pytest.raises(ValueError, match="invalid_package_config:assets"):
+            cp.check_package_config({**_config(), "assets": {bad_label: icon_entry}})
+    twelve_icons = {f"icon-i{i}": icon_entry for i in range(cp.MAX_ICON_ASSETS)}
+    cp.check_package_config({**_config(), "assets": twelve_icons})
+    thirteen_icons = {**twelve_icons, "icon-i12": icon_entry}
+    with pytest.raises(ValueError, match="invalid_package_config:assets"):
+        cp.check_package_config({**_config(), "assets": thirteen_icons})
+
+
 def _create_tables(sync_conn):
     for table in (RenderTemplate.__table__, MediaItem.__table__, ClipstyleAsset.__table__):
         ddl = str(CreateTable(table).compile(dialect=sync_conn.dialect))
@@ -104,6 +118,20 @@ def test_approval_freezes_the_config_assets():
         return [(a.label, a.sha256, a.media_id, a.mime) for a in await asset_store.list_assets(s, "tpl-1")]
 
     assert _run([_row(logo=LOGO), _media()], fn) == [("logo", SHA, M1, "image/png")]
+
+
+def test_approval_freezes_a_named_icon_asset():
+    """A1: a named icon (`icon-<name>`) freezes the same way a single-slot label does (sqlite)."""
+    config = {**_config(), "assets": {"icon-claude": LOGO}}
+    row = RenderTemplate(id="tpl-1", user_id=OWNER, name="n", kind="clipstyle_package", source="agent_generated",
+                         status="validated", visibility="private", config=config, validation_report_json=OK,
+                         created_at=datetime(2026, 10, 10, tzinfo=timezone.utc), updated_at=datetime(2026, 10, 10, tzinfo=timezone.utc))
+
+    async def fn(s):
+        await cp.set_package_status(s, "tpl-1", "approved", user_id=OWNER)
+        return [(a.label, a.sha256, a.media_id, a.mime) for a in await asset_store.list_assets(s, "tpl-1")]
+
+    assert _run([row, _media()], fn) == [("icon-claude", SHA, M1, "image/png")]
 
 
 @pytest.mark.parametrize("media", [[], [_media(user_id=OTHER)], [_media(kind="upload")]])
@@ -267,3 +295,16 @@ def test_migration_0039_sql_has_the_table_trigger_and_guarded_downgrade():
     down = subprocess.run([sys.executable, "-m", "alembic", "downgrade", "0039:0038", "--sql"],
                           cwd=root, env=env, capture_output=True, text=True, check=True).stdout
     assert "downgrade 0039 refused" in down
+
+
+def test_migration_0040_sql_relaxes_the_label_check():
+    """A1: migration 0040 widens the Postgres CHECK (PF5-1) to admit `icon-<name>`, with a downgrade
+    guarded while any named-icon asset rows exist."""
+    root = Path(__file__).resolve().parent.parent
+    env = {**os.environ, "DATABASE_URL": "postgresql+asyncpg://u:p@localhost/x"}
+    up = subprocess.run([sys.executable, "-m", "alembic", "upgrade", "0039:0040", "--sql"],
+                        cwd=root, env=env, capture_output=True, text=True, check=True).stdout
+    assert "icon-[a-z0-9]{1,24}" in up
+    down = subprocess.run([sys.executable, "-m", "alembic", "downgrade", "0040:0039", "--sql"],
+                          cwd=root, env=env, capture_output=True, text=True, check=True).stdout
+    assert "downgrade 0040 refused" in down
