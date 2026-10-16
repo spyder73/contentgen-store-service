@@ -166,6 +166,22 @@ def test_a_frozen_assets_row_cannot_be_upserted():
     _run([_row(logo=LOGO), _media()], fn)
 
 
+def test_upserting_someone_elses_frozen_asset_is_not_a_409():
+    """M7 (final cross-repo review): upsert_media must check ownership before the frozen check,
+    same ordering as delete_media's M5 fix — otherwise PUT /v1/media/{id} with any frozen id
+    answers 409 regardless of caller, leaking that the id is a frozen asset. A non-owner's id falls
+    through to the existing (already ownership-unscoped, out of scope here) upsert unchanged."""
+    from app.schemas import MediaItemIn
+
+    async def fn(s):
+        await _approve(s)
+        body = MediaItemIn(id=M1, type="image", metadata={"kind": "upload"})
+        result = await media_store.upsert_media(s, body, user_id=OTHER)
+        return result.id
+
+    assert _run([_row(logo=LOGO), _media()], fn) == M1
+
+
 def test_a_frozen_assets_file_url_cannot_be_patched():
     """I1: PATCH /v1/media/{id} -> patch_media, file_url set."""
     from app.schemas import MediaItemPatch

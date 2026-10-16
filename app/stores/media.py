@@ -344,10 +344,19 @@ async def upsert_media(
     # A frozen asset's row is never overwritten (I1): `ON CONFLICT DO UPDATE` below would otherwise
     # rewrite its bytes/metadata out from under an approved version. media_is_frozen is false for an
     # id with no row yet, so a genuinely new id is unaffected.
-    from app.stores.clipstyle_assets import media_is_frozen  # local: clipstyle_assets imports this module
+    #
+    # Ownership is checked first (M7 of the final cross-repo review, matching delete_media's M5):
+    # otherwise PUT /v1/media/{id} with any frozen id answers 409 regardless of caller, leaking that
+    # the id is a frozen asset. A non-owner's id (``_get_owned`` returns None) falls through to the
+    # existing upsert below unchanged — that upsert has no ownership scoping of its own (a
+    # pre-existing gap, out of scope here), so a non-owner's write still proceeds exactly as before
+    # this fix; only the frozen-status leak is closed.
+    owned = await _get_owned(session, body.id, user_id)
+    if owned is not None:
+        from app.stores.clipstyle_assets import media_is_frozen  # local: clipstyle_assets imports this module
 
-    if await media_is_frozen(session, body.id):
-        raise ValueError("media_frozen_in_clipstyle")
+        if await media_is_frozen(session, body.id):
+            raise ValueError("media_frozen_in_clipstyle")
 
     data = {
         "id": body.id,
