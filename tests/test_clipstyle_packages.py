@@ -104,6 +104,17 @@ def test_check_package_config_accepts_a_well_formed_package():
     cp.check_package_config(CONFIG)
 
 
+def test_check_package_config_takes_the_settings_files_and_caps_settings_json():
+    files = {**FILES, "settings.ts": "export const settings = {};\n", "settings.json": "{}\n"}
+    cp.check_package_config({**CONFIG, "files": files})
+    too_big = {**files, "settings.json": "x" * (cp.MAX_SETTINGS_BYTES + 1)}
+    with pytest.raises(ValueError, match="invalid_package_config:files.size$"):
+        cp.check_package_config({**CONFIG, "files": too_big})
+    for bad in ("Settings.ts", "settings.jsonc", "lib/settings.json"):
+        with pytest.raises(ValueError, match="invalid_package_config:files.path$"):
+            cp.check_package_config({**CONFIG, "files": {**FILES, bad: "x"}})
+
+
 @pytest.mark.parametrize(
     "current, target, report, expected",
     [

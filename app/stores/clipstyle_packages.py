@@ -36,13 +36,15 @@ MAX_VALIDATION_REPORT_BYTES = 2 * 1024 * 1024
 # (not only by the runner's check_files) so a bad path or an oversized package is refused at write
 # time (400) instead of only after a full validation round trip (M2).
 PACKAGE_PATH_PATTERN = re.compile(
-    r"(?:manifest\.ts|schema\.ts|Template\.tsx|validate\.ts|writing-guide\.md"
+    r"(?:manifest\.ts|schema\.ts|Template\.tsx|validate\.ts|writing-guide\.md|settings\.ts|settings\.json"
     r"|fixtures/(?!constructor\.json\Z)[a-z0-9][a-z0-9-]{0,63}\.json"
     r"|components/[A-Z][A-Za-z0-9]{0,63}\.tsx|lib/[a-z][A-Za-z0-9-]{0,63}\.ts)"
 )
 MAX_FILES = 48
 MAX_FILE_BYTES = 64 * 1024
 MAX_TOTAL_BYTES = 512 * 1024
+# settings.json is data (the style's setting values), capped like package-files.ts maxSettingsBytes.
+MAX_SETTINGS_BYTES = 8 * 1024
 _ALLOWED = {
     ("draft", "draft"), ("draft", "validated"), ("draft", "rejected"),
     ("validated", "draft"), ("validated", "validated"), ("validated", "approved"), ("validated", "rejected"),
@@ -52,7 +54,13 @@ _MANIFEST_ID = re.compile(r"[a-z][A-Za-z0-9]{2,47}")
 # Phase 4: the contract a style renders (design: "implements: <contract>@<version>").
 _IMPLEMENTS = re.compile(r"[a-z][A-Za-z0-9]{2,47}@[1-9][0-9]{0,5}")
 # Phase 4: brand assets (design labels; config.assets = {label: {sha256, media_id, mime}}).
-_ASSET_LABELS = ("logo", "wordmark", "texture", "background", "icon")
+# A1 (named icon assets): the single-slot labels, plus `icon-<name>` (name [a-z0-9]{1,24}); at most
+# MAX_ICON_ASSETS icons (icon and icon-<name> together) per style. Mirrors remotion clipkit
+# contract.ts ASSET_LABEL_PATTERN and modal_bridge/assets.py ASSET_LABEL.
+_ASSET_LABEL = re.compile(r"logo|wordmark|texture|background|icon|icon-[a-z0-9]{1,24}")
+_ICON_LABEL = re.compile(r"icon(?:-[a-z0-9]{1,24})?")
+MAX_ICON_ASSETS = 12
+MAX_ASSETS = 4 + MAX_ICON_ASSETS  # logo, wordmark, texture, background + 12 icons
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
@@ -99,7 +107,7 @@ def check_package_config(config: dict) -> None:
         if not PACKAGE_PATH_PATTERN.fullmatch(path):
             raise ValueError("invalid_package_config:files.path")
         size = len(_utf8(content))
-        if size > MAX_FILE_BYTES:
+        if size > MAX_FILE_BYTES or (path == "settings.json" and size > MAX_SETTINGS_BYTES):
             raise ValueError("invalid_package_config:files.size")
         total += size
     if total > MAX_TOTAL_BYTES:
@@ -110,10 +118,12 @@ def check_package_config(config: dict) -> None:
             raise ValueError("invalid_package_config:implements")
     if "assets" in config:
         assets = config["assets"]
-        if not isinstance(assets, dict) or len(assets) > len(_ASSET_LABELS):
+        if not isinstance(assets, dict) or len(assets) > MAX_ASSETS \
+                or sum(1 for k in assets if isinstance(k, str) and _ICON_LABEL.fullmatch(k)) > MAX_ICON_ASSETS:
             raise ValueError("invalid_package_config:assets")
         for label, entry in assets.items():
-            if (label not in _ASSET_LABELS or not isinstance(entry, dict) or set(entry) != {"sha256", "media_id", "mime"}
+            if (not isinstance(label, str) or not _ASSET_LABEL.fullmatch(label) or not isinstance(entry, dict)
+                    or set(entry) != {"sha256", "media_id", "mime"}
                     or not isinstance(entry["sha256"], str) or not _SHA256.fullmatch(entry["sha256"])
                     or not isinstance(entry["media_id"], str) or not _UUID.fullmatch(entry["media_id"])
                     or entry["mime"] not in ("image/png", "image/jpeg", "image/webp")):
