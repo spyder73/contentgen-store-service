@@ -1123,6 +1123,14 @@ class ClipstyleCatalogOut(BaseModel):
     approved_at: datetime | None = None
 
 
+# X-M8: only these checkpoint kinds may be reaped ("before a second user"'s two listed holds —
+# LoRA training and the builder's classify hold). A backend bug sending any other checkpoint (for
+# example a long clip_render) would otherwise be accepted and could reap a live hold; no money is
+# lost either way (a later settle debits only the actual cost), but `reserved` would drift until
+# then. Keep this in sync with the rules the backend actually sends (Task 4.7).
+_ALLOWED_STALE_HOLD_RULES = {("lora_training", "prefix"), ("builder_clipstyle_understand", "exact")}
+
+
 class StaleHoldRule(BaseModel):
     """One rule of POST /v1/internal/credits/reap-stale-holds: release open holds of this
     checkpoint kind once they are older than `older_than_s`."""
@@ -1130,6 +1138,12 @@ class StaleHoldRule(BaseModel):
     checkpoint: str = Field(pattern=r"^[a-z][a-z0-9_:.-]{1,63}$")
     match: Literal["prefix", "exact"]
     older_than_s: int = Field(ge=600, le=30 * 86400)
+
+    @model_validator(mode="after")
+    def allowlisted_checkpoint_kind(self) -> "StaleHoldRule":
+        if (self.checkpoint, self.match) not in _ALLOWED_STALE_HOLD_RULES:
+            raise ValueError("checkpoint_not_allowlisted")
+        return self
 
 
 class StaleHoldReapIn(BaseModel):

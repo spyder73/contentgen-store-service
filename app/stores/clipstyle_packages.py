@@ -172,7 +172,9 @@ def _bridge_media_ids(report: dict | None) -> list[str]:
     return ids
 
 
-async def drop_stale_preview_media(session: AsyncSession, template_id: str, user_id: str, old_report: dict | None, new_report: dict | None) -> None:
+async def drop_stale_preview_media(
+    session: AsyncSession, template_id: str, user_id: str, old_report: dict | None, new_report: dict | None
+) -> frozenset[str]:
     """Deletes the OLD report's preview media that the NEW report doesn't also carry, in the same
     transaction as whatever reset or replaced the report (a package body edit, a kind change away
     from a package, or a status PATCH that stores a newer report over an older one).
@@ -182,11 +184,14 @@ async def drop_stale_preview_media(session: AsyncSession, template_id: str, user
     `set_package_status`), so this never reaches an approved package's media.
 
     The delete runs inside a savepoint: a failure there is isolated and only logged, never allowed
-    to fail the edit that orphaned the media (final fix wave M3/I-1 residual).
+    to fail the edit that orphaned the media (final fix wave M3/I-1 residual). Returns the ids whose
+    delete failed (empty when there was nothing to delete, or the delete succeeded), so a caller
+    that must not lose them — archive's X-M4 orphan sweep — can keep them instead of losing them
+    for good.
     """
     old_ids = set(_bridge_media_ids(old_report)) - set(_bridge_media_ids(new_report))
     if not old_ids:
-        return
+        return frozenset()
     try:
         async with session.begin_nested():
             await media_store.delete_clipstyle_preview_media(session, user_id, old_ids)
@@ -195,6 +200,8 @@ async def drop_stale_preview_media(session: AsyncSession, template_id: str, user
             "clipstyle package %s: could not delete %d orphaned preview media for user %s",
             template_id, len(old_ids), user_id, exc_info=True,
         )
+        return frozenset(old_ids)
+    return frozenset()
 
 
 def apply_package_body(row: RenderTemplate, body: RenderTemplateIn) -> None:
@@ -239,6 +246,27 @@ async def _ensure_version_unique(session: AsyncSession, row: RenderTemplate) -> 
             raise ValueError("package_version_already_approved")
 
 
+async def _inherits_revoked(session: AsyncSession, row: RenderTemplate) -> bool:
+    """X-M3: a revoke can be routed around without "New version" by just resubmitting a fresh
+    draft of a higher version — M15 already covers the clone path, which copies `source.visibility`
+    before approval, but a plain new draft starts `private` regardless. So a fresh approval must
+    also inherit `revoked` when any other approved version of this same (owner, manifest.id) was
+    revoked, closing the gap the same way."""
+    manifest_id = row.config["manifest"]["id"]
+    stmt = select(RenderTemplate).where(
+        RenderTemplate.kind == PACKAGE_KIND,
+        RenderTemplate.status == "approved",
+        RenderTemplate.user_id == row.user_id,
+        RenderTemplate.visibility == "revoked",
+        RenderTemplate.id != row.id,
+    )
+    for other in (await session.execute(stmt)).scalars():
+        other_manifest = (other.config or {}).get("manifest") or {}
+        if other_manifest.get("id") == manifest_id:
+            return True
+    return False
+
+
 async def set_package_status(
     session: AsyncSession,
     id: str,
@@ -271,6 +299,8 @@ async def set_package_status(
     if new_status == "approved":
         await _ensure_version_unique(session, row)
         row.approved_at = datetime.now(timezone.utc)
+        if await _inherits_revoked(session, row):
+            row.visibility = "revoked"
     row.status = new_status
     if validation_report_json is not None:
         row.validation_report_json = validation_report_json

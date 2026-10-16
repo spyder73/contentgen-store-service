@@ -122,7 +122,29 @@ def test_usable_is_own_unrevoked_plus_everyones_published():
         usable = await store.list_usable(s, caller=OWNER)
         return [(u.template_id, u.caller_is_owner, u.implements) for u in usable]
 
-    assert _run(rows, fn) == [("theirs-published", False, "technologyCarousel@1"), ("mine", True, "technologyCarousel@1")]
+    # X-M2/B-M4: the caller's own rows come first (their own query), then everyone's published
+    # ones — not a single approved_at-desc ranking across both, which could drop the caller's own.
+    assert _run(rows, fn) == [("mine", True, "technologyCarousel@1"), ("theirs-published", False, "technologyCarousel@1")]
+
+
+def test_the_cap_never_drops_the_callers_own_styles(monkeypatch):
+    """X-M2/B-M4: once there are more newer published versions than the cap, the caller's own older
+    approved style must still show — it is a separate, first-run, bounded query, never truncated by
+    everyone else's published rows."""
+    monkeypatch.setattr(store, "MAX_USABLE", 2)
+    rows = [
+        _row("mine", age=10),  # the caller's only style, older than every published row below
+        _row("pub-1", style="pubA", user_id=OTHER, visibility="published", age=1),
+        _row("pub-2", style="pubB", user_id=OTHER, visibility="published", age=2),
+        _row("pub-3", style="pubC", user_id=OTHER, visibility="published", age=3),
+    ]
+
+    async def fn(s):
+        return [u.template_id for u in await store.list_usable(s, caller=OWNER)]
+
+    out = _run(rows, fn)
+    assert "mine" in out  # never dropped by the cap, however many newer published rows exist
+    assert len(out) <= 2  # the cap is still honoured
 
 
 def test_a_clone_of_a_revoked_version_stays_revoked():
@@ -258,3 +280,35 @@ def test_archiving_a_draft_package_drops_its_bridge_media(monkeypatch):
     status, report = _run([row], fn)
     assert status == "archived" and report == {}
     assert dropped == [("d1", ["p-1", "b-1"], {})]
+
+
+def test_archive_is_safe_against_a_racing_approval(monkeypatch):
+    """X-M1: archive is a conditional UPDATE ... WHERE status <> 'approved', not
+    session.get -> mutate -> commit, so an approval that lands between archive's own (now-stale)
+    initial guard check and its write still wins — the row is never archived and its frozen
+    bundle's media is never deleted. `guard_package_archive` is bypassed here to stand in for the
+    stale initial read of a real race (it would have passed before the race, just like the
+    now-superseded guard in `set_visibility`'s own pre-fix history)."""
+    from app.stores import clipstyle_packages as cp
+    from app.stores import render_templates
+
+    monkeypatch.setattr(cp, "guard_package_archive", lambda row: None)
+    dropped = []
+
+    async def fake_drop(session, template_id, user_id, old, new):
+        dropped.append((template_id, old, new))
+
+    monkeypatch.setattr(cp, "drop_stale_preview_media", fake_drop)
+    row = _row("p1", status="approved")
+    row.validation_report_json = {"render_bundle": {"sha256": "a" * 64, "media_id": "b-1", "image_ref": "r"}}
+
+    async def fn(s):
+        with pytest.raises(ValueError, match="package_immutable"):
+            await render_templates.archive_template(s, "p1", user_id=OWNER)
+        archived = await s.get(RenderTemplate, "p1", populate_existing=True)
+        return archived.status, archived.validation_report_json
+
+    status, report = _run([row], fn)
+    assert status == "approved"
+    assert report == {"render_bundle": {"sha256": "a" * 64, "media_id": "b-1", "image_ref": "r"}}
+    assert dropped == []

@@ -171,31 +171,58 @@ async def set_visibility(
     return {"id": id, "visibility": visibility}
 
 
+def _usable_columns(config):
+    return (
+        RenderTemplate.id,
+        RenderTemplate.user_id,
+        RenderTemplate.visibility,
+        config[("manifest", "id")].as_string().label("style"),
+        config[("manifest", "version")].as_string().label("version"),
+        config["implements"].as_string().label("implements"),
+    )
+
+
 async def list_usable(session: AsyncSession, *, caller: str) -> list[ClipstyleUsableOut]:
     """Approved package rows the caller may use: their own except revoked, plus everyone's
     published ones (design § Visibility and publishing). Selects only the columns and JSON paths
-    it answers with, as resolve_package does (M-22): no package files, ever."""
+    it answers with, as resolve_package does (M-22): no package files, ever.
+
+    X-M2/B-M4: two bounded queries, the caller's own rows first — never a single approved_at-desc
+    ranking across both pools, which could drop the caller's own older styles once there are more
+    than `MAX_USABLE` newer published ones. The published query excludes the caller's own rows (own
+    rows are already covered by the first query) so a caller's own published style is never listed
+    twice, and its budget is whatever the own query left under the cap.
+    """
     config = type_coerce(RenderTemplate.config, JSON)
-    stmt = (
-        select(
-            RenderTemplate.id,
-            RenderTemplate.user_id,
-            RenderTemplate.visibility,
-            config[("manifest", "id")].as_string().label("style"),
-            config[("manifest", "version")].as_string().label("version"),
-            config["implements"].as_string().label("implements"),
-        )
+    own_stmt = (
+        select(*_usable_columns(config))
         .where(
             RenderTemplate.kind == PACKAGE_KIND,
             RenderTemplate.status == "approved",
-            ((RenderTemplate.user_id == caller) & (RenderTemplate.visibility != "revoked"))
-            | (RenderTemplate.visibility == "published"),
+            RenderTemplate.user_id == caller,
+            RenderTemplate.visibility != "revoked",
         )
         .order_by(RenderTemplate.approved_at.desc(), RenderTemplate.id)
         .limit(MAX_USABLE)
     )
+    own_rows = list(await session.execute(own_stmt))
+    remaining = MAX_USABLE - len(own_rows)
+    published_rows = []
+    if remaining > 0:
+        published_stmt = (
+            select(*_usable_columns(config))
+            .where(
+                RenderTemplate.kind == PACKAGE_KIND,
+                RenderTemplate.status == "approved",
+                RenderTemplate.visibility == "published",
+                RenderTemplate.user_id != caller,
+            )
+            .order_by(RenderTemplate.approved_at.desc(), RenderTemplate.id)
+            .limit(remaining)
+        )
+        published_rows = list(await session.execute(published_stmt))
     out = []
-    for row in await session.execute(stmt):
+    for row in own_rows + published_rows:
         if row.style is None or row.version is None:
             continue
         owner = None if row.user_id is None else str(row.user_id)

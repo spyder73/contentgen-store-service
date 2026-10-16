@@ -529,6 +529,29 @@ def test_the_owner_of_an_id_can_approve_new_versions(db):
     assert [r.id for r in _run(db, cp.list_approved_packages)] == ["v1", "v2"]
 
 
+def test_a_new_version_inherits_revoked_when_an_earlier_one_was(db):
+    """X-M3: a revoke can't be routed around by just resubmitting a new draft (not only by cloning,
+    M15) — approving a higher version of the same (owner, manifest.id) inherits `revoked` when any
+    approved version of that same style is revoked."""
+    from app.stores import clipstyle_render
+
+    _create(db, id="v1")
+    _status(db, "validated", id="v1", validation_report_json=OK)
+    _status(db, "approved", id="v1")
+    revoked = _run(db, lambda s: clipstyle_render.set_visibility(s, "v1", "revoked", admin=True))
+    assert revoked == {"id": "v1", "visibility": "revoked"}
+
+    _create(db, id="v2", config={**CONFIG, "manifest": {**CONFIG["manifest"], "version": 2}})
+    _status(db, "validated", id="v2", validation_report_json=OK)
+    approved = _status(db, "approved", id="v2")
+    assert (approved.status, approved.visibility) == ("approved", "revoked")
+
+    from app.models import RenderTemplate
+
+    row = _run(db, lambda s: s.get(RenderTemplate, "v2"))
+    assert row.visibility == "revoked"
+
+
 # ── fix round 1 ─────────────────────────────────────────────────────────────
 
 
@@ -845,3 +868,25 @@ def test_a_failed_delete_does_not_fail_the_edit(db):
         )
     assert (edited.status, edited.validation_report_json) == ("draft", {})
     assert _media_present(db, [sheet]) == {sheet}  # cleanup failed (logged), but the edit still landed
+
+
+def test_archiving_keeps_the_media_ids_when_the_delete_fails(db):
+    """X-M4: unlike the edit path above, archive must not lose the ids when the bridge-media delete
+    fails — they are kept in the report (`{"orphaned_media": [...]}`) for a later sweep, instead of
+    being cleared to `{}` and orphaning the media for good."""
+    from app.stores import render_templates as rt
+
+    _create(db)
+    sheet = str(uuid.uuid4())
+    _seed_media(db, [_media_row(sheet)])
+    _status(db, "validated", validation_report_json=_report_with_previews(sheet))
+    with patch("app.stores.clipstyle_packages.media_store.delete_clipstyle_preview_media", new=AsyncMock(side_effect=RuntimeError("boom"))):
+        ok = _run(db, lambda s: rt.archive_template(s, "tpl-1", user_id=UID))
+    assert ok is True
+
+    from app.models import RenderTemplate
+
+    row = _run(db, lambda s: s.get(RenderTemplate, "tpl-1"))
+    assert row.status == "archived"
+    assert row.validation_report_json == {"orphaned_media": [sheet]}
+    assert _media_present(db, [sheet]) == {sheet}  # cleanup failed (logged), but kept for a later sweep

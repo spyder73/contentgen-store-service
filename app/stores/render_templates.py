@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import defer
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -123,9 +123,30 @@ async def archive_template(session: AsyncSession, id: str, *, user_id: str) -> b
         # Phase 4 (M-6): an archived draft keeps its small config, not its previews and render
         # bundle (bridge media, megabytes each): the report that referenced them goes too.
         old_report = row.validation_report_json
-        row.validation_report_json = {}
-        row.preview_url = None
-        await clipstyle_packages.drop_stale_preview_media(session, id, user_id, old_report, {})
+        # X-M1: a conditional UPDATE, never session.get -> mutate -> commit, so an approval that
+        # lands between the guard above (a stale, point-in-time read) and this write still wins —
+        # the WHERE is evaluated by the database against the row as it is right now, not against
+        # what we read earlier. 0 rows affected means someone else's approval won in between.
+        stmt = (
+            update(RenderTemplate)
+            .where(RenderTemplate.id == id, RenderTemplate.user_id == user_id, RenderTemplate.status != "approved")
+            .values(status="archived", preview_url=None, validation_report_json={})
+            .returning(RenderTemplate.id)
+        )
+        if (await session.execute(stmt)).scalar_one_or_none() is None:
+            await session.rollback()
+            raise ValueError("package_immutable")
+        # X-M4: a failed delete must not lose the ids — keep them in the report for a later sweep
+        # instead of silently orphaning the bridge media for good. Safe to mutate the row directly
+        # now: once archived, guard_package_update/guard_package_archive freeze it, so nothing can
+        # race this second write.
+        failed = await clipstyle_packages.drop_stale_preview_media(session, id, user_id, old_report, {})
+        if failed:
+            await session.execute(
+                update(RenderTemplate).where(RenderTemplate.id == id).values(validation_report_json={"orphaned_media": sorted(failed)})
+            )
+        await session.commit()
+        return True
     row.status = "archived"
     await session.commit()
     return True

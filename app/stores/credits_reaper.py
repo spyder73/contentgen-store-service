@@ -51,7 +51,7 @@ async def reap_stale_holds(session: AsyncSession, rules: list[dict], *, now: dat
                   "pattern": rule["checkpoint"] + ":", "plen": len(rule["checkpoint"]) + 1,  # M11: a literal prefix, no LIKE wildcards
                   "checkpoint": rule["checkpoint"], "limit": limit - len(reaped)}
         stale = (await session.execute(_STALE_SQL, params)).all()
-        for user_id, run_id, checkpoint_id, attempt, amount in stale:
+        for user_id, run_id, checkpoint_id, attempt, _amount in stale:
             try:
                 out = await credits.release(session, user_id=str(user_id), pipeline_run_id=str(run_id), reason="stale_hold_reaped",
                                             idempotency_key=f"reap:{run_id}:{checkpoint_id}:{attempt}",
@@ -66,7 +66,15 @@ async def reap_stale_holds(session: AsyncSession, rules: list[dict], *, now: dat
                     run_id, checkpoint_id, attempt, exc_info=True,
                 )
                 continue
-            if out.get("status") == "released":
-                reaped.append({"user_id": str(user_id), "pipeline_run_id": str(run_id), "checkpoint_id": checkpoint_id,
-                               "attempt": int(attempt), "credits": int(amount)})
+            if out.get("status") != "released":
+                # X-M10 M4: already_released/nothing_to_release write nothing, but release()'s
+                # FOR NO KEY UPDATE user-row lock is still held until the transaction ends. Free it
+                # now instead of leaving it held for the rest of the pass.
+                await session.rollback()
+                continue
+            # X-M10 M2: report what release() actually returned, not this query's own SUM — its
+            # WHERE filters by age before grouping, so it can undercount a group that also has a
+            # fresher hold row release() still returns in full (see the reaper's own tests).
+            reaped.append({"user_id": str(user_id), "pipeline_run_id": str(run_id), "checkpoint_id": checkpoint_id,
+                           "attempt": int(attempt), "credits": int(out["returned"])})
     return reaped
