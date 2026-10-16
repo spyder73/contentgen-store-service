@@ -38,6 +38,11 @@ CLIPSTYLE_PREVIEW_KIND = "clipstyle_preview"
 CLIPSTYLE_BUNDLE_KIND = "clipstyle_bundle"
 BRIDGE_MEDIA_KINDS = (CLIPSTYLE_PREVIEW_KIND, CLIPSTYLE_BUNDLE_KIND)
 
+# Brand assets the owner uploads in the clipstyle builder (Phase 4): hidden like the bridge's media,
+# deleted only by their owner, never while a frozen version uses them (clipstyle_assets).
+CLIPSTYLE_ASSET_KIND = "clipstyle_asset"
+HIDDEN_MEDIA_KINDS = (*BRIDGE_MEDIA_KINDS, CLIPSTYLE_ASSET_KIND)
+
 # Generated videos are stored with type "ai_video", but the library's type chip
 # (and the per-type facet counts) speak of "video". Bucket both raw column values
 # under the "video" facet so a ``type=video`` filter and the video count include
@@ -94,14 +99,15 @@ def _has_controlnet_filter_expr():
 
 
 def _not_clipstyle_preview_filter_expr():
-    """Exclude bridge-uploaded clipstyle preview media (CLIPSTYLE_PREVIEW_KIND) from listings.
+    """Exclude hidden clipstyle media (HIDDEN_MEDIA_KINDS: bridge previews/bundles and brand assets)
+    from listings.
 
-    NULL-safe on purpose: a row with no metadata, or metadata with no `kind` key, is not a preview
-    and must stay included. A bare ``!= CLIPSTYLE_PREVIEW_KIND`` would evaluate to NULL (and so drop
-    the row) whenever `kind` is missing, since SQL NULL comparisons are never true.
+    NULL-safe on purpose: a row with no metadata, or metadata with no `kind` key, is not hidden
+    and must stay included. A bare ``!= ...`` would evaluate to NULL (and so drop the row) whenever
+    `kind` is missing, since SQL NULL comparisons are never true.
     """
     kind = MediaItem.metadata_["kind"].astext
-    return kind.is_(None) | kind.notin_(BRIDGE_MEDIA_KINDS)
+    return kind.is_(None) | kind.notin_(HIDDEN_MEDIA_KINDS)
 
 
 def _order_by(sort: str):
@@ -414,6 +420,12 @@ async def delete_media(
 ) -> bool:
     if not user_id:
         raise ValueError("delete_media requires user_id")
+
+    from app.stores.clipstyle_assets import media_is_frozen  # local: clipstyle_assets imports this module
+
+    if await media_is_frozen(session, id):
+        raise ValueError("media_frozen_in_clipstyle")
+
     stmt = delete(MediaItem).where(
         MediaItem.id == id,
         (MediaItem.user_id == user_id) | (MediaItem.user_id.is_(None)),

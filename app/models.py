@@ -897,3 +897,22 @@ class ClipstyleRenderBundle(Base):
     __table_args__ = (
         UniqueConstraint("template_id", "image_ref", name="ux_clipstyle_render_bundles_template_image"),
     )
+
+
+class ClipstyleAsset(Base):
+    """A brand asset frozen with an approved clipstyle package version (migration 0039).
+
+    Append-only (database trigger); one row per (version, label), inserted in the approval's own
+    transaction. The label/sha/mime CHECKs live in the migration only (sqlite test engines)."""
+
+    __tablename__ = "clipstyle_assets"
+
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    template_id: Mapped[str] = mapped_column(Text, ForeignKey("render_templates.id", ondelete="RESTRICT"), nullable=False)
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    media_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    mime: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("template_id", "label", name="ux_clipstyle_assets_template_label"),)

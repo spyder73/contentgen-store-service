@@ -1149,3 +1149,14 @@ class StaleHoldRule(BaseModel):
 class StaleHoldReapIn(BaseModel):
     rules: list[StaleHoldRule] = Field(min_length=1, max_length=10)
     limit: int = Field(default=200, ge=1, le=500)
+
+
+class ClipstyleAssetOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    template_id: str
+    label: str
+    sha256: str
+    media_id: str
+    mime: str
+    created_at: datetime

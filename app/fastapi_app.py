@@ -78,6 +78,7 @@ from .schemas import (
     ReviewCorrectionOut,
     ReviewTraceIn,
     ReviewTraceOut,
+    ClipstyleAssetOut,
     ClipstyleCatalogOut,
     ClipstylePackageMetadataPage,
     ClipstylePackageResolveOut,
@@ -115,6 +116,7 @@ from .stores import (
     users,
     clipstyle_package_metadata,
 )
+from app.stores import clipstyle_assets
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +148,8 @@ _TEMPLATE_CONFLICTS = (
     "package_not_approved",
     "package_revoked",
     "bundle_frozen",
+    "package_asset_missing",
+    "media_frozen_in_clipstyle",
 )
 
 
@@ -550,6 +554,10 @@ def create_fastapi_app() -> FastAPI:
     async def list_clipstyle_render_bundles_handler(id: str, session: SessionDep) -> Any:
         return await clipstyle_render.list_bundles(session, id)
 
+    @app.get("/v1/internal/clipstyle-packages/{id}/assets", response_model=list[ClipstyleAssetOut])
+    async def list_clipstyle_assets_handler(id: str, session: SessionDep) -> Any:
+        return await clipstyle_assets.list_assets(session, id)
+
     @app.get("/v1/internal/clipstyle-packages/catalog", response_model=list[ClipstyleCatalogOut])
     async def clipstyle_package_catalog_handler(session: SessionDep) -> Any:
         # Internal-secret gate only (middleware): the admin's catalog of every approved package
@@ -920,7 +928,10 @@ def create_fastapi_app() -> FastAPI:
     @app.delete("/v1/media/{id}", status_code=204)
     async def delete_media_handler(id: str, request: Request, session: SessionDep) -> None:
         user_id = _require_user_id(request)
-        deleted = await media.delete_media(session, id, user_id=user_id)
+        try:
+            deleted = await media.delete_media(session, id, user_id=user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if not deleted:
             raise HTTPException(status_code=404, detail="not_found")
 

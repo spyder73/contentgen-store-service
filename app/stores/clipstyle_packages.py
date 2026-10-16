@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models import RenderTemplate
 from ..schemas import RenderTemplateIn, RenderTemplateOut
 from . import media as media_store
+from .clipstyle_assets import freeze_assets
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,10 @@ _ALLOWED = {
 _MANIFEST_ID = re.compile(r"[a-z][A-Za-z0-9]{2,47}")
 # Phase 4: the contract a style renders (design: "implements: <contract>@<version>").
 _IMPLEMENTS = re.compile(r"[a-z][A-Za-z0-9]{2,47}@[1-9][0-9]{0,5}")
+# Phase 4: brand assets (design labels; config.assets = {label: {sha256, media_id, mime}}).
+_ASSET_LABELS = ("logo", "wordmark", "texture", "background", "icon")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
 def _template_out(row: RenderTemplate) -> RenderTemplateOut:
@@ -103,6 +108,16 @@ def check_package_config(config: dict) -> None:
         implements = config["implements"]
         if not isinstance(implements, str) or not _IMPLEMENTS.fullmatch(implements) or implements.split("@", 1)[0] == manifest["id"]:
             raise ValueError("invalid_package_config:implements")
+    if "assets" in config:
+        assets = config["assets"]
+        if not isinstance(assets, dict) or len(assets) > len(_ASSET_LABELS):
+            raise ValueError("invalid_package_config:assets")
+        for label, entry in assets.items():
+            if (label not in _ASSET_LABELS or not isinstance(entry, dict) or set(entry) != {"sha256", "media_id", "mime"}
+                    or not isinstance(entry["sha256"], str) or not _SHA256.fullmatch(entry["sha256"])
+                    or not isinstance(entry["media_id"], str) or not _UUID.fullmatch(entry["media_id"])
+                    or entry["mime"] not in ("image/png", "image/jpeg", "image/webp")):
+                raise ValueError("invalid_package_config:assets")
 
 
 def _check_report_ok_and_fresh(report: dict | None, files: dict[str, str]) -> None:
@@ -298,6 +313,7 @@ async def set_package_status(
     old_report = row.validation_report_json
     if new_status == "approved":
         await _ensure_version_unique(session, row)
+        await freeze_assets(session, row)
         row.approved_at = datetime.now(timezone.utc)
         if await _inherits_revoked(session, row):
             row.visibility = "revoked"
