@@ -914,9 +914,14 @@ def create_fastapi_app() -> FastAPI:
         user_id = _require_user_id(request)
         body.id = id
         try:
-            return await media.upsert_media(session, body, user_id=user_id)
+            result = await media.upsert_media(session, body, user_id=user_id)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # None (M7 fix round 2): a frozen id that isn't the caller's — refused like any other media
+        # they don't own, never revealing that it's frozen.
+        if result is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return result
 
     @app.patch("/v1/media/{id}", response_model=MediaItemOut)
     async def patch_media_handler(

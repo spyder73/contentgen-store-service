@@ -166,20 +166,23 @@ def test_a_frozen_assets_row_cannot_be_upserted():
     _run([_row(logo=LOGO), _media()], fn)
 
 
-def test_upserting_someone_elses_frozen_asset_is_not_a_409():
-    """M7 (final cross-repo review): upsert_media must check ownership before the frozen check,
-    same ordering as delete_media's M5 fix — otherwise PUT /v1/media/{id} with any frozen id
-    answers 409 regardless of caller, leaking that the id is a frozen asset. A non-owner's id falls
-    through to the existing (already ownership-unscoped, out of scope here) upsert unchanged."""
+def test_upserting_someone_elses_frozen_asset_never_overwrites_it():
+    """M7 fix round 2 (final cross-repo review): a non-owner's upsert of a frozen asset id must not
+    just dodge the 409 — it must never overwrite the row either, and must not reveal that it's
+    frozen. upsert_media returns None (the same "not found" shape the store uses for media you
+    don't own), and the row itself — owner, metadata, file_url — is unchanged afterwards."""
     from app.schemas import MediaItemIn
 
     async def fn(s):
         await _approve(s)
-        body = MediaItemIn(id=M1, type="image", metadata={"kind": "upload"})
+        body = MediaItemIn(id=M1, type="image", metadata={"kind": "upload"}, file_url="/evil.png")
         result = await media_store.upsert_media(s, body, user_id=OTHER)
-        return result.id
+        row = await s.get(MediaItem, M1)
+        return result, row.user_id, row.metadata_, row.file_url
 
-    assert _run([_row(logo=LOGO), _media()], fn) == M1
+    result, owner, metadata, file_url = _run([_row(logo=LOGO), _media()], fn)
+    assert result is None
+    assert (owner, metadata, file_url) == (OWNER, {"kind": "clipstyle_asset", "label": "logo"}, "")
 
 
 def test_a_frozen_assets_file_url_cannot_be_patched():

@@ -340,23 +340,31 @@ async def get_related_media(
 
 async def upsert_media(
     session: AsyncSession, body: MediaItemIn, user_id: str | None = None
-) -> MediaItemOut:
+) -> MediaItemOut | None:
     # A frozen asset's row is never overwritten (I1): `ON CONFLICT DO UPDATE` below would otherwise
-    # rewrite its bytes/metadata out from under an approved version. media_is_frozen is false for an
-    # id with no row yet, so a genuinely new id is unaffected.
+    # rewrite its bytes/metadata out from under an approved version. A row that is frozen always
+    # exists and is owned (freeze_assets only inserts for a real, owned, hidden-asset media row, and
+    # delete_media refuses to delete a frozen row — see I2), so checking `media_is_frozen` first,
+    # before touching ownership, is enough to know whether this id needs protecting at all:
+    # media_is_frozen is false for an id with no row yet, so a genuinely new id is unaffected.
     #
-    # Ownership is checked first (M7 of the final cross-repo review, matching delete_media's M5):
-    # otherwise PUT /v1/media/{id} with any frozen id answers 409 regardless of caller, leaking that
-    # the id is a frozen asset. A non-owner's id (``_get_owned`` returns None) falls through to the
-    # existing upsert below unchanged — that upsert has no ownership scoping of its own (a
-    # pre-existing gap, out of scope here), so a non-owner's write still proceeds exactly as before
-    # this fix; only the frozen-status leak is closed.
-    owned = await _get_owned(session, body.id, user_id)
-    if owned is not None:
-        from app.stores.clipstyle_assets import media_is_frozen  # local: clipstyle_assets imports this module
+    # M7 fix round 2 (final cross-repo review): once an id IS frozen, the caller's ownership decides
+    # the response, never a blind fall-through to the upsert below —
+    #   - the owner: raise `media_frozen_in_clipstyle` (409), as before;
+    #   - anyone else: behave exactly as the store does for media they don't own — refuse (return
+    #     None, mapped to 404 upstream) without ever revealing that the id is frozen, and without
+    #     writing anything. (Fix round 1's version let a non-owner fall through to this function's
+    #     separate, pre-existing lack of ownership scoping, which could overwrite a frozen row's
+    #     file_url/metadata/user_id for good; that was the regression this round closes.)
+    # A non-owner's upsert of a non-frozen id they don't own is unchanged — that pre-existing gap is
+    # tracked separately, postponed.
+    from app.stores.clipstyle_assets import media_is_frozen  # local: clipstyle_assets imports this module
 
-        if await media_is_frozen(session, body.id):
+    if await media_is_frozen(session, body.id):
+        owned = await _get_owned(session, body.id, user_id)
+        if owned is not None:
             raise ValueError("media_frozen_in_clipstyle")
+        return None
 
     data = {
         "id": body.id,
