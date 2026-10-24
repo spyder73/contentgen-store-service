@@ -661,6 +661,8 @@ class SeriesOut(BaseModel):
     # {"<checkpoint_id>": [{"source":"media"|"cast"|"episode:last_frame", …}]}
     slot_map: dict[str, Any] = {}
     parameters: dict[str, Any] = {}
+    # Per-series format brief — the show's genre and style, read by the crew.
+    format_brief: str = ""
     metadata: dict[str, Any] = {}
     created_at: datetime
     updated_at: datetime
@@ -676,6 +678,7 @@ class SeriesOut(BaseModel):
             memories=row.memories or [],
             slot_map=row.slot_map or {},
             parameters=row.parameters or {},
+            format_brief=row.format_brief or "",
             metadata=row.metadata_ or {},
             created_at=row.created_at,
             updated_at=row.updated_at,
@@ -702,6 +705,8 @@ class SeriesIn(BaseModel):
     # Pipeline parameters are strings — a number here means a caller is
     # inventing a second encoding for the same field.
     parameters: dict[str, str] | None = None
+    # Absent or null keeps the stored brief; a string, even "", is written.
+    format_brief: str | None = None
     metadata: dict[str, Any] = {}
 
     _check_memories = field_validator("memories")(_validate_memories)

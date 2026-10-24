@@ -592,6 +592,9 @@ class Series(Base):
     slot_map: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     # Free parameter bag applied to every episode run.
     parameters: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # The per-series format brief (0041): the only place the show's genre and
+    # style live. Crew agents read it; the engine carries none of its own.
+    format_brief: Mapped[str] = mapped_column(Text, nullable=False, default="")
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
