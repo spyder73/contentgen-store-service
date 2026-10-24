@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -661,6 +662,8 @@ class SeriesOut(BaseModel):
     # {"<checkpoint_id>": [{"source":"media"|"cast"|"episode:last_frame", …}]}
     slot_map: dict[str, Any] = {}
     parameters: dict[str, Any] = {}
+    # Per-series format brief — the show's genre and style, read by the crew.
+    format_brief: str = ""
     metadata: dict[str, Any] = {}
     created_at: datetime
     updated_at: datetime
@@ -676,6 +679,7 @@ class SeriesOut(BaseModel):
             memories=row.memories or [],
             slot_map=row.slot_map or {},
             parameters=row.parameters or {},
+            format_brief=row.format_brief or "",
             metadata=row.metadata_ or {},
             created_at=row.created_at,
             updated_at=row.updated_at,
@@ -702,6 +706,8 @@ class SeriesIn(BaseModel):
     # Pipeline parameters are strings — a number here means a caller is
     # inventing a second encoding for the same field.
     parameters: dict[str, str] | None = None
+    # Absent or null keeps the stored brief; a string, even "", is written.
+    format_brief: str | None = None
     metadata: dict[str, Any] = {}
 
     _check_memories = field_validator("memories")(_validate_memories)
@@ -1160,3 +1166,157 @@ class ClipstyleAssetOut(BaseModel):
     media_id: str
     mime: str
     created_at: datetime
+
+
+# ── operator chat (migration 0042) ───────────────────────────────────────────
+
+ChatThreadStatus = Literal["idle", "working"]
+ChatRole = Literal["user", "operator"]
+ChatKind = Literal["text", "tool", "approval", "run", "media", "error"]
+ChatAction = Literal["run.start", "run.continue", "image.generate", "clip.render"]
+ChatApprovalStatus = Literal["pending", "approved", "used", "declined", "expired"]
+
+
+def _uuid_or_none(value: str | None) -> str | None:
+    """Canonical form of a caller-minted id; anything that is not a UUID is a 422."""
+    if value is None:
+        return None
+    try:
+        return str(uuid.UUID(value))
+    except (ValueError, AttributeError, TypeError):
+        raise ValueError("must be a UUID")
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Naive means UTC; an aware time is converted, so every store dialect keeps the same instant."""
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+class ChatThreadIn(BaseModel):
+    # The caller may mint the id so a retried POST is idempotent.
+    id: str | None = None
+    title: str = ""
+    provider: str = ""
+    model: str = ""
+    series_id: str | None = None
+    transcript: list[Any] = []
+    known_media: list[Any] = []
+
+    _canonical_ids = field_validator("id", "series_id")(_uuid_or_none)
+
+
+class ChatThreadSummary(BaseModel):
+    """A thread as listed: no transcript, no known media."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    title: str = ""
+    provider: str = ""
+    model: str = ""
+    series_id: str | None = None
+    cost_usd: float = 0
+    status: ChatThreadStatus = "idle"
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChatThreadOut(ChatThreadSummary):
+    transcript: list[Any] = []
+    known_media: list[Any] = []
+
+
+class ChatThreadPatch(BaseModel):
+    """Every field optional; ``series_id`` is decided by presence, so an explicit null
+    unbinds the show. ``add_cost_usd`` is an atomic increment, never a replacement."""
+
+    title: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    series_id: str | None = None
+    transcript: list[Any] | None = None
+    known_media: list[Any] | None = None
+    status: ChatThreadStatus | None = None
+    add_cost_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+    _canonical_series = field_validator("series_id")(_uuid_or_none)
+
+
+class ChatMessageIn(BaseModel):
+    id: str | None = None
+    role: ChatRole
+    kind: ChatKind = "text"
+    text: str = ""
+    data: dict[str, Any] = {}
+
+    _canonical_id = field_validator("id")(_uuid_or_none)
+
+
+class ChatMessageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    thread_id: str
+    seq: int
+    role: ChatRole
+    kind: ChatKind
+    text: str = ""
+    data: dict[str, Any] = {}
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChatMessagePatch(BaseModel):
+    """``data`` replaces the stored data; it is not merged."""
+
+    text: str | None = None
+    data: dict[str, Any] | None = None
+
+
+class ChatApprovalIn(BaseModel):
+    id: str | None = None
+    message_id: str | None = None
+    action: ChatAction
+    subject: str = ""
+    amount_usd: float = Field(ge=0, allow_inf_nan=False)
+    summary: str = ""
+    breakdown: dict[str, Any] | list[Any] = {}
+
+    _canonical_ids = field_validator("id", "message_id")(_uuid_or_none)
+
+
+class ChatApprovalOut(BaseModel):
+    """Never carries ``token_sha256``: the hash is the credential ``consume`` takes."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    thread_id: str
+    message_id: str | None = None
+    action: ChatAction
+    subject: str = ""
+    amount_usd: float
+    summary: str = ""
+    breakdown: dict[str, Any] | list[Any] = {}
+    status: ChatApprovalStatus
+    expires_at: datetime | None = None
+    created_at: datetime
+    decided_at: datetime | None = None
+    used_at: datetime | None = None
+
+
+class ChatApprovalApprove(BaseModel):
+    token_sha256: str = Field(min_length=1, max_length=128)
+    expires_at: datetime
+
+    _utc = field_validator("expires_at")(_as_utc)
+
+
+class ChatApprovalConsume(BaseModel):
+    """Plain strings on purpose: a wrong action or subject is a named 409 refusal, not a 422."""
+
+    thread_id: str
+    token_sha256: str
+    action: str
+    subject: str
+    needed_usd: float = Field(ge=0, allow_inf_nan=False)

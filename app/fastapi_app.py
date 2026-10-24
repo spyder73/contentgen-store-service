@@ -71,6 +71,17 @@ from .schemas import (
     UserOut,
     ClipRatingIn,
     ClipRatingOut,
+    ChatApprovalApprove,
+    ChatApprovalConsume,
+    ChatApprovalIn,
+    ChatApprovalOut,
+    ChatMessageIn,
+    ChatMessageOut,
+    ChatMessagePatch,
+    ChatThreadIn,
+    ChatThreadOut,
+    ChatThreadPatch,
+    ChatThreadSummary,
     IdeaIn,
     IdeaOut,
     IdeaPatch,
@@ -92,6 +103,7 @@ from .schemas import (
 from .stores import (
     access,
     characters,
+    chat,
     clipstyle_packages,
     clipstyle_render,
     clips,
@@ -133,6 +145,17 @@ def _require_user_id(request: Request) -> str:
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id_required")
     return user_id
+
+
+def _chat_error(exc: chat.ChatError) -> HTTPException:
+    return HTTPException(status_code=exc.status_code, detail=exc.message)
+
+
+def _chat_found(row: Any, detail: str) -> Any:
+    """Another user's row is the same 404 as a missing one."""
+    if row is None:
+        raise HTTPException(status_code=404, detail=detail)
+    return row
 
 
 _TEMPLATE_CONFLICTS = (
@@ -1515,6 +1538,112 @@ def create_fastapi_app() -> FastAPI:
             session, user_id, template_id=template_id, label=label,
             limit=max(1, min(limit, 200)),
         )
+
+    # ── operator chat ────────────────────────────────────────────────────────
+    #
+    # Threads, their messages and the one-time spend approvals the operator's
+    # spend tools consume. Everything is scoped by X-User-ID; another user's
+    # row is a 404. token_sha256 goes in (approve, consume) and never comes out.
+
+    @app.post("/v1/chat/threads", response_model=ChatThreadOut)
+    async def create_chat_thread_handler(payload: ChatThreadIn, request: Request, session: SessionDep) -> Any:
+        user_id = _require_user_id(request)
+        try:
+            return await chat.create_thread(session, user_id, payload)
+        except chat.ChatError as exc:
+            raise _chat_error(exc)
+
+    @app.get("/v1/chat/threads", response_model=list[ChatThreadSummary])
+    async def list_chat_threads_handler(
+        request: Request, session: SessionDep, limit: int = 100, offset: int = 0
+    ) -> Any:
+        return await chat.list_threads(session, _require_user_id(request), limit=limit, offset=offset)
+
+    @app.get("/v1/chat/threads/{thread_id}", response_model=ChatThreadOut)
+    async def get_chat_thread_handler(thread_id: str, request: Request, session: SessionDep) -> Any:
+        row = await chat.get_thread(session, _require_user_id(request), thread_id)
+        return _chat_found(row, "thread_not_found")
+
+    @app.patch("/v1/chat/threads/{thread_id}", response_model=ChatThreadOut)
+    async def patch_chat_thread_handler(
+        thread_id: str, payload: ChatThreadPatch, request: Request, session: SessionDep
+    ) -> Any:
+        row = await chat.patch_thread(session, _require_user_id(request), thread_id, payload)
+        return _chat_found(row, "thread_not_found")
+
+    @app.delete("/v1/chat/threads/{thread_id}", status_code=204)
+    async def delete_chat_thread_handler(thread_id: str, request: Request, session: SessionDep) -> Response:
+        if not await chat.delete_thread(session, _require_user_id(request), thread_id):
+            raise HTTPException(status_code=404, detail="thread_not_found")
+        return Response(status_code=204)
+
+    @app.post("/v1/chat/threads/{thread_id}/messages", response_model=ChatMessageOut)
+    async def create_chat_message_handler(
+        thread_id: str, payload: ChatMessageIn, request: Request, session: SessionDep
+    ) -> Any:
+        try:
+            row = await chat.create_message(session, _require_user_id(request), thread_id, payload)
+        except chat.ChatError as exc:
+            raise _chat_error(exc)
+        return _chat_found(row, "thread_not_found")
+
+    @app.get("/v1/chat/threads/{thread_id}/messages", response_model=list[ChatMessageOut])
+    async def list_chat_messages_handler(
+        thread_id: str, request: Request, session: SessionDep, after_seq: int = 0, limit: int = 500
+    ) -> Any:
+        rows = await chat.list_messages(
+            session, _require_user_id(request), thread_id, after_seq=after_seq, limit=limit
+        )
+        return _chat_found(rows, "thread_not_found")
+
+    @app.patch("/v1/chat/messages/{message_id}", response_model=ChatMessageOut)
+    async def patch_chat_message_handler(
+        message_id: str, payload: ChatMessagePatch, request: Request, session: SessionDep
+    ) -> Any:
+        row = await chat.patch_message(session, _require_user_id(request), message_id, payload)
+        return _chat_found(row, "message_not_found")
+
+    @app.post("/v1/chat/threads/{thread_id}/approvals", response_model=ChatApprovalOut)
+    async def create_chat_approval_handler(
+        thread_id: str, payload: ChatApprovalIn, request: Request, session: SessionDep
+    ) -> Any:
+        try:
+            row = await chat.create_approval(session, _require_user_id(request), thread_id, payload)
+        except chat.ChatError as exc:
+            raise _chat_error(exc)
+        return _chat_found(row, "thread_not_found")
+
+    @app.post("/v1/chat/approvals/consume", response_model=ChatApprovalOut)
+    async def consume_chat_approval_handler(
+        payload: ChatApprovalConsume, request: Request, session: SessionDep
+    ) -> Any:
+        try:
+            return await chat.consume_approval(session, _require_user_id(request), payload)
+        except chat.ChatError as exc:
+            raise _chat_error(exc)
+
+    @app.get("/v1/chat/approvals/{approval_id}", response_model=ChatApprovalOut)
+    async def get_chat_approval_handler(approval_id: str, request: Request, session: SessionDep) -> Any:
+        row = await chat.get_approval(session, _require_user_id(request), approval_id)
+        return _chat_found(row, "approval_not_found")
+
+    @app.post("/v1/chat/approvals/{approval_id}/approve", response_model=ChatApprovalOut)
+    async def approve_chat_approval_handler(
+        approval_id: str, payload: ChatApprovalApprove, request: Request, session: SessionDep
+    ) -> Any:
+        try:
+            row = await chat.approve_approval(session, _require_user_id(request), approval_id, payload)
+        except chat.ChatError as exc:
+            raise _chat_error(exc)
+        return _chat_found(row, "approval_not_found")
+
+    @app.post("/v1/chat/approvals/{approval_id}/decline", response_model=ChatApprovalOut)
+    async def decline_chat_approval_handler(approval_id: str, request: Request, session: SessionDep) -> Any:
+        try:
+            row = await chat.decline_approval(session, _require_user_id(request), approval_id)
+        except chat.ChatError as exc:
+            raise _chat_error(exc)
+        return _chat_found(row, "approval_not_found")
 
     # ── user settings ────────────────────────────────────────────────────────
     #

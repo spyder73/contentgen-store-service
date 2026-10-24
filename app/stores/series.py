@@ -65,6 +65,8 @@ async def upsert_series(
         row.slot_map = body.slot_map
     if body.parameters is not None:
         row.parameters = body.parameters
+    if body.format_brief is not None:
+        row.format_brief = body.format_brief
     row.metadata_ = body.metadata
     await session.commit()
     await session.refresh(row)
