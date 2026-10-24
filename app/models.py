@@ -919,3 +919,127 @@ class ClipstyleAsset(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (UniqueConstraint("template_id", "label", name="ux_clipstyle_assets_template_label"),)
+
+
+class ChatThread(Base):
+    """One operator-chat conversation (migration 0042).
+
+    ``transcript`` is the list of exchanges the operator resumes from; the visible
+    log is ``chat_messages``. ``provider``/``model`` are the user's choice for this
+    thread (empty = the operator default), ``series_id`` the show it works on (no FK:
+    deleting a show must not delete the conversation). ``cost_usd`` is only ever grown
+    by an atomic increment.
+    """
+
+    __tablename__ = "chat_threads"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    provider: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    model: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    series_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), nullable=True)
+    # The JSONB server defaults ('[]' / '{}') live in the migration only: sqlite test
+    # engines cannot parse the ::jsonb cast, and the ORM always sends the Python default.
+    transcript: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    known_media: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    cost_usd: Mapped[float] = mapped_column(
+        Numeric(12, 6, asdecimal=False), nullable=False, default=0, server_default="0"
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="idle", server_default="idle")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    # Mirrors 0042 exactly (an autogenerate that "fixes" a drift here would
+    # rewrite production indexes).
+    __table_args__ = (
+        CheckConstraint("status IN ('idle', 'working')", name="ck_chat_threads_status"),
+        Index("ix_chat_threads_user_updated", "user_id", "updated_at"),
+    )
+
+
+class ChatMessage(Base):
+    """One visible message of a thread. ``seq`` is assigned by the store (max + 1) and
+    unique per thread, so a client resumes with ``after_seq``. ``id`` may be minted by
+    the caller so a retried POST is idempotent."""
+
+    __tablename__ = "chat_messages"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("chat_threads.id", ondelete="CASCADE"), nullable=False
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False, default="text", server_default="text")
+    text: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    data: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("thread_id", "seq", name="ux_chat_messages_thread_seq"),
+        CheckConstraint("role IN ('user', 'operator')", name="ck_chat_messages_role"),
+        CheckConstraint(
+            "kind IN ('text', 'tool', 'approval', 'run', 'media', 'error')", name="ck_chat_messages_kind"
+        ),
+    )
+
+
+class ChatApproval(Base):
+    """A spend the user must approve with a button (migration 0042).
+
+    ``pending`` until the button is pressed, which mints a token in the browser; only
+    its sha256 is stored (``token_sha256``). ``consume`` turns ``approved`` into
+    ``used`` exactly once, for the thread, action and subject it was approved for.
+    ``message_id`` links the chat message that shows the buttons (plain id, no FK).
+    """
+
+    __tablename__ = "chat_approvals"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("chat_threads.id", ondelete="CASCADE"), nullable=False
+    )
+    message_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), nullable=True)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    subject: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    amount_usd: Mapped[float] = mapped_column(
+        Numeric(12, 6, asdecimal=False), nullable=False, default=0, server_default="0"
+    )
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    breakdown: Mapped[dict | list] = mapped_column(JSONB, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending", server_default="pending")
+    token_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, server_default=func.now()
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "action IN ('run.start', 'run.continue', 'image.generate', 'clip.render')",
+            name="ck_chat_approvals_action",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'approved', 'used', 'declined', 'expired')",
+            name="ck_chat_approvals_status",
+        ),
+        CheckConstraint("amount_usd >= 0", name="ck_chat_approvals_amount"),
+        Index("ix_chat_approvals_thread", "thread_id"),
+        # One hash backs one approval per thread (NULL while pending, and NULLs are
+        # distinct), so a token can never be ambiguous between two spends.
+        Index("ux_chat_approvals_thread_token", "thread_id", "token_sha256", unique=True),
+    )
