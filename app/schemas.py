@@ -1176,12 +1176,15 @@ class ClipstyleAssetOut(BaseModel):
     created_at: datetime
 
 
-# ── operator chat (migration 0042) ───────────────────────────────────────────
+# ── operator chat (migrations 0042, 0043) ────────────────────────────────────
 
 ChatThreadStatus = Literal["idle", "working"]
 ChatRole = Literal["user", "operator"]
-ChatKind = Literal["text", "tool", "approval", "run", "media", "error"]
-ChatAction = Literal["run.start", "run.continue", "image.generate", "clip.render"]
+# 0043 added ``node`` / ``event`` (the director's live graph) and the three director approvals.
+ChatKind = Literal["text", "tool", "approval", "run", "media", "error", "node", "event"]
+ChatAction = Literal[
+    "run.start", "run.continue", "image.generate", "clip.render", "plan.approve", "frames.approve", "graph.extend"
+]
 ChatApprovalStatus = Literal["pending", "approved", "used", "declined", "expired"]
 
 
