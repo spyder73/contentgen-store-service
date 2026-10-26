@@ -1093,10 +1093,10 @@ def create_fastapi_app() -> FastAPI:
         return row
 
     @app.put("/v1/characters/{id}", response_model=CharacterOut)
-    async def upsert_character_handler(id: str, body: CharacterIn, session: SessionDep) -> Any:
+    async def upsert_character_handler(id: str, body: CharacterIn, request: Request, session: SessionDep) -> Any:
         body.id = id
         try:
-            return await characters.upsert_character(session, body)
+            return await characters.upsert_character(session, body, user_id=_get_user_id(request))
         except series.SeriesError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message)
 

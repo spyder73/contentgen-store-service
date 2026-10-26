@@ -52,6 +52,13 @@ async def upsert_series(
     session: AsyncSession, body: SeriesIn, user_id: str | None = None
 ) -> SeriesOut:
     row = await session.get(Series, body.id)
+    # Another user's series is not found, as a read of it is, and nothing is
+    # written: the id is the caller's choice (the backend's create route takes
+    # it from the request), so an upsert must not merge into a row it does not
+    # own. A caller with no user owns nothing. Legacy rows with no owner stay
+    # writable, as they stay readable.
+    if row is not None and row.user_id is not None and row.user_id != user_id:
+        raise SeriesError(404, "not_found")
     if row is None:
         if body.name is None:
             raise SeriesError(422, "name is required for a new series")

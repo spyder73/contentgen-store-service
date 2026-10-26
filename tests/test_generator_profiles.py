@@ -493,7 +493,7 @@ class TestCharacterGeneratorProfileLink:
 
         captured = {}
 
-        async def _fake_upsert(session, body: CharacterIn):
+        async def _fake_upsert(session, body: CharacterIn, user_id=None):
             captured["gpid"] = body.generator_profile_id
             row = _FakeCharacterRow()
             row.id = body.id
