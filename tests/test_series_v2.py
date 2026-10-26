@@ -246,6 +246,7 @@ def test_character_kind_anchors_voice():
                         anchors=anchors,
                         voice_media_id=voice_id,
                     ),
+                    user_id=USER_A,
                 )
 
             async with factory() as s:
@@ -287,7 +288,7 @@ def test_character_defaults_to_character_kind():
             await _seed_series(factory, sid)
             async with factory() as s:
                 await characters_store.upsert_character(
-                    s, CharacterIn(id=cid, series_id=sid, name="Captain")
+                    s, CharacterIn(id=cid, series_id=sid, name="Captain"), user_id=USER_A
                 )
             async with factory() as s:
                 row = await characters_store.get_character(s, cid, user_id=USER_A)
@@ -661,12 +662,13 @@ def test_old_shape_put_preserves_character_v2_columns():
                         anchors=anchors,
                         voice_media_id=voice_id,
                     ),
+                    user_id=USER_A,
                 )
 
             async with factory() as s:
                 await characters_store.upsert_character(
                     s,
-                    CharacterIn(id=cid, series_id=sid, name="The Beach", voice="warm"),
+                    CharacterIn(id=cid, series_id=sid, name="The Beach", voice="warm"), user_id=USER_A
                 )
 
             async with factory() as s:
@@ -679,7 +681,7 @@ def test_old_shape_put_preserves_character_v2_columns():
 
             async with factory() as s:
                 await characters_store.upsert_character(
-                    s, CharacterIn(id=cid, series_id=sid, name="The Beach", anchors=[])
+                    s, CharacterIn(id=cid, series_id=sid, name="The Beach", anchors=[]), user_id=USER_A
                 )
             async with factory() as s:
                 row = await characters_store.get_character(s, cid, user_id=USER_A)
@@ -791,19 +793,27 @@ def test_series_put_ignores_user_id_and_timestamps():
                 row = await s.get(Series, sid)
                 created = row.created_at
 
-            # A later PUT — even one carrying another user's id in the body —
-            # cannot hand the show to someone else.
+            # A later PUT carrying another user's id in the body cannot hand
+            # the show to someone else; one that user sends finds no show at
+            # all, and writes nothing.
             async with factory() as s:
                 await series_store.upsert_series(
                     s,
                     SeriesIn.model_validate(
                         {"id": sid, "name": "renamed", "user_id": other}
                     ),
-                    user_id=other,
+                    user_id=USER_A,
                 )
+            async with factory() as s:
+                with pytest.raises(series_store.SeriesError) as refused:
+                    await series_store.upsert_series(
+                        s, SeriesIn.model_validate({"id": sid, "name": "taken"}), user_id=other
+                    )
+            assert refused.value.status_code == 404
             async with factory() as s:
                 row = await s.get(Series, sid)
             assert row.user_id == USER_A
+            assert row.name == "renamed"
             assert row.created_at == created
         finally:
             await engine.dispose()
@@ -890,6 +900,7 @@ def test_character_put_null_voice_media_id_unlinks_absent_leaves():
                     CharacterIn(
                         id=cid, series_id=sid, name="Captain", voice_media_id=voice_id
                     ),
+                    user_id=USER_A,
                 )
 
             async with factory() as s:
@@ -898,6 +909,7 @@ def test_character_put_null_voice_media_id_unlinks_absent_leaves():
                     CharacterIn.model_validate(
                         {"id": cid, "series_id": sid, "name": "Captain"}
                     ),
+                    user_id=USER_A,
                 )
             async with factory() as s:
                 row = await characters_store.get_character(s, cid, user_id=USER_A)
@@ -915,6 +927,7 @@ def test_character_put_null_voice_media_id_unlinks_absent_leaves():
                             "voice_media_id": None,
                         }
                     ),
+                    user_id=USER_A,
                 )
             async with factory() as s:
                 row = await characters_store.get_character(s, cid, user_id=USER_A)

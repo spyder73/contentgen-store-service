@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Character, Series
 from ..schemas import CharacterIn, CharacterOut, PagedResponse
+from .series import SeriesError
 
 
 def _owned_series_ids(user_id: str):
@@ -49,26 +50,55 @@ async def get_character(
     return CharacterOut.from_orm_row(row)
 
 
-async def upsert_character(session: AsyncSession, body: CharacterIn) -> CharacterOut:
+async def _series_is_callers(session: AsyncSession, series_id: str, user_id: str | None) -> bool:
+    """The series exists and is the caller's (a legacy row with no owner is
+    anyone's, as it is for reads)."""
+    series = await session.get(Series, series_id)
+    return series is not None and (series.user_id is None or series.user_id == user_id)
+
+
+async def upsert_character(
+    session: AsyncSession, body: CharacterIn, user_id: str | None = None
+) -> CharacterOut:
     row = await session.get(Character, body.id)
+    # A character is the caller's through its series: the series it is in and
+    # the one it is put in must both be theirs. Anything else is not found, as
+    # a read of it is, and nothing is written — the id is the caller's choice,
+    # so an upsert must not merge into another user's cast row, nor move one
+    # into another user's series. A caller with no user owns no series.
+    if row is not None and not await _series_is_callers(session, row.series_id, user_id):
+        raise SeriesError(404, "not_found")
+    if not await _series_is_callers(session, body.series_id, user_id):
+        raise SeriesError(404, "not_found")
     if row is None:
+        if body.name is None:
+            raise SeriesError(422, "name is required for a new character")
         row = Character(id=body.id)
         session.add(row)
     row.series_id = body.series_id
-    row.name = body.name
-    row.description = body.description
-    row.voice = body.voice
-    # Narrow write — see upsert_series. voice_media_id is nullable, so presence
-    # decides: absent keeps the sample, "voice_media_id": null unlinks it.
+    # Narrow write — see upsert_series: a field the caller never mentioned keeps
+    # its stored value (a new row takes the column defaults), and a null on a
+    # NOT NULL column counts as "not mentioned". The nullable ids go by
+    # presence: absent keeps the link, "voice_media_id": null (likewise the
+    # reference image and generator profile) unlinks it.
+    if body.name is not None:
+        row.name = body.name
+    if body.description is not None:
+        row.description = body.description
+    if body.voice is not None:
+        row.voice = body.voice
     if body.kind is not None:
         row.kind = body.kind
     if body.anchors is not None:
         row.anchors = body.anchors
     if "voice_media_id" in body.model_fields_set:
         row.voice_media_id = body.voice_media_id
-    row.reference_image_media_id = body.reference_image_media_id
-    row.generator_profile_id = body.generator_profile_id
-    row.metadata_ = body.metadata
+    if "reference_image_media_id" in body.model_fields_set:
+        row.reference_image_media_id = body.reference_image_media_id
+    if "generator_profile_id" in body.model_fields_set:
+        row.generator_profile_id = body.generator_profile_id
+    if body.metadata is not None:
+        row.metadata_ = body.metadata
     await session.commit()
     await session.refresh(row)
     return CharacterOut.from_orm_row(row)

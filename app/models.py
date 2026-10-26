@@ -956,7 +956,7 @@ class ChatThread(Base):
         DateTime(timezone=True), nullable=False, default=_now, onupdate=_now, server_default=func.now()
     )
 
-    # Mirrors 0042 exactly (an autogenerate that "fixes" a drift here would
+    # Mirrors 0042 as 0043 amends it (an autogenerate that "fixes" a drift here would
     # rewrite production indexes).
     __table_args__ = (
         CheckConstraint("status IN ('idle', 'working')", name="ck_chat_threads_status"),
@@ -991,7 +991,8 @@ class ChatMessage(Base):
         UniqueConstraint("thread_id", "seq", name="ux_chat_messages_thread_seq"),
         CheckConstraint("role IN ('user', 'operator')", name="ck_chat_messages_role"),
         CheckConstraint(
-            "kind IN ('text', 'tool', 'approval', 'run', 'media', 'error')", name="ck_chat_messages_kind"
+            "kind IN ('text', 'tool', 'approval', 'run', 'media', 'error', 'node', 'event')",
+            name="ck_chat_messages_kind",
         ),
     )
 
@@ -1030,7 +1031,8 @@ class ChatApproval(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "action IN ('run.start', 'run.continue', 'image.generate', 'clip.render')",
+            "action IN ('run.start', 'run.continue', 'image.generate', 'clip.render', "
+            "'plan.approve', 'frames.approve', 'graph.extend')",
             name="ck_chat_approvals_action",
         ),
         CheckConstraint(

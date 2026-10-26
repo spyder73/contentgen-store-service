@@ -694,12 +694,17 @@ class SeriesIn(BaseModel):
     a collection, and an explicit ``null`` on the nullable ``template_id``
     unbinds the show (the store tests membership in ``model_fields_set``, so
     absent and null are different things). A ``null`` on the NOT NULL columns
-    is treated as "not mentioned" — they cannot be cleared, only replaced."""
+    is treated as "not mentioned" — they cannot be cleared, only replaced.
+
+    The same goes for ``name``, ``description``, ``concept`` and ``metadata``:
+    a body that leaves one out keeps the stored value, so a caller can send
+    just the keys it changes. ``name`` is therefore optional here and required
+    only when the row is new (the store refuses that insert with a 422)."""
 
     id: str
-    name: str
-    description: str = ""
-    concept: str = ""
+    name: str | None = None
+    description: str | None = None
+    concept: str | None = None
     template_id: str | None = None
     memories: list[Any] | None = None
     slot_map: dict[str, Any] | None = None
@@ -708,7 +713,7 @@ class SeriesIn(BaseModel):
     parameters: dict[str, str] | None = None
     # Absent or null keeps the stored brief; a string, even "", is written.
     format_brief: str | None = None
-    metadata: dict[str, Any] = {}
+    metadata: dict[str, Any] | None = None
 
     _check_memories = field_validator("memories")(_validate_memories)
 
@@ -757,20 +762,23 @@ class CharacterOut(BaseModel):
 
 class CharacterIn(BaseModel):
     """PUT body with merge semantics — see SeriesIn. An explicit
-    ``"voice_media_id": null`` unlinks the voice sample; omitting the key keeps
-    it. The write gate for the cast vocabulary lives here."""
+    ``"voice_media_id": null`` unlinks the voice sample (likewise
+    ``reference_image_media_id`` and ``generator_profile_id``); omitting the key
+    keeps it. ``name``, ``description``, ``voice`` and ``metadata`` keep their
+    stored value when left out, and ``name`` is required only for a new row.
+    The write gate for the cast vocabulary lives here."""
 
     id: str
     series_id: str
-    name: str
-    description: str = ""
-    voice: str = ""
+    name: str | None = None
+    description: str | None = None
+    voice: str | None = None
     kind: Literal["character", "place", "prop"] | None = None
     anchors: list[Any] | None = None
     voice_media_id: str | None = None
     reference_image_media_id: str | None = None
     generator_profile_id: str | None = None
-    metadata: dict[str, Any] = {}
+    metadata: dict[str, Any] | None = None
 
 
 # ── Episode ──────────────────────────────────────────────────────────────
@@ -1168,12 +1176,15 @@ class ClipstyleAssetOut(BaseModel):
     created_at: datetime
 
 
-# ── operator chat (migration 0042) ───────────────────────────────────────────
+# ── operator chat (migrations 0042, 0043) ────────────────────────────────────
 
 ChatThreadStatus = Literal["idle", "working"]
 ChatRole = Literal["user", "operator"]
-ChatKind = Literal["text", "tool", "approval", "run", "media", "error"]
-ChatAction = Literal["run.start", "run.continue", "image.generate", "clip.render"]
+# 0043 added ``node`` / ``event`` (the director's live graph) and the three director approvals.
+ChatKind = Literal["text", "tool", "approval", "run", "media", "error", "node", "event"]
+ChatAction = Literal[
+    "run.start", "run.continue", "image.generate", "clip.render", "plan.approve", "frames.approve", "graph.extend"
+]
 ChatApprovalStatus = Literal["pending", "approved", "used", "declined", "expired"]
 
 

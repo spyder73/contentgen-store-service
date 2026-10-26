@@ -1063,7 +1063,10 @@ def create_fastapi_app() -> FastAPI:
     @app.put("/v1/series/{id}", response_model=SeriesOut)
     async def upsert_series_handler(id: str, body: SeriesIn, request: Request, session: SessionDep) -> Any:
         body.id = id
-        return await series.upsert_series(session, body, user_id=_get_user_id(request))
+        try:
+            return await series.upsert_series(session, body, user_id=_get_user_id(request))
+        except series.SeriesError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
 
     @app.delete("/v1/series/{id}", status_code=204)
     async def delete_series_handler(id: str, request: Request, session: SessionDep) -> None:
@@ -1090,9 +1093,12 @@ def create_fastapi_app() -> FastAPI:
         return row
 
     @app.put("/v1/characters/{id}", response_model=CharacterOut)
-    async def upsert_character_handler(id: str, body: CharacterIn, session: SessionDep) -> Any:
+    async def upsert_character_handler(id: str, body: CharacterIn, request: Request, session: SessionDep) -> Any:
         body.id = id
-        return await characters.upsert_character(session, body)
+        try:
+            return await characters.upsert_character(session, body, user_id=_get_user_id(request))
+        except series.SeriesError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
 
     @app.delete("/v1/characters/{id}", status_code=204)
     async def delete_character_handler(id: str, request: Request, session: SessionDep) -> None:
