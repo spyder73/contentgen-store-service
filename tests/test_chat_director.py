@@ -139,15 +139,16 @@ def test_migration_0043_downgrade_restores_the_0042_lists_and_refuses_over_new_r
 
 
 def test_the_models_declare_what_the_migration_makes():
-    """Model/migration drift means a future autogenerate "fixes" production."""
+    """Model/migration drift means a future autogenerate "fixes" production.
+
+    The approval action list moved on in 0044; ``test_chat_sourcing.py`` pins it now.
+    """
     modelled = {
         c.name: re.sub(r"\s+", " ", str(c.sqltext))
-        for t in (ChatMessage, ChatApproval)
-        for c in t.__table__.constraints
+        for c in ChatMessage.__table__.constraints
         if getattr(c, "sqltext", None) is not None and c.name
     }
     sql = _render(_load_migration_module().upgrade)
-    for name in ("ck_chat_messages_kind", "ck_chat_approvals_action"):
-        assert f"ADD CONSTRAINT {name} CHECK ({modelled[name]})" in sql, name
-    assert modelled["ck_chat_messages_kind"] == f"kind IN ({KINDS_0043})"
-    assert modelled["ck_chat_approvals_action"] == f"action IN ({ACTIONS_0043})"
+    name = "ck_chat_messages_kind"
+    assert f"ADD CONSTRAINT {name} CHECK ({modelled[name]})" in sql
+    assert modelled[name] == f"kind IN ({KINDS_0043})"

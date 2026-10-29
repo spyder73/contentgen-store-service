@@ -64,6 +64,11 @@ def _run(rows, fn):
 
 RUN_A, RUN_B, RUN_C, RUN_D = (str(uuid.uuid4()) for _ in range(4))
 
+# The operator's handler holds: the backend files one under (request id, handler name), a request
+# id per call, so a hold cut off by a restart is found by its handler name alone.
+OPERATOR_RULES = [{"checkpoint": "operator_chat", "match": "exact", "older_than_s": 3600},
+                  {"checkpoint": "operator_sourcing", "match": "exact", "older_than_s": 3600}]
+
 
 def test_reaper_releases_only_old_open_holds_of_the_rules():
     rows = [
@@ -82,6 +87,25 @@ def test_reaper_releases_only_old_open_holds_of_the_rules():
 
     checkpoints, balance, reserved = _run(rows, fn)
     assert checkpoints == ["builder_clipstyle_understand", "lora_training:job-1"]
+    assert (balance, reserved) == (110, 10)
+
+
+def test_a_stale_operator_hold_is_reaped_and_a_fresh_one_is_not():
+    rows = [
+        _hold(RUN_A, "operator_sourcing", hours=2),                  # a paid search cut off by a restart: reaped
+        _hold(RUN_B, "operator_sourcing", hours=0.2),                # a search still in flight: kept
+        _hold(RUN_C, "operator_chat", hours=2),                      # a chat turn cut off: reaped
+        _hold(RUN_D, "operator_sourcing", hours=3),
+        _hold(RUN_D, "operator_sourcing", hours=2.5, kind="debit"),  # settled: kept
+    ]
+
+    async def fn(s):
+        reaped = await credits_reaper.reap_stale_holds(s, OPERATOR_RULES, now=NOW, limit=100)
+        user = await s.get(User, U)
+        return sorted((h["pipeline_run_id"], h["checkpoint_id"]) for h in reaped), user.credits_balance, user.credits_reserved
+
+    reaped, balance, reserved = _run(rows, fn)
+    assert reaped == sorted([(RUN_A, "operator_sourcing"), (RUN_C, "operator_chat")])
     assert (balance, reserved) == (110, 10)
 
 
@@ -211,10 +235,12 @@ def test_the_reaper_endpoint_refuses_an_allowlisted_checkpoint_with_the_wrong_ma
 
 
 def test_the_reaper_endpoint_accepts_the_allowlisted_rules(client, monkeypatch):
+    # RULES plus the operator's two handler kinds: the backend sends all four in one request, and
+    # one rule outside the allowlist refuses the whole pass.
     monkeypatch.setattr(credits_reaper, "reap_stale_holds", AsyncMock(return_value=[]))
     resp = client.post(
         "/v1/internal/credits/reap-stale-holds",
-        json={"rules": RULES, "limit": 50},
+        json={"rules": RULES + OPERATOR_RULES, "limit": 50},
         headers={"X-Internal-Secret": INTERNAL_SECRET},
     )
     assert resp.status_code == 200

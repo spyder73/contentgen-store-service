@@ -1137,12 +1137,15 @@ class ClipstyleCatalogOut(BaseModel):
     approved_at: datetime | None = None
 
 
-# X-M8: only these checkpoint kinds may be reaped ("before a second user"'s two listed holds —
-# LoRA training and the builder's classify hold). A backend bug sending any other checkpoint (for
-# example a long clip_render) would otherwise be accepted and could reap a live hold; no money is
-# lost either way (a later settle debits only the actual cost), but `reserved` would drift until
-# then. Keep this in sync with the rules the backend actually sends (Task 4.7).
-_ALLOWED_STALE_HOLD_RULES = {("lora_training", "prefix"), ("builder_clipstyle_understand", "exact")}
+# X-M8: only these checkpoint kinds may be reaped ("before a second user"'s listed holds —
+# LoRA training, the builder's classify hold, and the operator's per-call handler holds: a chat
+# turn and a paid search). A backend bug sending any other checkpoint (for example a long
+# clip_render) would otherwise be accepted and could reap a live hold; no money is lost either way
+# (a later settle debits only the actual cost), but `reserved` would drift until then. Keep this in
+# sync with the rules the backend actually sends (creditsreaper.DefaultRules): one rule outside
+# this set refuses the whole pass.
+_ALLOWED_STALE_HOLD_RULES = {("lora_training", "prefix"), ("builder_clipstyle_understand", "exact"),
+                             ("operator_chat", "exact"), ("operator_sourcing", "exact")}
 
 
 class StaleHoldRule(BaseModel):
@@ -1176,14 +1179,16 @@ class ClipstyleAssetOut(BaseModel):
     created_at: datetime
 
 
-# ── operator chat (migrations 0042, 0043) ────────────────────────────────────
+# ── operator chat (migrations 0042, 0043, 0044) ──────────────────────────────
 
 ChatThreadStatus = Literal["idle", "working"]
 ChatRole = Literal["user", "operator"]
 # 0043 added ``node`` / ``event`` (the director's live graph) and the three director approvals.
 ChatKind = Literal["text", "tool", "approval", "run", "media", "error", "node", "event"]
+# 0044 added sourcing.run (the chat's paid searches).
 ChatAction = Literal[
-    "run.start", "run.continue", "image.generate", "clip.render", "plan.approve", "frames.approve", "graph.extend"
+    "run.start", "run.continue", "image.generate", "clip.render", "plan.approve", "frames.approve", "graph.extend",
+    "sourcing.run",
 ]
 ChatApprovalStatus = Literal["pending", "approved", "used", "declined", "expired"]
 
