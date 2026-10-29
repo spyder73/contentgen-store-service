@@ -1137,12 +1137,15 @@ class ClipstyleCatalogOut(BaseModel):
     approved_at: datetime | None = None
 
 
-# X-M8: only these checkpoint kinds may be reaped ("before a second user"'s two listed holds —
-# LoRA training and the builder's classify hold). A backend bug sending any other checkpoint (for
-# example a long clip_render) would otherwise be accepted and could reap a live hold; no money is
-# lost either way (a later settle debits only the actual cost), but `reserved` would drift until
-# then. Keep this in sync with the rules the backend actually sends (Task 4.7).
-_ALLOWED_STALE_HOLD_RULES = {("lora_training", "prefix"), ("builder_clipstyle_understand", "exact")}
+# X-M8: only these checkpoint kinds may be reaped ("before a second user"'s listed holds —
+# LoRA training, the builder's classify hold, and the operator's per-call handler holds: a chat
+# turn and a paid search). A backend bug sending any other checkpoint (for example a long
+# clip_render) would otherwise be accepted and could reap a live hold; no money is lost either way
+# (a later settle debits only the actual cost), but `reserved` would drift until then. Keep this in
+# sync with the rules the backend actually sends (creditsreaper.DefaultRules): one rule outside
+# this set refuses the whole pass.
+_ALLOWED_STALE_HOLD_RULES = {("lora_training", "prefix"), ("builder_clipstyle_understand", "exact"),
+                             ("operator_chat", "exact"), ("operator_sourcing", "exact")}
 
 
 class StaleHoldRule(BaseModel):
