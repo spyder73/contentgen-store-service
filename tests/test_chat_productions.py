@@ -370,21 +370,21 @@ async def test_spent_reports_open_holds(ledger):
         async with ledger.factory() as s:
             return (await credits_spent.spent_by_scope(s, user, {"x": list(keys or [scope])}))["x"]
 
-    assert await read() == {"credits": 0, "usd": 0.0, "spent_usd": 0.0, "held_usd": 0.0, "debit_count": 0}
+    assert await read() == {"credits": 0, "usd": 0.0, "held_usd": 0.0, "debit_count": 0}
 
     await ledger.reserve(scope, "gen-a", HOLD_068)
     out = await read()
-    assert out["held_usd"] == pytest.approx(0.40) and out["spent_usd"] == 0 and out["usd"] == 0
+    assert out["held_usd"] == pytest.approx(0.40) and out["usd"] == 0
 
     await ledger.settle(scope, "gen-a", "0.38")
     out = await read()
-    assert out["held_usd"] == 0 and out["spent_usd"] == pytest.approx(0.38) and out["usd"] == pytest.approx(0.38)
+    assert out["held_usd"] == 0 and out["usd"] == pytest.approx(0.38)
 
     await ledger.reserve(scope, "gen-b", HOLD_068)
     assert (await read())["held_usd"] == pytest.approx(0.40)
     await ledger.release(scope, "failed", key="rel-b", cp="gen-b", attempt=1)
     out = await read()
-    assert out["held_usd"] == 0 and out["spent_usd"] == pytest.approx(0.38)
+    assert out["held_usd"] == 0 and out["usd"] == pytest.approx(0.38)
     await ledger.assert_books()
 
 
@@ -417,6 +417,38 @@ async def test_held_usd_follows_the_ledgers_own_open_hold_matching(ledger):
 
 
 @pytest.mark.asyncio
+async def test_a_settle_between_the_two_reads_is_never_counted_in_neither(ledger, monkeypatch):
+    """/spent reads holds and debits in two statements. A settle that commits between them closes the
+    hold and writes the debit; the answer may count that call twice, but never zero times."""
+    scope = _run()
+    await ledger.reserve(scope, "gen-a", HOLD_068)
+    real_held, real_debited = credits_spent._held_credits_by_key, credits_spent._debited_by_key
+    landed: list[bool] = []
+
+    def settle_after_the_first_read(real):
+        async def read(*args, **kwargs):
+            out = await real(*args, **kwargs)
+            if not landed:  # whichever read ran first: the settle lands right after it
+                landed.append(True)
+                await ledger.settle(scope, "gen-a", "0.38")
+            return out
+
+        return read
+
+    monkeypatch.setattr(credits_spent, "_held_credits_by_key", settle_after_the_first_read(real_held))
+    monkeypatch.setattr(credits_spent, "_debited_by_key", settle_after_the_first_read(real_debited))
+    async with ledger.factory() as s:
+        out = (await credits_spent.spent_by_scope(s, USER, {"x": [scope]}))["x"]
+    assert landed == [True]
+    assert out["usd"] + out["held_usd"] >= 0.38, out  # counted at least once
+    # Holds are read first, so the call shows as held (read 1) and spent (read 2): a double count, not a miss.
+    assert (out["held_usd"], out["usd"]) == (pytest.approx(0.40), pytest.approx(0.38))
+    # The next read is exact again.
+    async with ledger.factory() as s:
+        assert (await credits_spent.spent_by_scope(s, USER, {"x": [scope]}))["x"]["held_usd"] == 0
+
+
+@pytest.mark.asyncio
 async def test_the_spent_route_answers_held_usd(ledger, monkeypatch):
     monkeypatch.setenv("INTERNAL_API_SECRET", SECRET)
     app = create_fastapi_app()
@@ -432,7 +464,7 @@ async def test_the_spent_route_answers_held_usd(ledger, monkeypatch):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://store") as c:
         r = await c.post(f"/v1/users/{USER}/credits/spent", headers=headers, json={"scopes": {"p": [scope]}})
     assert r.status_code == 200
-    assert r.json()["scopes"]["p"] == {"credits": 0, "usd": 0.0, "spent_usd": 0.0, "held_usd": 0.4, "debit_count": 0}
+    assert r.json()["scopes"]["p"] == {"credits": 0, "usd": 0.0, "held_usd": 0.4, "debit_count": 0}
 
 
 # ── migration ────────────────────────────────────────────────────────────────

@@ -52,8 +52,8 @@ async def test_sums_debits_of_every_key_in_the_scope(ledger):
     assert out["clip"]["debit_count"] == 5
     # The one hold still open (70 credits) is held, not spent; the released one and the rest are neither.
     assert out["clip"]["held_usd"] == pytest.approx(70 / 170, abs=1e-6)
-    assert out["run-only"] == {"credits": 9, "usd": 0.05, "spent_usd": 0.05, "held_usd": 0.0, "debit_count": 1}
-    assert out["nothing"] == {"credits": 0, "usd": 0.0, "spent_usd": 0.0, "held_usd": 0.0, "debit_count": 0}
+    assert out["run-only"] == {"credits": 9, "usd": 0.05, "held_usd": 0.0, "debit_count": 1}
+    assert out["nothing"] == {"credits": 0, "usd": 0.0, "held_usd": 0.0, "debit_count": 0}
 
 
 @pytest.mark.asyncio
@@ -86,7 +86,7 @@ async def test_route_is_owner_only_and_bounded(ledger, monkeypatch):
         ok = await c.post(url, headers=headers, json={"scopes": {"clip-1": [run]}})
         assert ok.status_code == 200
         assert ok.json() == {
-            "scopes": {"clip-1": {"credits": 9, "usd": 0.05, "spent_usd": 0.05, "held_usd": 0.0, "debit_count": 1}}
+            "scopes": {"clip-1": {"credits": 9, "usd": 0.05, "held_usd": 0.0, "debit_count": 1}}
         }
 
         other = await c.post(url, headers={**headers, "X-User-ID": OTHER}, json={"scopes": {"c": [run]}})

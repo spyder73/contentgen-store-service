@@ -77,42 +77,50 @@ async def _held_credits_by_key(session: AsyncSession, user_id: str, keys: set[st
     return {str(key): int(credits) for key, credits in rows.all()}
 
 
+async def _debited_by_key(
+    session: AsyncSession, user_id: str, keys: set[str]
+) -> dict[str, tuple[int, Decimal, int]]:
+    """(credits, raw USD, debit count) of the user's debits per ledger key, in one query."""
+    rows = await session.execute(
+        select(
+            CreditsLedger.pipeline_run_id,
+            func.coalesce(func.sum(-CreditsLedger.delta), 0),
+            func.coalesce(func.sum(CreditsLedger.cost_usd), 0),
+            func.count(),
+        )
+        .where(
+            CreditsLedger.user_id == user_id,
+            CreditsLedger.kind == "debit",
+            CreditsLedger.pipeline_run_id.in_(sorted(keys)),
+        )
+        .group_by(CreditsLedger.pipeline_run_id)
+    )
+    return {str(key): (int(credits), Decimal(str(usd)), int(count)) for key, credits, usd, count in rows.all()}
+
+
 async def spent_by_scope(
     session: AsyncSession, user_id: str, scopes: dict[str, list[str]]
 ) -> dict[str, dict]:
-    """{scope: {credits, usd, spent_usd, held_usd, debit_count}} over the user's
-    ledger rows keyed by any of the scope's ledger keys. `usd` and `spent_usd`
-    are the same number, the raw USD of the scope's debits; `held_usd` is what
-    its open holds would cost (their credits converted back, so a hold is shown
-    at most one credit above the estimate it was rounded up from). A key shared
-    by two scopes counts in both (each scope is answered on its own); a scope
-    with no rows answers zeros. Another user's rows never match: user_id is
-    part of the filter."""
+    """{scope: {credits, usd, held_usd, debit_count}} over the user's ledger rows
+    keyed by any of the scope's ledger keys. `usd` is the raw USD of the scope's
+    debits; `held_usd` is what its open holds would cost (their credits converted
+    back, so a hold is shown at most one credit above the estimate it was rounded
+    up from). A key shared by two scopes counts in both (each scope is answered
+    on its own); a scope with no rows answers zeros. Another user's rows never
+    match: user_id is part of the filter."""
     keys_by_scope = {
         scope: {k for k in (_ledger_key(raw) for raw in raws) if k}
         for scope, raws in scopes.items()
     }
     all_keys = set().union(*keys_by_scope.values()) if keys_by_scope else set()
 
-    per_key: dict[str, tuple[int, Decimal, int]] = {}
-    if all_keys:
-        rows = await session.execute(
-            select(
-                CreditsLedger.pipeline_run_id,
-                func.coalesce(func.sum(-CreditsLedger.delta), 0),
-                func.coalesce(func.sum(CreditsLedger.cost_usd), 0),
-                func.count(),
-            )
-            .where(
-                CreditsLedger.user_id == user_id,
-                CreditsLedger.kind == "debit",
-                CreditsLedger.pipeline_run_id.in_(sorted(all_keys)),
-            )
-            .group_by(CreditsLedger.pipeline_run_id)
-        )
-        for key, credits, usd, count in rows.all():
-            per_key[str(key)] = (int(credits), Decimal(str(usd)), int(count))
+    # Holds are read BEFORE debits. The two reads are separate statements (READ COMMITTED), and a
+    # settle can commit between them: it closes a hold and writes the debit in one transaction.
+    # Holds first, that call is seen as held by the first read and as spent by the second, a
+    # transient double count (the safe direction for a budget check). Debits first, it is seen as
+    # neither, and money in flight vanishes from the answer.
     held = await _held_credits_by_key(session, user_id, all_keys) if all_keys else {}
+    per_key = await _debited_by_key(session, user_id, all_keys) if all_keys else {}
 
     out: dict[str, dict] = {}
     for scope, keys in keys_by_scope.items():
@@ -124,11 +132,5 @@ async def spent_by_scope(
                 usd += k_usd
                 count += k_count
         held_usd = credits_to_usd(sum(held.get(key, 0) for key in keys)).quantize(_USD_PLACES)
-        out[scope] = {
-            "credits": credits,
-            "usd": float(usd),
-            "spent_usd": float(usd),
-            "held_usd": float(held_usd),
-            "debit_count": count,
-        }
+        out[scope] = {"credits": credits, "usd": float(usd), "held_usd": float(held_usd), "debit_count": count}
     return out
