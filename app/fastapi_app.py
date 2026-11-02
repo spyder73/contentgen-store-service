@@ -82,6 +82,9 @@ from .schemas import (
     ChatThreadOut,
     ChatThreadPatch,
     ChatThreadSummary,
+    ProductionIn,
+    ProductionOut,
+    ProductionPatch,
     IdeaIn,
     IdeaOut,
     IdeaPatch,
@@ -117,6 +120,7 @@ from .stores import (
     clip_ratings,
     ideas,
     pipelines,
+    productions,
     prompts,
     render_templates,
     review_corrections,
@@ -1650,6 +1654,64 @@ def create_fastapi_app() -> FastAPI:
         except chat.ChatError as exc:
             raise _chat_error(exc)
         return _chat_found(row, "approval_not_found")
+
+    # ── chat productions ─────────────────────────────────────────────────────
+    #
+    # A production is a thread's durable work item: the approved budget, the
+    # assistant's cost cap, a log, artifacts and render watches. Scoped by
+    # X-User-ID like the chat routes, except the two sweeps (pending-wakes,
+    # watching) that run without a user: the internal secret is their gate.
+    # The fixed paths come before /{production_id}.
+
+    @app.post("/v1/chat/threads/{thread_id}/productions", response_model=ProductionOut, status_code=201)
+    async def create_production_handler(
+        thread_id: str, payload: ProductionIn, request: Request, session: SessionDep
+    ) -> Any:
+        try:
+            row = await productions.create_production(session, _require_user_id(request), thread_id, payload)
+        except chat.ChatError as exc:
+            raise _chat_error(exc)
+        return _chat_found(row, "thread_not_found")
+
+    @app.get("/v1/chat/threads/{thread_id}/productions/open", response_model=ProductionOut)
+    async def get_open_production_handler(thread_id: str, request: Request, session: SessionDep) -> Any:
+        row = await productions.get_open_production(session, _require_user_id(request), thread_id)
+        return _chat_found(row, "production_not_found")
+
+    @app.get("/v1/chat/productions/pending-wakes", response_model=list[ProductionOut])
+    async def pending_production_wakes_handler(session: SessionDep) -> Any:
+        return await productions.pending_wakes(session)
+
+    @app.get("/v1/chat/productions/watching", response_model=list[ProductionOut])
+    async def productions_watching_clip_handler(session: SessionDep, clip_id: str = Query(min_length=1)) -> Any:
+        return await productions.watching_clip(session, clip_id)
+
+    @app.get("/v1/chat/productions/{production_id}", response_model=ProductionOut)
+    async def get_production_handler(production_id: str, request: Request, session: SessionDep) -> Any:
+        row = await productions.get_production(session, _require_user_id(request), production_id)
+        return _chat_found(row, "production_not_found")
+
+    @app.patch("/v1/chat/productions/{production_id}", response_model=ProductionOut)
+    async def patch_production_handler(
+        production_id: str, payload: ProductionPatch, request: Request, session: SessionDep
+    ) -> Any:
+        try:
+            row = await productions.patch_production(session, _require_user_id(request), production_id, payload)
+        except chat.ChatError as exc:
+            raise _chat_error(exc)
+        return _chat_found(row, "production_not_found")
+
+    @app.get("/v1/users/{user_id}/chat-productions", response_model=list[ProductionOut])
+    async def list_closed_productions_handler(
+        user_id: str,
+        request: Request,
+        session: SessionDep,
+        status: Literal["closed"] = "closed",
+        limit: int = Query(default=10, ge=1, le=productions.LIST_MAX),
+    ) -> Any:
+        if _require_user_id(request) != user_id:
+            raise HTTPException(status_code=403, detail="forbidden")
+        return await productions.list_closed(session, user_id, limit=limit)
 
     # ── user settings ────────────────────────────────────────────────────────
     #

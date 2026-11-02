@@ -41,7 +41,7 @@ def _uuid_sqlite(element, compiler, **kw):  # pragma: no cover - trivial
 
 from app.db import get_session  # noqa: E402
 from app.fastapi_app import create_fastapi_app  # noqa: E402
-from app.models import ChatApproval, ChatMessage, ChatThread, User  # noqa: E402
+from app.models import ChatApproval, ChatMessage, ChatProduction, ChatThread, User  # noqa: E402
 from app.stores import chat as chat_store  # noqa: E402
 from app.stores.access import DEFAULT_FEATURES, TAB_FEATURES  # noqa: E402
 
@@ -136,7 +136,9 @@ class Env:
 
 async def _create_tables(engine) -> None:
     async with engine.begin() as conn:
-        for table in (User.__table__, ChatThread.__table__, ChatMessage.__table__, ChatApproval.__table__):
+        for table in (
+            User.__table__, ChatThread.__table__, ChatMessage.__table__, ChatApproval.__table__, ChatProduction.__table__
+        ):
             await conn.run_sync(lambda c, t=table: t.create(c))
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as s:

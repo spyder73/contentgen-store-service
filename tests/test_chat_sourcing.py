@@ -14,7 +14,6 @@ it offline in the postgres dialect.
 from __future__ import annotations
 
 import importlib.util
-import re
 from pathlib import Path
 
 from app.models import ChatApproval
@@ -93,14 +92,4 @@ def test_migration_0044_downgrade_restores_0043_and_refuses_over_new_rows():
     assert sql.index("RAISE EXCEPTION") < sql.index("DROP CONSTRAINT")
 
 
-def test_the_models_declare_what_the_migrations_make():
-    """Model/migration drift means a future autogenerate "fixes" production."""
-    modelled = {
-        c.name: re.sub(r"\s+", " ", str(c.sqltext))
-        for c in ChatApproval.__table__.constraints
-        if getattr(c, "sqltext", None) is not None and c.name
-    }
-    sql = _render(_load_migration_module().upgrade)
-    name = "ck_chat_approvals_action"
-    assert f"ADD CONSTRAINT {name} CHECK ({modelled[name]})" in sql
-    assert modelled[name] == f"action IN ({ACTIONS_0044})"
+# The model-vs-migration pin of the approval action list moved on with 0045: see test_chat_productions.py.

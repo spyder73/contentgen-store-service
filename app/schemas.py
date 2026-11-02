@@ -1179,16 +1179,16 @@ class ClipstyleAssetOut(BaseModel):
     created_at: datetime
 
 
-# ── operator chat (migrations 0042, 0043, 0044) ──────────────────────────────
+# ── operator chat (migrations 0042, 0043, 0044, 0045) ────────────────────────
 
 ChatThreadStatus = Literal["idle", "working"]
 ChatRole = Literal["user", "operator"]
 # 0043 added ``node`` / ``event`` (the director's live graph) and the three director approvals.
 ChatKind = Literal["text", "tool", "approval", "run", "media", "error", "node", "event"]
-# 0044 added sourcing.run (the chat's paid searches).
+# 0044 added sourcing.run (the chat's paid searches); 0045 added production.budget (a production's budget card).
 ChatAction = Literal[
     "run.start", "run.continue", "image.generate", "clip.render", "plan.approve", "frames.approve", "graph.extend",
-    "sourcing.run",
+    "sourcing.run", "production.budget",
 ]
 ChatApprovalStatus = Literal["pending", "approved", "used", "declined", "expired"]
 
@@ -1336,3 +1336,97 @@ class ChatApprovalConsume(BaseModel):
     action: str
     subject: str
     needed_usd: float = Field(ge=0, allow_inf_nan=False)
+
+
+# ── chat productions (migration 0045) ────────────────────────────────────────
+
+ProductionStatus = Literal["open", "closed"]
+
+
+class ProductionIn(BaseModel):
+    """A new production opens with a budget of 0; the budget is added on an approved card."""
+
+    title: str
+    goal: str
+    playbook_slug: str | None = None
+    agent_cap_usd: float = Field(ge=0, allow_inf_nan=False)
+
+
+class ProductionLogIn(BaseModel):
+    text: str
+    media_ids: list[str] = []
+    clip_ids: list[str] = []
+
+
+class ProductionLogEntry(ProductionLogIn):
+    at: datetime
+
+
+class ProductionWatch(BaseModel):
+    kind: str
+    clip_id: str
+    status: str
+
+
+class ProductionArtifacts(BaseModel):
+    media_ids: list[str] = []
+    clip_ids: list[str] = []
+
+
+class ProductionWake(BaseModel):
+    reason: str
+
+
+class ProductionClose(BaseModel):
+    outcome: str
+
+
+class ProductionPatch(BaseModel):
+    """Every field optional, applied together in one write. The ``add_*`` amounts are atomic
+    increments, never replacements. ``add_budget_usd`` is a card being applied: it names the
+    ``budget_version`` it was priced against and is refused (409) if the budget has moved on.
+    ``watches`` replaces the list; ``acked_seq`` is the only change a closed production takes."""
+
+    expect_budget_version: int | None = Field(default=None, ge=0)
+    add_budget_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    add_agent_cap_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    add_agent_spent_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    append_log: list[ProductionLogIn] | None = None
+    add_media_ids: list[str] | None = None
+    add_clip_ids: list[str] | None = None
+    watches: list[ProductionWatch] | None = None
+    bump_wake: ProductionWake | None = None
+    acked_seq: int | None = Field(default=None, ge=0)
+    close: ProductionClose | None = None
+
+    @model_validator(mode="after")
+    def _budget_names_its_version(self) -> "ProductionPatch":
+        if (self.expect_budget_version is None) != (self.add_budget_usd is None):
+            raise ValueError("expect_budget_version and add_budget_usd go together")
+        return self
+
+
+class ProductionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    thread_id: str
+    user_id: str
+    title: str = ""
+    goal: str = ""
+    playbook_slug: str | None = None
+    status: ProductionStatus
+    budget_usd: float
+    budget_version: int
+    agent_cap_usd: float
+    agent_spent_usd: float
+    log: list[ProductionLogEntry] = []
+    artifacts: ProductionArtifacts = ProductionArtifacts()
+    watches: list[ProductionWatch] = []
+    wake_seq: int
+    acked_seq: int
+    wake_reason: str = ""
+    outcome: str = ""
+    created_at: datetime
+    updated_at: datetime
+    closed_at: datetime | None = None
