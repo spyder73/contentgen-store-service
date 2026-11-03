@@ -5,10 +5,11 @@ found (``None``), and a refusal the caller must tell apart raises ``ChatError`` 
 HTTP status and a stable code.
 
 A save is one transaction, and ``expect_version`` is decided in one place. ``expect_version``
-0 inserts the playbook at version 1, and the unique ``(user_id, slug)`` refuses it when the
-playbook exists. A higher one is the guard of the UPDATE that moves the playbook to the next
-version, so a stale caller matches no row and writes nothing, however the writers interleave.
-The version row is added in the same transaction as the insert or update, never on its own.
+0 inserts the playbook at version 1 (at version 2, over the seed's version 1, when the save
+carries a seed), and the unique ``(user_id, slug)`` refuses it when the playbook exists. A higher
+one is the guard of the UPDATE that moves the playbook to the next version, so a stale caller
+matches no row and writes nothing, however the writers interleave. The version rows are added in
+the same transaction as the insert or update, never on their own.
 """
 
 from __future__ import annotations
@@ -88,6 +89,8 @@ async def save_playbook(session: AsyncSession, user_id: str, slug: str, payload:
 
 
 async def _create(session: AsyncSession, user_id: str, slug: str, payload: PlaybookIn) -> Playbook:
+    seeded = payload.seed_body is not None
+    version = 2 if seeded else 1
     row = Playbook(
         id=str(uuid.uuid4()),
         user_id=user_id,
@@ -95,11 +98,18 @@ async def _create(session: AsyncSession, user_id: str, slug: str, payload: Playb
         name=payload.name,
         description=payload.description,
         body=payload.body,
-        version=1,
+        version=version,
         based_on_shipped_version=payload.based_on_shipped_version,
     )
     session.add(row)
-    session.add(_version_row(row.id, 1, payload))
+    if seeded:
+        session.add(
+            PlaybookVersion(
+                id=str(uuid.uuid4()), playbook_id=row.id, version=1,
+                body=payload.seed_body, note=payload.seed_note or "", author="user",
+            )
+        )
+    session.add(_version_row(row.id, version, payload))
     try:
         await session.commit()
     except IntegrityError:

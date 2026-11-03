@@ -356,3 +356,85 @@ def test_the_models_declare_what_the_migration_makes():
 
 def test_the_schema_literal_matches_the_check():
     assert ", ".join(f"'{a}'" for a in get_args(ChatAction)) == ACTIONS_0046
+
+
+# ── a seed: the text a first save replaces ───────────────────────────────────
+
+SEED = {"seed_body": "# The shipped text\n", "seed_note": "the shipped text, version 3", "based_on_shipped_version": 3}
+
+
+def test_a_seeded_first_save_is_version_2_over_the_seed(env):
+    out = _saved(env, **SEED, body="# Mine\n", note="tighter", author="agent")
+    assert (out["version"], out["body"], out["based_on_shipped_version"]) == (2, "# Mine\n", 3)
+    assert env.client.get(_url(), headers=_h()).json() == out
+    listed = _versions(env)
+    assert [(v["version"], v["note"], v["author"]) for v in listed] == [
+        (2, "tighter", "agent"), (1, "the shipped text, version 3", "user"),
+    ]
+    one = env.client.get(_url(tail="/versions/1"), headers=_h()).json()
+    assert one["body"] == "# The shipped text\n"
+    assert env.client.get(_url(tail="/versions/2"), headers=_h()).json()["body"] == "# Mine\n"
+    assert env.count(Playbook) == 1 and env.count(PlaybookVersion) == 2
+    # The playbook goes on from version 2.
+    assert _saved(env, expect_version=2, body="# Mine again\n")["version"] == 3
+
+
+def test_a_seed_needs_no_note_and_may_be_empty(env):
+    _saved(env, seed_body="")
+    first = env.client.get(_url(tail="/versions/1"), headers=_h()).json()
+    assert (first["body"], first["note"], first["author"]) == ("", "", "user")
+    assert env.client.get(_url(), headers=_h()).json()["version"] == 2
+
+
+def test_without_a_seed_a_first_save_is_still_version_1(env):
+    assert _saved(env, seed_body=None, seed_note=None)["version"] == 1
+    assert [v["version"] for v in _versions(env)] == [1]
+
+
+def test_a_seed_is_only_for_a_create(env):
+    _saved(env)
+    for over in ({"seed_body": "old"}, {"seed_note": "why"}, {"seed_body": "old", "seed_note": "why"}):
+        r = _save(env, expect_version=1, body="next", **over)
+        assert r.status_code == 422, over
+    assert env.client.get(_url(), headers=_h()).json()["version"] == 1
+    assert env.count(PlaybookVersion) == 1
+
+
+def test_a_seed_note_needs_a_seed_body(env):
+    assert _save(env, seed_note="why").status_code == 422
+    assert env.count(Playbook) == 0 and env.count(PlaybookVersion) == 0
+
+
+def test_a_seed_body_has_the_bodys_limit_and_type(env):
+    assert _save(env, seed_body="x" * 32001).status_code == 422
+    assert _save(env, seed_body=7).status_code == 422
+    assert env.count(Playbook) == 0 and env.count(PlaybookVersion) == 0
+    assert _save(env, seed_body="x" * 32000).status_code == 200
+    assert len(env.client.get(_url(tail="/versions/1"), headers=_h()).json()["body"]) == 32000
+
+
+def test_a_seeded_first_save_over_an_existing_playbook_is_stale_and_changes_nothing(env):
+    _saved(env, **SEED, body="tab B")
+    again = _save(env, **SEED, body="tab A")
+    assert (again.status_code, again.json()["detail"]) == (409, "stale_playbook_version")
+    assert env.client.get(_url(), headers=_h()).json()["body"] == "tab B"
+    assert env.count(Playbook) == 1 and env.count(PlaybookVersion) == 2
+
+
+def test_a_seeded_first_save_is_one_transaction(env):
+    """The second version row fails after the playbook and the seed's row were written: nothing stays."""
+
+    def fail_on_version_2(_mapper, _connection, target):
+        if target.version == 2:
+            raise RuntimeError("the disk is full")
+
+    event.listen(PlaybookVersion, "before_insert", fail_on_version_2)
+    try:
+        with pytest.raises(RuntimeError):
+            _save(env, **SEED)
+    finally:
+        event.remove(PlaybookVersion, "before_insert", fail_on_version_2)
+    assert env.count(Playbook) == 0 and env.count(PlaybookVersion) == 0
+    assert env.client.get(_url(), headers=_h()).status_code == 404
+    # Nothing is left in the way of the next try.
+    assert _saved(env, **SEED)["version"] == 2

@@ -1448,7 +1448,9 @@ class PlaybookIn(BaseModel):
     """One save. ``expect_version`` is the version the caller read: 0 creates the playbook
     (refused if it exists), n >= 1 saves version n + 1 (refused, 409, if the playbook has moved
     on). ``based_on_shipped_version`` records which shipped file a copy came from; leaving it
-    out keeps the stored value."""
+    out keeps the stored value. ``seed_body`` and ``seed_note``, on a create only, are the text
+    this save replaces (a shipped file's): they become version 1, by the user, and this save
+    version 2, so the first edit can be undone."""
 
     name: str = Field(min_length=1)
     description: str = ""
@@ -1457,6 +1459,18 @@ class PlaybookIn(BaseModel):
     author: PlaybookAuthor
     based_on_shipped_version: int | None = Field(default=None, ge=1)
     expect_version: int = Field(ge=0)
+    seed_body: str | None = Field(default=None, max_length=PLAYBOOK_BODY_MAX)
+    seed_note: str | None = None
+
+    @model_validator(mode="after")
+    def a_seed_starts_a_playbook(self) -> "PlaybookIn":
+        if self.seed_body is None and self.seed_note is None:
+            return self
+        if self.seed_body is None:
+            raise ValueError("seed_note_without_seed_body")
+        if self.expect_version != 0:
+            raise ValueError("seed_only_on_create")
+        return self
 
 
 class PlaybookOut(BaseModel):
