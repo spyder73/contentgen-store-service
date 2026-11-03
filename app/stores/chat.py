@@ -25,7 +25,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
-from ..models import ChatApproval, ChatMessage, ChatThread
+from ..models import ChatApproval, ChatMessage, ChatProduction, ChatThread
 from ..schemas import (
     ChatApprovalApprove,
     ChatApprovalConsume,
@@ -182,6 +182,7 @@ async def delete_thread(session: AsyncSession, user_id: str, thread_id: str) -> 
     # Explicit rather than trusting ON DELETE CASCADE alone: sqlite test engines do not
     # enforce foreign keys, and the children must never outlive the thread anywhere.
     await session.execute(delete(ChatApproval).where(ChatApproval.thread_id == row.id))
+    await session.execute(delete(ChatProduction).where(ChatProduction.thread_id == row.id))
     await session.execute(delete(ChatMessage).where(ChatMessage.thread_id == row.id))
     await session.execute(delete(ChatThread).where(ChatThread.id == row.id))
     await session.commit()

@@ -1032,7 +1032,7 @@ class ChatApproval(Base):
     __table_args__ = (
         CheckConstraint(
             "action IN ('run.start', 'run.continue', 'image.generate', 'clip.render', "
-            "'plan.approve', 'frames.approve', 'graph.extend', 'sourcing.run')",
+            "'plan.approve', 'frames.approve', 'graph.extend', 'sourcing.run', 'production.budget')",
             name="ck_chat_approvals_action",
         ),
         CheckConstraint(
@@ -1044,4 +1044,74 @@ class ChatApproval(Base):
         # One hash backs one approval per thread (NULL while pending, and NULLs are
         # distinct), so a token can never be ambiguous between two spends.
         Index("ux_chat_approvals_thread_token", "thread_id", "token_sha256", unique=True),
+    )
+
+
+class ChatProduction(Base):
+    """A durable work item of a chat thread (migration 0045): the approved generation
+    budget, the assistant's own cost cap, a log, the artifacts and the render watches a
+    wake-up resumes from. At most one production per thread is ``open``.
+
+    Amounts are raw provider USD. ``budget_usd`` / ``agent_*_usd`` only ever move by SQL
+    increments, and ``budget_version`` counts the approved budget cards. ``wake_seq`` is
+    bumped by whatever wakes the agent (a finished render) and ``acked_seq`` is the last
+    one it handled, so ``wake_seq > acked_seq`` means a wake-up is owed.
+    """
+
+    __tablename__ = "chat_productions"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("chat_threads.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    goal: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    playbook_slug: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="open", server_default="open")
+    budget_usd: Mapped[float] = mapped_column(
+        Numeric(12, 6, asdecimal=False), nullable=False, default=0, server_default="0"
+    )
+    budget_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    agent_cap_usd: Mapped[float] = mapped_column(
+        Numeric(12, 6, asdecimal=False), nullable=False, default=0, server_default="0"
+    )
+    agent_spent_usd: Mapped[float] = mapped_column(
+        Numeric(12, 6, asdecimal=False), nullable=False, default=0, server_default="0"
+    )
+    # JSONB server defaults live in the migration only (see ChatThread.transcript).
+    log: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    artifacts: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, default=lambda: {"media_ids": [], "clip_ids": []}
+    )
+    watches: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    wake_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    acked_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    wake_reason: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    outcome: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, onupdate=_now, server_default=func.now()
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Mirrors 0045 (an autogenerate that "fixes" a drift here would rewrite production indexes).
+    __table_args__ = (
+        CheckConstraint("status IN ('open', 'closed')", name="ck_chat_productions_status"),
+        CheckConstraint(
+            "budget_usd >= 0 AND agent_cap_usd >= 0 AND agent_spent_usd >= 0", name="ck_chat_productions_amounts"
+        ),
+        CheckConstraint("acked_seq <= wake_seq", name="ck_chat_productions_ack"),
+        Index(
+            "uq_chat_productions_open_thread",
+            "thread_id",
+            unique=True,
+            postgresql_where=text("status = 'open'"),
+            sqlite_where=text("status = 'open'"),
+        ),
+        Index("ix_chat_productions_user_status", "user_id", "status"),
     )
