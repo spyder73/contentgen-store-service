@@ -1363,9 +1363,13 @@ class ProductionLogEntry(ProductionLogIn):
 
 
 class ProductionWatch(BaseModel):
+    """One render a production waits on. ``started_at`` is when the backend registered it, by
+    the clock that stamps a clip's ``finished_at``; a row from before it has none."""
+
     kind: str
     clip_id: str
     status: str
+    started_at: datetime | None = None
 
 
 class ProductionArtifacts(BaseModel):

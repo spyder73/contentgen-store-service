@@ -159,7 +159,7 @@ def _values(row: ChatProduction, patch: ProductionPatch, now: datetime) -> dict[
             "clip_ids": list(dict.fromkeys([*row.artifacts.get("clip_ids", []), *(patch.add_clip_ids or [])])),
         }
     if patch.watches is not None:
-        values["watches"] = [watch.model_dump() for watch in patch.watches]
+        values["watches"] = [watch.model_dump(mode="json") for watch in patch.watches]
     if patch.bump_wake is not None:
         values["wake_seq"] = ChatProduction.wake_seq + 1
         values["wake_reason"] = patch.bump_wake.reason

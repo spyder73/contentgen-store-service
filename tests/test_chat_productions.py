@@ -212,8 +212,8 @@ def test_artifacts_dedupe(env):
 
 def test_watches_replace_the_list(env):
     p = _new(env)
-    one = {"kind": "render", "clip_id": "c1", "status": "rendering"}
-    two = {"kind": "render", "clip_id": "c2", "status": "rendering"}
+    one = {"kind": "render", "clip_id": "c1", "status": "rendering", "started_at": None}
+    two = {"kind": "render", "clip_id": "c2", "status": "rendering", "started_at": None}
     assert _patch(env, p["id"], watches=[one, two]).json()["watches"] == [one, two]
     assert _patch(env, p["id"], watches=[two]).json()["watches"] == [two]
     assert _patch(env, p["id"], add_agent_spent_usd=0.1).json()["watches"] == [two]
@@ -277,6 +277,24 @@ def test_pending_wakes_also_lists_open_productions_with_a_render_still_rendering
 
     listed = env.client.get("/v1/chat/productions/pending-wakes", headers=_h(None)).json()
     assert {x["id"] for x in listed} == {rendering["id"], theirs["id"], handled["id"]}
+
+
+def test_a_watch_keeps_when_its_render_started(env):
+    """The boot compares this with the clip's own finished_at. Rows from before it have none."""
+    p = _new(env)
+    started = {"kind": "render", "clip_id": "c1", "status": "rendering", "started_at": "2026-11-03T10:00:00.123456Z"}
+    old = {"kind": "render", "clip_id": "c2", "status": "rendering"}
+    assert _patch(env, p["id"], watches=[started, old]).status_code == 200
+
+    watches = _get(env, p["id"])["watches"]
+    assert watches[0] == started
+    assert watches[1] == {**old, "started_at": None}
+
+    # It is a timestamp, and the sweeps match a watch that has one.
+    assert _patch(env, p["id"], watches=[{**old, "started_at": "soon"}]).status_code == 422
+    found = env.client.get("/v1/chat/productions/watching?clip_id=c1", headers=_h(None)).json()
+    assert [x["id"] for x in found] == [p["id"]]
+    assert [x["id"] for x in env.client.get("/v1/chat/productions/pending-wakes", headers=_h(None)).json()] == [p["id"]]
 
 
 def test_watching_finds_open_rendering_watches_only(env):
