@@ -257,6 +257,28 @@ def test_pending_wakes_lists_open_unacked_productions_of_every_user(env):
     assert quiet["id"] not in {x["id"] for x in listed}
 
 
+def test_pending_wakes_also_lists_open_productions_with_a_render_still_rendering(env):
+    """A render a restart cut off owes no wake-up yet: the boot has to find it to resolve it."""
+
+    def watch(clip: str, status: str = "rendering") -> dict:
+        return {"kind": "render", "clip_id": clip, "status": status}
+
+    rendering = _new(env)
+    _patch(env, rendering["id"], watches=[watch("c0", "ready"), watch("c1")])
+    theirs = _new(env, user=USER_B)
+    _patch(env, theirs["id"], USER_B, watches=[watch("c2")])
+    handled = _new(env)
+    _patch(env, handled["id"], watches=[watch("c3")], bump_wake={"reason": "r"}, acked_seq=1)
+    ended = _new(env)
+    _patch(env, ended["id"], watches=[watch("c4", "ready"), watch("c5", "failed")])
+    closed = _new(env)
+    _patch(env, closed["id"], watches=[watch("c6")], close={"outcome": "dropped"})
+    _new(env)  # waits on nothing
+
+    listed = env.client.get("/v1/chat/productions/pending-wakes", headers=_h(None)).json()
+    assert {x["id"] for x in listed} == {rendering["id"], theirs["id"], handled["id"]}
+
+
 def test_watching_finds_open_rendering_watches_only(env):
     def watch(clip: str, status: str = "rendering", kind: str = "render") -> dict:
         return {"kind": kind, "clip_id": clip, "status": status}

@@ -96,13 +96,19 @@ async def list_closed(session: AsyncSession, user_id: str, *, limit: int = 10) -
 
 
 async def pending_wakes(session: AsyncSession) -> list[ChatProduction]:
-    """Open productions of every user with a wake-up the agent has not handled yet."""
+    """Open productions of every user the boot has to look at: a wake-up the agent has not
+    handled yet, or a render still shown rendering. A restart cuts a render off with nothing
+    owed yet, and nothing else would ever end its watch. As in ``watching_clip``, the open rows
+    are few and the watch is matched here rather than with a dialect-specific JSONB query."""
     query = (
         select(ChatProduction)
-        .where(ChatProduction.status == "open", ChatProduction.wake_seq > ChatProduction.acked_seq)
+        .where(ChatProduction.status == "open")
         .order_by(ChatProduction.created_at, ChatProduction.id)
     )
-    return list((await session.execute(query)).scalars())
+    return [
+        row for row in (await session.execute(query)).scalars()
+        if row.wake_seq > row.acked_seq or any(watch.get("status") == "rendering" for watch in row.watches)
+    ]
 
 
 async def watching_clip(session: AsyncSession, clip_id: str) -> list[ChatProduction]:
