@@ -1185,10 +1185,11 @@ ChatThreadStatus = Literal["idle", "working"]
 ChatRole = Literal["user", "operator"]
 # 0043 added ``node`` / ``event`` (the director's live graph) and the three director approvals.
 ChatKind = Literal["text", "tool", "approval", "run", "media", "error", "node", "event"]
-# 0044 added sourcing.run (the chat's paid searches); 0045 added production.budget (a production's budget card).
+# 0044 added sourcing.run (the chat's paid searches); 0045 added production.budget (a production's budget card);
+# 0046 added playbook.save (the card an agent's playbook edit waits behind).
 ChatAction = Literal[
     "run.start", "run.continue", "image.generate", "clip.render", "plan.approve", "frames.approve", "graph.extend",
-    "sourcing.run", "production.budget",
+    "sourcing.run", "production.budget", "playbook.save",
 ]
 ChatApprovalStatus = Literal["pending", "approved", "used", "declined", "expired"]
 
@@ -1434,3 +1435,72 @@ class ProductionOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     closed_at: datetime | None = None
+
+
+# ── playbooks (migration 0046) ───────────────────────────────────────────────
+
+PlaybookStatus = Literal["active", "archived"]
+PlaybookAuthor = Literal["user", "agent"]
+PLAYBOOK_BODY_MAX = 32000
+
+
+class PlaybookIn(BaseModel):
+    """One save. ``expect_version`` is the version the caller read: 0 creates the playbook
+    (refused if it exists), n >= 1 saves version n + 1 (refused, 409, if the playbook has moved
+    on). ``based_on_shipped_version`` records which shipped file a copy came from; leaving it
+    out keeps the stored value. ``seed_body`` and ``seed_note``, on a create only, are the text
+    this save replaces (a shipped file's): they become version 1, by the user, and this save
+    version 2, so the first edit can be undone."""
+
+    name: str = Field(min_length=1)
+    description: str = ""
+    body: str = Field(max_length=PLAYBOOK_BODY_MAX)
+    note: str = ""
+    author: PlaybookAuthor
+    based_on_shipped_version: int | None = Field(default=None, ge=1)
+    expect_version: int = Field(ge=0)
+    seed_body: str | None = Field(default=None, max_length=PLAYBOOK_BODY_MAX)
+    seed_note: str | None = None
+
+    @model_validator(mode="after")
+    def a_seed_starts_a_playbook(self) -> "PlaybookIn":
+        if self.seed_body is None and self.seed_note is None:
+            return self
+        if self.seed_body is None:
+            raise ValueError("seed_note_without_seed_body")
+        if self.expect_version != 0:
+            raise ValueError("seed_only_on_create")
+        return self
+
+
+class PlaybookOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_id: str
+    slug: str
+    name: str
+    description: str
+    body: str
+    version: int
+    based_on_shipped_version: int | None = None
+    status: PlaybookStatus
+    created_at: datetime
+    updated_at: datetime
+
+
+class PlaybookVersionSummary(BaseModel):
+    """A saved version without its body: what the history list returns."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    playbook_id: str
+    version: int
+    note: str
+    author: PlaybookAuthor
+    created_at: datetime
+
+
+class PlaybookVersionOut(PlaybookVersionSummary):
+    body: str

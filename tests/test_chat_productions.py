@@ -553,17 +553,16 @@ def test_the_models_declare_what_the_migration_makes():
     """Model/migration drift means a future autogenerate "fixes" production."""
     sql = _render(_load_migration_module().upgrade)
     modelled = {
-        (t.name, c.name): re.sub(r"\s+", " ", str(c.sqltext))
-        for t in (ChatProduction.__table__, ChatApproval.__table__)
-        for c in t.constraints
+        c.name: re.sub(r"\s+", " ", str(c.sqltext))
+        for c in ChatProduction.__table__.constraints
         if getattr(c, "sqltext", None) is not None and c.name
     }
     for name in ("ck_chat_productions_status", "ck_chat_productions_amounts", "ck_chat_productions_ack"):
-        assert f"CONSTRAINT {name} CHECK ({modelled[('chat_productions', name)]})" in sql, name
-    action = "ck_chat_approvals_action"
-    assert f"ADD CONSTRAINT {action} CHECK ({modelled[('chat_approvals', action)]})" in sql
-    assert modelled[("chat_approvals", action)] == f"action IN ({ACTIONS_0045})"
+        assert f"CONSTRAINT {name} CHECK ({modelled[name]})" in sql, name
     columns = {c.name for c in ChatProduction.__table__.columns}
     assert all(f"{name} " in sql for name in columns), columns
     indexes = {i.name for i in ChatProduction.__table__.indexes}
     assert indexes == {"uq_chat_productions_open_thread", "ix_chat_productions_user_status"}
+
+
+# The model-vs-migration pin of the approval action list moved on with 0046: see test_playbooks.py.
