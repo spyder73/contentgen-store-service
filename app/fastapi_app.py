@@ -82,6 +82,10 @@ from .schemas import (
     ChatThreadOut,
     ChatThreadPatch,
     ChatThreadSummary,
+    PlaybookIn,
+    PlaybookOut,
+    PlaybookVersionOut,
+    PlaybookVersionSummary,
     ProductionIn,
     ProductionOut,
     ProductionPatch,
@@ -120,6 +124,7 @@ from .stores import (
     clip_ratings,
     ideas,
     pipelines,
+    playbooks,
     productions,
     prompts,
     render_templates,
@@ -153,6 +158,13 @@ def _require_user_id(request: Request) -> str:
 
 def _chat_error(exc: chat.ChatError) -> HTTPException:
     return HTTPException(status_code=exc.status_code, detail=exc.message)
+
+
+def _path_user(request: Request, user_id: str) -> str:
+    """A ``/v1/users/{user_id}/...`` route that is the caller's own: the path user is the header user."""
+    if _require_user_id(request) != user_id:
+        raise HTTPException(status_code=403, detail="forbidden")
+    return user_id
 
 
 def _chat_found(row: Any, detail: str) -> Any:
@@ -1709,9 +1721,45 @@ def create_fastapi_app() -> FastAPI:
         status: Literal["closed"] = "closed",
         limit: int = Query(default=10, ge=1, le=productions.LIST_MAX),
     ) -> Any:
-        if _require_user_id(request) != user_id:
-            raise HTTPException(status_code=403, detail="forbidden")
-        return await productions.list_closed(session, user_id, limit=limit)
+        return await productions.list_closed(session, _path_user(request, user_id), limit=limit)
+
+    # ── playbooks ────────────────────────────────────────────────────────────
+    #
+    # A user's copies and edits of the agent's Markdown how-tos, each save a new
+    # version. The shipped playbooks are files in the backend and are not served
+    # here. The path user must be the caller, as for chat-productions.
+
+    @app.get("/v1/users/{user_id}/playbooks", response_model=list[PlaybookOut])
+    async def list_playbooks_handler(user_id: str, request: Request, session: SessionDep) -> Any:
+        return await playbooks.list_playbooks(session, _path_user(request, user_id))
+
+    @app.get("/v1/users/{user_id}/playbooks/{slug}", response_model=PlaybookOut)
+    async def get_playbook_handler(user_id: str, slug: str, request: Request, session: SessionDep) -> Any:
+        row = await playbooks.get_playbook(session, _path_user(request, user_id), slug)
+        return _chat_found(row, "playbook_not_found")
+
+    @app.put("/v1/users/{user_id}/playbooks/{slug}", response_model=PlaybookOut)
+    async def save_playbook_handler(
+        user_id: str, slug: str, payload: PlaybookIn, request: Request, session: SessionDep
+    ) -> Any:
+        try:
+            return await playbooks.save_playbook(session, _path_user(request, user_id), slug, payload)
+        except chat.ChatError as exc:
+            raise _chat_error(exc)
+
+    @app.get("/v1/users/{user_id}/playbooks/{slug}/versions", response_model=list[PlaybookVersionSummary])
+    async def list_playbook_versions_handler(
+        user_id: str, slug: str, request: Request, session: SessionDep
+    ) -> Any:
+        rows = await playbooks.list_versions(session, _path_user(request, user_id), slug)
+        return _chat_found(rows, "playbook_not_found")
+
+    @app.get("/v1/users/{user_id}/playbooks/{slug}/versions/{version}", response_model=PlaybookVersionOut)
+    async def get_playbook_version_handler(
+        user_id: str, slug: str, version: int, request: Request, session: SessionDep
+    ) -> Any:
+        row = await playbooks.get_version(session, _path_user(request, user_id), slug, version)
+        return _chat_found(row, "playbook_version_not_found")
 
     # ── user settings ────────────────────────────────────────────────────────
     #

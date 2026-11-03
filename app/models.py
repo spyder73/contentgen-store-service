@@ -1032,7 +1032,7 @@ class ChatApproval(Base):
     __table_args__ = (
         CheckConstraint(
             "action IN ('run.start', 'run.continue', 'image.generate', 'clip.render', "
-            "'plan.approve', 'frames.approve', 'graph.extend', 'sourcing.run', 'production.budget')",
+            "'plan.approve', 'frames.approve', 'graph.extend', 'sourcing.run', 'production.budget', 'playbook.save')",
             name="ck_chat_approvals_action",
         ),
         CheckConstraint(
@@ -1114,4 +1114,65 @@ class ChatProduction(Base):
             sqlite_where=text("status = 'open'"),
         ),
         Index("ix_chat_productions_user_status", "user_id", "status"),
+    )
+
+
+class Playbook(Base):
+    """A user's own copy or edit of a playbook, the Markdown how-to the chat agent follows
+    (migration 0046). The shipped playbooks are files in the backend; a row here overrides
+    the shipped file of the same slug for its owner. ``version`` counts the saves and moves
+    only in the one guarded UPDATE of ``stores/playbooks.py``; ``based_on_shipped_version`` is
+    the shipped version a copy started from, so a newer shipped file can be flagged.
+    """
+
+    __tablename__ = "playbooks"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    slug: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    body: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    based_on_shipped_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active", server_default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    # Mirrors 0046 (an autogenerate that "fixes" a drift here would rewrite production constraints).
+    __table_args__ = (
+        UniqueConstraint("user_id", "slug", name="uq_playbooks_user_slug"),
+        CheckConstraint("status IN ('active', 'archived')", name="ck_playbooks_status"),
+        CheckConstraint("version >= 1", name="ck_playbooks_version"),
+    )
+
+
+class PlaybookVersion(Base):
+    """One save of a playbook (migration 0046): append-only, never updated or deleted by hand.
+    Deleting the playbook, or its owner, takes its history with it."""
+
+    __tablename__ = "playbook_versions"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
+    playbook_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("playbooks.id", ondelete="CASCADE"), nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    author: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("playbook_id", "version", name="uq_playbook_versions_playbook_version"),
+        CheckConstraint("author IN ('user', 'agent')", name="ck_playbook_versions_author"),
+        CheckConstraint("version >= 1", name="ck_playbook_versions_version"),
     )
