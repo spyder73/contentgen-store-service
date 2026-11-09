@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 
 from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,6 +37,59 @@ def _is_foreign(row: ClipPrompt, user_id: str | None) -> bool:
     reachable by everyone, as it is today.
     """
     return bool(user_id) and row.user_id is not None and row.user_id != user_id
+
+
+class MediaNotFound(LookupError):
+    """A clip body names media the caller may not use (another user's row).
+
+    Answered as a missing media id is, 404 ``media_not_found: <id>``. A media id
+    with no row at all is NOT refused on a PUT/PATCH: the backend writes a clip's
+    refs while a placeholder item is still generating and its row not yet saved.
+    """
+
+    def __init__(self, media_id: str) -> None:
+        super().__init__(media_id)
+        self.media_id = media_id
+
+
+def _media_filter(user_id: str | None):
+    """WHERE clause for the media a caller may use: its own, or a row with no owner.
+
+    No caller (an internal job) is not filtered, as for the clips themselves.
+    """
+    if not user_id:
+        return None
+    return or_(MediaItem.user_id.is_(None), MediaItem.user_id == user_id)
+
+
+def _ref_ids(media_refs: dict | None) -> list[str]:
+    """The well-formed media ids a clip's refs name, in order (the buckets
+    get_full_clip reads). A malformed id cannot be a row, so it is skipped."""
+    ids: list[str] = []
+    for bucket in ("images", "ai_videos", "audios"):
+        for value in (media_refs or {}).get(bucket) or []:
+            try:
+                uuid.UUID(str(value))
+            except ValueError:
+                continue
+            ids.append(str(value))
+    return ids
+
+
+async def _check_media_refs(
+    session: AsyncSession, media_refs: dict | None, user_id: str | None
+) -> None:
+    """Raise MediaNotFound for the first ref that is another user's media."""
+    ids = _ref_ids(media_refs)
+    if not user_id or not ids:
+        return
+    result = await session.execute(
+        select(MediaItem.id).where(MediaItem.id.in_(ids), ~_media_filter(user_id))
+    )
+    foreign = {str(i) for i in result.scalars()}
+    for media_id in ids:
+        if media_id in foreign:
+            raise MediaNotFound(media_id)
 
 
 async def list_clips(
@@ -135,9 +189,12 @@ async def get_full_clip(
     )
     media_items: list[MediaItemOut] = []
     if all_ids:
-        result = await session.execute(
-            select(MediaItem).where(MediaItem.id.in_(all_ids))
-        )
+        # Only media the caller may use: a foreign ref left on a clip (an old
+        # one, from before refs were checked) is simply not returned.
+        query = select(MediaItem).where(MediaItem.id.in_(all_ids))
+        if (usable := _media_filter(user_id)) is not None:
+            query = query.where(usable)
+        result = await session.execute(query)
         media_items = [MediaItemOut.from_orm_row(m) for m in result.scalars()]
     return ClipFullOut(clip=clip_out, media=media_items)
 
@@ -150,6 +207,7 @@ async def upsert_clip(
     # does not own: another user's clip is not found, and nothing is written.
     if row is not None and _is_foreign(row, user_id):
         return None
+    await _check_media_refs(session, body.media_refs, user_id)
     if row is None:
         row = ClipPrompt(id=body.id)
         if user_id:
@@ -182,6 +240,7 @@ async def patch_clip(
     row = await session.get(ClipPrompt, id)
     if row is None or _is_foreign(row, user_id):
         return None
+    await _check_media_refs(session, fields.get("media_refs"), user_id)
     for key, value in fields.items():
         attr = "metadata_" if key == "metadata" else key
         setattr(row, attr, value)
@@ -245,6 +304,9 @@ async def swap_clip_media(
             )
 
     new_item = await session.get(MediaItem, body.new_media_id)
+    # Another user's media is a missing media id: same branch, same answer.
+    if new_item is not None and user_id and new_item.user_id not in (None, user_id):
+        new_item = None
     if new_item is None:
         logger.warning(
             "swap_clip_media: media_item=%s not found in DB (clip=%s, kind=%s, index=%d)",

@@ -742,7 +742,10 @@ def create_fastapi_app() -> FastAPI:
     @app.put("/v1/clips/{id}", response_model=ClipPromptOut)
     async def upsert_clip_handler(id: str, body: ClipPromptIn, request: Request, session: SessionDep) -> Any:
         body.id = id
-        row = await clips.upsert_clip(session, body, user_id=_get_user_id(request))
+        try:
+            row = await clips.upsert_clip(session, body, user_id=_get_user_id(request))
+        except clips.MediaNotFound as exc:
+            raise HTTPException(status_code=404, detail=f"media_not_found: {exc.media_id}")
         if row is None:
             raise HTTPException(status_code=404, detail="not_found")
         return row
@@ -756,7 +759,10 @@ def create_fastapi_app() -> FastAPI:
         fields = body.model_dump(exclude_unset=True)
         if not fields:
             raise HTTPException(status_code=400, detail="empty_body")
-        row = await clips.patch_clip(session, id, fields, user_id=_get_user_id(request))
+        try:
+            row = await clips.patch_clip(session, id, fields, user_id=_get_user_id(request))
+        except clips.MediaNotFound as exc:
+            raise HTTPException(status_code=404, detail=f"media_not_found: {exc.media_id}")
         if row is None:
             raise HTTPException(status_code=404, detail="not_found")
         return row
