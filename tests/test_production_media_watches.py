@@ -59,10 +59,22 @@ def test_media_watch_round_trips_every_field(env):
 
 def test_a_watch_names_its_vendor_and_kind_of_job_or_nothing(env):
     p = _new(env)
-    for bad in ({"vendor": "other"}, {"what": "image"}, {"failure": "x" * 301}):
+    for bad in ({"vendor": "other"}, {"what": "image"}):
         assert _patch(env, p["id"], watches=[_media("m1", **bad)]).status_code == 422, bad
     assert _get(env, p["id"])["watches"] == []
-    assert _patch(env, p["id"], watches=[_media("m1", failure="x" * 300)]).status_code == 200
+
+
+def test_a_long_failure_is_cut_to_300_characters_never_refused(env):
+    """The watches list is replaced whole: a refused end-of-job write would leave the job running."""
+    p = _new(env)
+    long = "".join(chr(ord("a") + i % 26) for i in range(1000))
+    out = _patch(env, p["id"], watches=[_media("m1", "failed", failure=long)])
+    assert out.status_code == 200, out.text
+    assert out.json()["watches"][0]["failure"] == long[:300]
+    assert _get(env, p["id"])["watches"][0]["failure"] == long[:300]
+    # Up to 300 is kept whole; the cut is by characters, not bytes.
+    assert _patch(env, p["id"], watches=[_media("m1", "failed", failure="é" * 300)]).json()["watches"][0]["failure"] == "é" * 300
+    assert _patch(env, p["id"], watches=[_media("m1", "failed", failure="é" * 301)]).json()["watches"][0]["failure"] == "é" * 300
 
 
 def test_render_watch_without_media_fields_still_valid(env):

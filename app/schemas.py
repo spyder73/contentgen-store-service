@@ -1371,6 +1371,9 @@ class ProductionLogEntry(ProductionLogIn):
     at: datetime
 
 
+FAILURE_MAX = 300
+
+
 class ProductionWatch(BaseModel):
     """One job a production waits on. ``kind`` ``render`` is a clip's render (``clip_id``);
     ``media`` is a background media job (``media_id``, ``status`` ``running`` until it ends).
@@ -1379,7 +1382,9 @@ class ProductionWatch(BaseModel):
     from before them still loads (empty means not set, so a client may send a read watch back
     as it got it): ``batch`` groups the jobs of one call (one wake-up per batch),
     ``scene_key`` is the input key their tries are counted under (empty for music), and
-    ``failure_kind`` / ``failure`` say why an ended job failed."""
+    ``failure_kind`` / ``failure`` say why an ended job failed; ``failure`` is cut to
+    ``FAILURE_MAX`` characters, never refused, because ``watches`` replaces the whole list and a
+    refused end-of-job write would leave the job running."""
 
     kind: str
     clip_id: str = ""
@@ -1393,7 +1398,12 @@ class ProductionWatch(BaseModel):
     request_id: str = ""
     scene_key: str = ""
     failure_kind: str = ""
-    failure: str = Field(default="", max_length=300)
+    failure: str = ""
+
+    @field_validator("failure", mode="before")
+    @classmethod
+    def _failure_is_cut(cls, value: Any) -> Any:
+        return value[:FAILURE_MAX] if isinstance(value, str) else value
 
 
 class ApprovedScene(BaseModel):
