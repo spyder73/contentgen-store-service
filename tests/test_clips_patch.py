@@ -37,6 +37,7 @@ def _clip_row(**overrides) -> SimpleNamespace:
     now = datetime.now(timezone.utc)
     base = dict(
         id=CLIP_ID,
+        user_id=None,
         name="original name",
         metadata_={"a": 1},
         style={"look": "cinematic"},

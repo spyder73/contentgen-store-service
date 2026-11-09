@@ -35,6 +35,7 @@ def _clip_row(clip_id: str, media_refs: dict, is_dirty: bool = False) -> SimpleN
     now = datetime.now(timezone.utc)
     return SimpleNamespace(
         id=clip_id,
+        user_id=None,
         name="a clip",
         metadata_={},
         style={},

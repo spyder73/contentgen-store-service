@@ -364,6 +364,9 @@ class ClipPromptOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    # The owner. None for a legacy clip made before multi-tenancy, which stays
+    # reachable by every caller (see app/stores/clips.py).
+    user_id: str | None = None
     name: str
     metadata: dict[str, Any] = {}
     style: dict[str, Any] = {}
@@ -379,6 +382,7 @@ class ClipPromptOut(BaseModel):
     def from_orm_row(cls, row) -> "ClipPromptOut":
         return cls(
             id=row.id,
+            user_id=row.user_id,
             name=row.name,
             metadata=row.metadata_ or {},
             style=row.style or {},

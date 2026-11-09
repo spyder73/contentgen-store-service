@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
@@ -24,6 +24,18 @@ def _user_filter(user_id: str):
     if not user_id:
         raise ValueError("user_id is required for clip listing")
     return ClipPrompt.user_id == user_id
+
+
+def _is_foreign(row: ClipPrompt, user_id: str | None) -> bool:
+    """True when ``row`` is owned by someone other than the caller.
+
+    The by-id routes answer that exactly as a missing clip, so an id never
+    reveals that it exists. A caller with no user (an internal job: the
+    pipeline runner, the scheduler) is not filtered, and a legacy row with no
+    owner (clip_prompts.user_id predates multi-tenancy, with no backfill) stays
+    reachable by everyone, as it is today.
+    """
+    return bool(user_id) and row.user_id is not None and row.user_id != user_id
 
 
 async def list_clips(
@@ -90,14 +102,18 @@ async def list_clip_summaries(
     return PagedResponse(items=items, total=total, page=page, limit=limit)
 
 
-async def get_clip(session: AsyncSession, id: str) -> ClipPromptOut | None:
+async def get_clip(
+    session: AsyncSession, id: str, user_id: str | None = None
+) -> ClipPromptOut | None:
     row = await session.get(ClipPrompt, id)
-    if row is None:
+    if row is None or _is_foreign(row, user_id):
         return None
     return ClipPromptOut.from_orm_row(row)
 
 
-async def get_full_clip(session: AsyncSession, id: str) -> ClipFullOut | None:
+async def get_full_clip(
+    session: AsyncSession, id: str, user_id: str | None = None
+) -> ClipFullOut | None:
     # NOTE: deliberately no ORDER BY on the `id.in_(all_ids)` query below —
     # Postgres does not guarantee IN-list order, so a caller computing a
     # POSITIONAL media_index off this response's array can drift from
@@ -108,7 +124,7 @@ async def get_full_clip(session: AsyncSession, id: str) -> ClipFullOut | None:
     # load-bearing need for order to matter — a slot resolved BY ID cannot be
     # the wrong one regardless of what order this array comes back in.
     row = await session.get(ClipPrompt, id)
-    if row is None:
+    if row is None or _is_foreign(row, user_id):
         return None
     clip_out = ClipPromptOut.from_orm_row(row)
     media_refs = row.media_refs or {"images": [], "ai_videos": [], "audios": []}
@@ -128,8 +144,12 @@ async def get_full_clip(session: AsyncSession, id: str) -> ClipFullOut | None:
 
 async def upsert_clip(
     session: AsyncSession, body: ClipPromptIn, user_id: str | None = None
-) -> ClipPromptOut:
+) -> ClipPromptOut | None:
     row = await session.get(ClipPrompt, body.id)
+    # The id is the caller's choice, so an upsert must not overwrite a row it
+    # does not own: another user's clip is not found, and nothing is written.
+    if row is not None and _is_foreign(row, user_id):
+        return None
     if row is None:
         row = ClipPrompt(id=body.id)
         if user_id:
@@ -148,7 +168,9 @@ async def upsert_clip(
     return ClipPromptOut.from_orm_row(row)
 
 
-async def patch_clip(session: AsyncSession, id: str, fields: dict) -> ClipPromptOut | None:
+async def patch_clip(
+    session: AsyncSession, id: str, fields: dict, user_id: str | None = None
+) -> ClipPromptOut | None:
     """Write only the keys present in ``fields`` (from ``model_dump(exclude_unset=True)``
     on ``ClipPromptPatch``). Unlike ``upsert_clip``, an omitted key leaves its column
     untouched — that is the whole point: a metadata-only patch must never default
@@ -158,7 +180,7 @@ async def patch_clip(session: AsyncSession, id: str, fields: dict) -> ClipPrompt
     reserved attribute name on the Declarative base).
     """
     row = await session.get(ClipPrompt, id)
-    if row is None:
+    if row is None or _is_foreign(row, user_id):
         return None
     for key, value in fields.items():
         attr = "metadata_" if key == "metadata" else key
@@ -185,10 +207,10 @@ _KIND_TYPE_ALIASES: dict[str, tuple[str, ...]] = {
 
 
 async def swap_clip_media(
-    session: AsyncSession, clip_id: str, body: SwapClipMediaBody
+    session: AsyncSession, clip_id: str, body: SwapClipMediaBody, user_id: str | None = None
 ) -> ClipFullOut | None:
     row = await session.get(ClipPrompt, clip_id)
-    if row is None:
+    if row is None or _is_foreign(row, user_id):
         logger.warning("swap_clip_media: clip_id=%s not found in DB", clip_id)
         return None
 
@@ -243,10 +265,14 @@ async def swap_clip_media(
     row.is_dirty = True
     await session.commit()
     await session.refresh(row)
-    return await get_full_clip(session, clip_id)
+    return await get_full_clip(session, clip_id, user_id=user_id)
 
 
-async def delete_clip(session: AsyncSession, id: str) -> bool:
-    result = await session.execute(delete(ClipPrompt).where(ClipPrompt.id == id))
+async def delete_clip(session: AsyncSession, id: str, user_id: str | None = None) -> bool:
+    stmt = delete(ClipPrompt).where(ClipPrompt.id == id)
+    if user_id:
+        # In the statement, not after a read: another user's row is not matched.
+        stmt = stmt.where(or_(ClipPrompt.user_id.is_(None), ClipPrompt.user_id == user_id))
+    result = await session.execute(stmt)
     await session.commit()
     return result.rowcount > 0
