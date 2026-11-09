@@ -36,6 +36,13 @@ ACTIONS_0045 = f"{ACTIONS_0044}, 'production.budget'"
 
 BODY = {"title": "Cat week", "goal": "Ten pictures of cats", "agent_cap_usd": 5.0}
 
+# What a watch and the artifacts read back with when nothing sets the media fields (phase 4a).
+NO_MEDIA = {
+    "media_id": "", "batch": "", "what": "", "vendor": "", "vendor_job_id": "", "request_id": "",
+    "scene_key": "", "failure_kind": "", "failure": "",
+}
+NO_SCENES = {"approved_scenes": [], "tries": {}}
+
 
 def _new(env: Env, thread_id: str | None = None, user: str = USER_A, **over) -> dict:
     """Open a production on a new thread (or the given one); returns its JSON."""
@@ -62,7 +69,7 @@ def test_a_new_production_starts_open_with_nothing_approved_or_spent(env):
     p = _new(env, playbook_slug="cat-pictures")
     assert (p["title"], p["goal"], p["playbook_slug"], p["status"]) == ("Cat week", "Ten pictures of cats", "cat-pictures", "open")
     assert (p["budget_usd"], p["budget_version"], p["agent_cap_usd"], p["agent_spent_usd"]) == (0, 0, 5.0, 0)
-    assert (p["log"], p["artifacts"], p["watches"]) == ([], {"media_ids": [], "clip_ids": []}, [])
+    assert (p["log"], p["artifacts"], p["watches"]) == ([], {"media_ids": [], "clip_ids": [], **NO_SCENES}, [])
     assert (p["wake_seq"], p["acked_seq"], p["wake_reason"], p["outcome"], p["closed_at"]) == (0, 0, "", "", None)
     assert p["user_id"] == USER_A and p["created_at"] and p["updated_at"]
     assert _get(env, p["id"]) == p
@@ -207,13 +214,14 @@ def test_artifacts_dedupe(env):
     p = _new(env)
     _patch(env, p["id"], add_media_ids=["m1", "m2"], add_clip_ids=["c1"])
     out = _patch(env, p["id"], add_media_ids=["m1", "m3", "m3"], add_clip_ids=["c1"]).json()
-    assert out["artifacts"] == {"media_ids": ["m1", "m2", "m3"], "clip_ids": ["c1"]}
+    assert out["artifacts"] == {"media_ids": ["m1", "m2", "m3"], "clip_ids": ["c1"], **NO_SCENES}
 
 
 def test_watches_replace_the_list(env):
     p = _new(env)
     one = {"kind": "render", "clip_id": "c1", "status": "rendering", "started_at": None}
     two = {"kind": "render", "clip_id": "c2", "status": "rendering", "started_at": None}
+    one, two = {**NO_MEDIA, **one}, {**NO_MEDIA, **two}
     assert _patch(env, p["id"], watches=[one, two]).json()["watches"] == [one, two]
     assert _patch(env, p["id"], watches=[two]).json()["watches"] == [two]
     assert _patch(env, p["id"], add_agent_spent_usd=0.1).json()["watches"] == [two]
@@ -287,8 +295,8 @@ def test_a_watch_keeps_when_its_render_started(env):
     assert _patch(env, p["id"], watches=[started, old]).status_code == 200
 
     watches = _get(env, p["id"])["watches"]
-    assert watches[0] == started
-    assert watches[1] == {**old, "started_at": None}
+    assert watches[0] == {**NO_MEDIA, **started}
+    assert watches[1] == {**NO_MEDIA, **old, "started_at": None}
 
     # It is a timestamp, and the sweeps match a watch that has one.
     assert _patch(env, p["id"], watches=[{**old, "started_at": "soon"}]).status_code == 422

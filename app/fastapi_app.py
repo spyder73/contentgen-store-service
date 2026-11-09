@@ -1709,9 +1709,10 @@ def create_fastapi_app() -> FastAPI:
     # ── chat productions ─────────────────────────────────────────────────────
     #
     # A production is a thread's durable work item: the approved budget, the
-    # assistant's cost cap, a log, artifacts and render watches. Scoped by
-    # X-User-ID like the chat routes, except the two sweeps (pending-wakes,
-    # watching) that run without a user: the internal secret is their gate.
+    # assistant's cost cap, a log, artifacts and render and media watches. Scoped
+    # by X-User-ID like the chat routes, except the sweeps (pending-wakes,
+    # watching, watching-media) that run without a user: the internal secret is
+    # their gate.
     # The fixed paths come before /{production_id}.
 
     @app.post("/v1/chat/threads/{thread_id}/productions", response_model=ProductionOut, status_code=201)
@@ -1736,6 +1737,10 @@ def create_fastapi_app() -> FastAPI:
     @app.get("/v1/chat/productions/watching", response_model=list[ProductionOut])
     async def productions_watching_clip_handler(session: SessionDep, clip_id: str = Query(min_length=1)) -> Any:
         return await productions.watching_clip(session, clip_id)
+
+    @app.get("/v1/chat/productions/watching-media", response_model=list[ProductionOut])
+    async def productions_watching_media_handler(session: SessionDep, media_id: str = Query(min_length=1)) -> Any:
+        return await productions.watching_media(session, media_id)
 
     @app.get("/v1/chat/productions/{production_id}", response_model=ProductionOut)
     async def get_production_handler(production_id: str, request: Request, session: SessionDep) -> Any:
