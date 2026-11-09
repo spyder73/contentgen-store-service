@@ -341,6 +341,7 @@ def test_list_media_has_thumbnail_false_for_image_without_bytes():
 def test_media_item_out_has_thumbnail_from_thumbnail_content_type():
     row = MagicMock()
     row.id = str(uuid.uuid4())
+    row.user_id = None
     row.clip_id = None
     row.type = "video"  # not an image, but a derivative was stored
     row.prompt = "p"

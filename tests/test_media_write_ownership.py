@@ -128,3 +128,10 @@ def test_without_a_user_an_upsert_is_still_refused_and_a_proxy_fill_still_works(
     assert _put_row(env, None, mid).status_code == 401
     assert _put_proxy(env, None, mid).status_code == 204  # the backend's best-effort cache fill
     assert env.media_row(mid).user_id == USER_A
+
+
+def test_a_media_row_reports_its_owner_and_none_for_a_row_without_one(env):
+    mine, system = env.new_media(USER_A, **ORIGINAL), env.new_media(None, **ORIGINAL)
+
+    assert env.client.get(f"/v1/media/{mine}", headers=env.headers(USER_A)).json()["user_id"] == USER_A
+    assert env.client.get(f"/v1/media/{system}", headers=env.headers(USER_A)).json()["user_id"] is None

@@ -36,12 +36,35 @@ def test_a_user_in_another_spelling_is_the_same_user(env, spelling):
     assert _as(env, SPELLINGS[spelling](USER_B), f"/v1/clips/{cid}").status_code == 404
 
 
-@pytest.mark.parametrize("header", ["user-1", "not a uuid", "1234", "00000000-0000-0000-0000-00000000000z"])
-def test_a_header_that_is_not_a_uuid_names_no_user(env, header):
-    cid = env.clip(USER_A)
+INVALID = ["user-1", "not a uuid", "1234", "00000000-0000-0000-0000-00000000000z"]
 
-    assert _as(env, header, "/v1/clips").status_code == 401  # needs a user
-    assert _as(env, header, "/v1/media/stats").status_code == 401
-    # Where a user is optional it is no header at all: what the route does for none.
-    assert _as(env, header, f"/v1/clips/{cid}").status_code == env.client.get(
-        f"/v1/clips/{cid}", headers={"X-Internal-Secret": SECRET}).status_code
+
+@pytest.mark.parametrize("header", INVALID)
+def test_a_header_that_is_not_a_uuid_is_refused_on_every_route(env, header):
+    cid, mid = env.clip(USER_A), env.new_media(USER_A)
+    h = {"X-Internal-Secret": SECRET, "X-User-ID": header}
+    calls = [
+        env.client.get(f"/v1/clips/{cid}", headers=h),  # a user is optional here
+        env.client.get(f"/v1/clips/{cid}/full", headers=h),
+        env.client.patch(f"/v1/clips/{cid}", json={"name": "x"}, headers=h),
+        env.client.delete(f"/v1/clips/{cid}", headers=h),
+        env.client.get("/v1/clips", headers=h),  # a listing
+        env.client.get(f"/v1/media/{mid}", headers=h),
+        env.client.get(f"/v1/media/{mid}/file", headers=h),  # the byte routes take no user, or one
+        env.client.put(f"/v1/media/{mid}/proxy", content=b"p", headers=h),
+        env.client.get("/v1/media/stats", headers=h),
+    ]
+
+    for r in calls:
+        assert (r.status_code, r.json()) == (401, {"detail": "invalid_user_id"}), r.request.url
+    # Nothing was read or written on the way.
+    assert env.row(cid) is not None and env.row(cid).name == "Original"
+    assert env.media_row(mid).proxy_bytes is None
+
+
+@pytest.mark.parametrize("header", ["", "   "])
+def test_an_empty_header_is_still_no_header(env, header):
+    cid = env.clip(USER_A)
+    r = env.client.get(f"/v1/clips/{cid}", headers={"X-Internal-Secret": SECRET, "X-User-ID": header})
+
+    assert r.status_code == env.client.get(f"/v1/clips/{cid}", headers={"X-Internal-Secret": SECRET}).status_code == 200

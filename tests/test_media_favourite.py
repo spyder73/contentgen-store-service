@@ -66,6 +66,7 @@ class TestMediaItemOutSchema:
     def test_from_orm_row_maps_is_favourite(self):
         row = MagicMock()
         row.id = str(uuid.uuid4())
+        row.user_id = None
         row.clip_id = None
         row.type = "image"
         row.prompt = "p"
@@ -89,6 +90,7 @@ class TestMediaItemOutSchema:
         """DB NULL is coerced to False."""
         row = MagicMock()
         row.id = str(uuid.uuid4())
+        row.user_id = None
         row.clip_id = None
         row.type = "image"
         row.prompt = "p"

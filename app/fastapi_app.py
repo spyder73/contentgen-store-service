@@ -148,12 +148,20 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 def _get_user_id(request: Request) -> str | None:
     """The caller from the X-User-ID header (set by the Go backend), in canonical form.
 
-    Real user ids are uuids (users.id, and so the JWT's subject), and every route
-    compares them as strings, so a header spelled another way (uppercase, braces)
-    would not match the owner it names. A header that is not a uuid names no valid
-    user: it is treated as no header, so a route that needs a user answers 401.
+    No header (or an empty one) is None: an internal job, which routes serve
+    unfiltered. Real user ids are uuids (users.id, and so the JWT's subject), and
+    routes compare them as strings against the owner a row names, so one spelled
+    another way (uppercase, braces) is read as the user it names. A header that is
+    present but not a uuid is refused on every route, 401: it must never be read as
+    no header, which means unfiltered.
     """
-    return uuid_form(request.headers.get("X-User-ID") or "")
+    raw = request.headers.get("X-User-ID")
+    if not raw or not raw.strip():
+        return None
+    user_id = uuid_form(raw)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="invalid_user_id")
+    return user_id
 
 
 def _require_user_id(request: Request) -> str:
@@ -297,7 +305,7 @@ def create_fastapi_app() -> FastAPI:
         import time as _t
         rid = request.headers.get("x-request-id") or new_request_id()
         set_request_id(rid)
-        set_user_id(request.headers.get("x-user-id", ""))
+        set_user_id(uuid_form(request.headers.get("x-user-id", "")) or "")  # what a log line may name
         start = _t.perf_counter()
         try:
             response = await call_next(request)

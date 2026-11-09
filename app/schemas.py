@@ -437,6 +437,9 @@ class MediaItemOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    # The owner. None for system or legacy media with no owner, which any user may
+    # use but none owns: a caller deleting local files must tell the two apart.
+    user_id: str | None = None
     clip_id: str | None = None
     type: str
     prompt: str
@@ -473,6 +476,7 @@ class MediaItemOut(BaseModel):
             has_thumbnail = bool(getattr(row, "file_mime_type", None))
         return cls(
             id=row.id,
+            user_id=getattr(row, "user_id", None),
             clip_id=row.clip_id,
             type=row.type,
             prompt=row.prompt,
