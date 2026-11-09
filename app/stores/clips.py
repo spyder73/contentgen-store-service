@@ -39,57 +39,58 @@ def _is_foreign(row: ClipPrompt, user_id: str | None) -> bool:
     return bool(user_id) and row.user_id is not None and row.user_id != user_id
 
 
-class MediaNotFound(LookupError):
-    """A clip body names media the caller may not use (another user's row).
+_BUCKETS = ("images", "ai_videos", "audios")
 
-    Answered as a missing media id is, 404 ``media_not_found: <id>``. A media id
-    with no row at all is NOT refused on a PUT/PATCH: the backend writes a clip's
-    refs while a placeholder item is still generating and its row not yet saved.
+
+def _uuid_form(value) -> str | None:
+    """A uuid string in its one canonical form (lowercase, hyphenated), else None.
+
+    uuid.UUID also takes uppercase, braces, a urn: prefix and no hyphens, and
+    Postgres reads every one of them as the same uuid, so a media id is never
+    compared or stored as the caller happened to type it.
     """
+    try:
+        return str(uuid.UUID(str(value)))
+    except ValueError:
+        return None
 
-    def __init__(self, media_id: str) -> None:
-        super().__init__(media_id)
-        self.media_id = media_id
+
+def _canonical(value):
+    """``value`` as a canonical uuid string; anything that is not a uuid unchanged."""
+    return _uuid_form(value) or value
+
+
+def _canonical_refs(media_refs):
+    """media_refs with each well-formed media id in canonical form."""
+    if not isinstance(media_refs, dict):
+        return media_refs
+    refs = dict(media_refs)
+    for bucket in _BUCKETS:
+        if isinstance(refs.get(bucket), list):
+            refs[bucket] = [_canonical(v) for v in refs[bucket]]
+    return refs
+
+
+def _ref_ids(media_refs: dict | None) -> list[str]:
+    """The canonical media ids a clip's refs name, in order. An id that is not a
+    uuid cannot be a row (and would fail the uuid column's cast), so it is left out."""
+    forms = (_uuid_form(v) for b in _BUCKETS for v in (media_refs or {}).get(b) or [])
+    return [form for form in forms if form]
 
 
 def _media_filter(user_id: str | None):
     """WHERE clause for the media a caller may use: its own, or a row with no owner.
 
     No caller (an internal job) is not filtered, as for the clips themselves.
+    PUT/PATCH do not check the ids a clip names: the backend writes a clip's refs
+    while a placeholder item is still generating and its row not yet saved, so a
+    missing id has to be accepted, and then a foreign id must be accepted exactly
+    the same (any other answer tells a caller which ids exist). The check is on
+    the read instead: /full returns only media the caller may use.
     """
     if not user_id:
         return None
     return or_(MediaItem.user_id.is_(None), MediaItem.user_id == user_id)
-
-
-def _ref_ids(media_refs: dict | None) -> list[str]:
-    """The well-formed media ids a clip's refs name, in order (the buckets
-    get_full_clip reads). A malformed id cannot be a row, so it is skipped."""
-    ids: list[str] = []
-    for bucket in ("images", "ai_videos", "audios"):
-        for value in (media_refs or {}).get(bucket) or []:
-            try:
-                uuid.UUID(str(value))
-            except ValueError:
-                continue
-            ids.append(str(value))
-    return ids
-
-
-async def _check_media_refs(
-    session: AsyncSession, media_refs: dict | None, user_id: str | None
-) -> None:
-    """Raise MediaNotFound for the first ref that is another user's media."""
-    ids = _ref_ids(media_refs)
-    if not user_id or not ids:
-        return
-    result = await session.execute(
-        select(MediaItem.id).where(MediaItem.id.in_(ids), ~_media_filter(user_id))
-    )
-    foreign = {str(i) for i in result.scalars()}
-    for media_id in ids:
-        if media_id in foreign:
-            raise MediaNotFound(media_id)
 
 
 async def list_clips(
@@ -182,15 +183,11 @@ async def get_full_clip(
         return None
     clip_out = ClipPromptOut.from_orm_row(row)
     media_refs = row.media_refs or {"images": [], "ai_videos": [], "audios": []}
-    all_ids = (
-        media_refs.get("images", [])
-        + media_refs.get("ai_videos", [])
-        + media_refs.get("audios", [])
-    )
+    all_ids = _ref_ids(media_refs)
     media_items: list[MediaItemOut] = []
     if all_ids:
-        # Only media the caller may use: a foreign ref left on a clip (an old
-        # one, from before refs were checked) is simply not returned.
+        # Only media the caller may use: a ref to another user's media (or to a
+        # row not saved) is simply not returned, whatever form it was written in.
         query = select(MediaItem).where(MediaItem.id.in_(all_ids))
         if (usable := _media_filter(user_id)) is not None:
             query = query.where(usable)
@@ -207,7 +204,6 @@ async def upsert_clip(
     # does not own: another user's clip is not found, and nothing is written.
     if row is not None and _is_foreign(row, user_id):
         return None
-    await _check_media_refs(session, body.media_refs, user_id)
     if row is None:
         row = ClipPrompt(id=body.id)
         if user_id:
@@ -216,7 +212,7 @@ async def upsert_clip(
     row.name = body.name
     row.metadata_ = body.metadata
     row.style = body.style
-    row.media_refs = body.media_refs
+    row.media_refs = _canonical_refs(body.media_refs)
     row.render_output_urls = body.render_output_urls
     row.is_dirty = body.is_dirty
     row.finished_at = body.finished_at
@@ -240,7 +236,8 @@ async def patch_clip(
     row = await session.get(ClipPrompt, id)
     if row is None or _is_foreign(row, user_id):
         return None
-    await _check_media_refs(session, fields.get("media_refs"), user_id)
+    if "media_refs" in fields:
+        fields = {**fields, "media_refs": _canonical_refs(fields["media_refs"])}
     for key, value in fields.items():
         attr = "metadata_" if key == "metadata" else key
         setattr(row, attr, value)
@@ -291,7 +288,7 @@ async def swap_clip_media(
     old_media_id = (body.old_media_id or "").strip()
     if old_media_id:
         try:
-            media_index = bucket.index(old_media_id)
+            media_index = [_canonical(b) for b in bucket].index(_canonical(old_media_id))
         except ValueError:
             raise ValueError(
                 f"old_media_id '{old_media_id}' not found in '{kind_key}' bucket for clip {clip_id}"
@@ -303,7 +300,8 @@ async def swap_clip_media(
                 f"media_index {media_index} out of range for '{kind_key}' (len={len(bucket)})"
             )
 
-    new_item = await session.get(MediaItem, body.new_media_id)
+    new_media_id = _canonical(body.new_media_id)
+    new_item = await session.get(MediaItem, new_media_id)
     # Another user's media is a missing media id: same branch, same answer.
     if new_item is not None and user_id and new_item.user_id not in (None, user_id):
         new_item = None
@@ -321,7 +319,7 @@ async def swap_clip_media(
             f"match kind '{body.kind}' ('{kind_key}' bucket)"
         )
 
-    bucket[media_index] = body.new_media_id
+    bucket[media_index] = new_media_id
     media_refs[kind_key] = bucket
     row.media_refs = media_refs
     row.is_dirty = True
