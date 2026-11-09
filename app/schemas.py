@@ -1372,18 +1372,48 @@ class ProductionLogEntry(ProductionLogIn):
 
 
 class ProductionWatch(BaseModel):
-    """One render a production waits on. ``started_at`` is when the backend registered it, by
-    the clock that stamps a clip's ``finished_at``; a row from before it has none."""
+    """One job a production waits on. ``kind`` ``render`` is a clip's render (``clip_id``);
+    ``media`` is a background media job (``media_id``, ``status`` ``running`` until it ends).
+    ``started_at`` is when the backend registered it, by the clock that stamps a clip's
+    ``finished_at``; a row from before it has none. The media fields are all optional, so a row
+    from before them still loads (empty means not set, so a client may send a read watch back
+    as it got it): ``batch`` groups the jobs of one call (one wake-up per batch),
+    ``scene_key`` is the input key their tries are counted under (empty for music), and
+    ``failure_kind`` / ``failure`` say why an ended job failed."""
 
     kind: str
-    clip_id: str
+    clip_id: str = ""
     status: str
     started_at: datetime | None = None
+    media_id: str = ""
+    batch: str = ""
+    what: Literal["", "video", "music"] = ""
+    vendor: Literal["", "runware", "vertexai", "suno"] = ""
+    vendor_job_id: str = ""
+    request_id: str = ""
+    scene_key: str = ""
+    failure_kind: str = ""
+    failure: str = Field(default="", max_length=300)
+
+
+class ApprovedScene(BaseModel):
+    """A scene the user approved. ``key`` is the input key the Go side computes
+    (``f:<first>[:<last>]`` or ``r:<sorted ids joined by ,>``); the store keeps it opaque.
+    ``approved_at`` is stamped by the store when the caller leaves it out."""
+
+    key: str = Field(min_length=1)
+    media_ids: list[str] = []
+    preview_id: str = ""
+    approved_at: datetime | None = None
 
 
 class ProductionArtifacts(BaseModel):
+    """``tries`` counts the video tries spent per scene key."""
+
     media_ids: list[str] = []
     clip_ids: list[str] = []
+    approved_scenes: list[ApprovedScene] = []
+    tries: dict[str, int] = {}
 
 
 class ProductionWake(BaseModel):
@@ -1398,7 +1428,9 @@ class ProductionPatch(BaseModel):
     """Every field optional, applied together in one write. The ``add_*`` amounts are atomic
     increments, never replacements. ``add_budget_usd`` is a card being applied: it names the
     ``budget_version`` it was priced against and is refused (409) if the budget has moved on.
-    ``watches`` replaces the list; ``acked_seq`` is the only change a closed production takes."""
+    ``watches`` replaces the list; ``acked_seq`` is the only change a closed production takes.
+    ``add_approved_scenes`` appends the scenes whose key is not there yet. ``add_tries`` adds to
+    the per-key try counts (a negative amount refunds one, never below 0)."""
 
     expect_budget_version: int | None = Field(default=None, ge=0)
     add_budget_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
@@ -1407,6 +1439,8 @@ class ProductionPatch(BaseModel):
     append_log: list[ProductionLogIn] | None = None
     add_media_ids: list[str] | None = None
     add_clip_ids: list[str] | None = None
+    add_approved_scenes: list[ApprovedScene] | None = None
+    add_tries: dict[str, int] | None = None
     watches: list[ProductionWatch] | None = None
     bump_wake: ProductionWake | None = None
     acked_seq: int | None = Field(default=None, ge=0)

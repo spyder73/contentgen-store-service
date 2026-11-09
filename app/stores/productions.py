@@ -2,8 +2,8 @@
 
 Every function is scoped by ``user_id`` as ``chat.py`` is: another user's row is simply not
 found (``None``), and a refusal the caller must tell apart raises ``ChatError`` carrying the
-HTTP status and a stable code. The two sweeps that run without a user (``pending_wakes``,
-``watching_clip``) are the exception: the internal secret is their gate.
+HTTP status and a stable code. The sweeps that run without a user (``pending_wakes``,
+``watching_clip``, ``watching_media``) are the exception: the internal secret is their gate.
 
 A PATCH is one write. The row is locked (``SELECT ... FOR UPDATE``), the refusals are decided
 on it, and a single UPDATE applies every field: money moves by SQL increments, the JSON
@@ -95,11 +95,17 @@ async def list_closed(session: AsyncSession, user_id: str, *, limit: int = 10) -
     return list((await session.execute(query)).scalars())
 
 
+def _in_flight(watch: dict[str, Any]) -> bool:
+    """A job that has not ended: a render shown rendering or a media job shown running."""
+    return watch.get("status") == "rendering" or (watch.get("kind") == "media" and watch.get("status") == "running")
+
+
 async def pending_wakes(session: AsyncSession) -> list[ChatProduction]:
     """Open productions of every user the boot has to look at: a wake-up the agent has not
-    handled yet, or a render still shown rendering. A restart cuts a render off with nothing
-    owed yet, and nothing else would ever end its watch. As in ``watching_clip``, the open rows
-    are few and the watch is matched here rather than with a dialect-specific JSONB query."""
+    handled yet, or a render or media job still shown in flight. A restart cuts a job off with
+    nothing owed yet, and nothing else would ever end its watch. As in ``watching_clip``, the
+    open rows are few and the watch is matched here rather than with a dialect-specific JSONB
+    query."""
     query = (
         select(ChatProduction)
         .where(ChatProduction.status == "open")
@@ -107,24 +113,33 @@ async def pending_wakes(session: AsyncSession) -> list[ChatProduction]:
     )
     return [
         row for row in (await session.execute(query)).scalars()
-        if row.wake_seq > row.acked_seq or any(watch.get("status") == "rendering" for watch in row.watches)
+        if row.wake_seq > row.acked_seq or any(_in_flight(watch) for watch in row.watches)
     ]
 
 
-async def watching_clip(session: AsyncSession, clip_id: str) -> list[ChatProduction]:
-    """Open productions of every user that wait on this clip's render. A thread has at most one
-    open production, so the open rows are few and the watch is matched here rather than with a
-    dialect-specific JSONB query."""
+async def _open_waiting(session: AsyncSession, waiting: dict[str, str]) -> list[ChatProduction]:
+    """Open productions of every user with a watch that has all of ``waiting``. A thread has at
+    most one open production, so the open rows are few and the watch is matched here rather
+    than with a dialect-specific JSONB query."""
     query = (
         select(ChatProduction)
         .where(ChatProduction.status == "open")
         .order_by(ChatProduction.created_at, ChatProduction.id)
     )
-    waiting = {"kind": "render", "clip_id": clip_id, "status": "rendering"}
     return [
         row for row in (await session.execute(query)).scalars()
         if any(waiting.items() <= watch.items() for watch in row.watches)
     ]
+
+
+async def watching_clip(session: AsyncSession, clip_id: str) -> list[ChatProduction]:
+    """Open productions of every user that wait on this clip's render."""
+    return await _open_waiting(session, {"kind": "render", "clip_id": clip_id, "status": "rendering"})
+
+
+async def watching_media(session: AsyncSession, media_id: str) -> list[ChatProduction]:
+    """Open productions of every user that wait on this media item's background job."""
+    return await _open_waiting(session, {"kind": "media", "media_id": media_id, "status": "running"})
 
 
 def _refusal(row: ChatProduction, patch: ProductionPatch) -> ChatError | None:
@@ -140,6 +155,33 @@ def _refusal(row: ChatProduction, patch: ProductionPatch) -> ChatError | None:
     return None
 
 
+def _artifacts(row: ChatProduction, patch: ProductionPatch, now: datetime) -> dict[str, Any]:
+    """The artifacts column as the locked ``row`` holds it, with the patch's additions. It is
+    rebuilt whole, so the keys the patch does not touch are carried over, and the try counts are
+    read and written under the same row lock as every other patch (no two increments are lost)."""
+    current = row.artifacts
+    artifacts = {
+        **current,
+        "media_ids": list(dict.fromkeys([*current.get("media_ids", []), *(patch.add_media_ids or [])])),
+        "clip_ids": list(dict.fromkeys([*current.get("clip_ids", []), *(patch.add_clip_ids or [])])),
+    }
+    if patch.add_approved_scenes:
+        scenes = list(current.get("approved_scenes", []))
+        known = {scene["key"] for scene in scenes}
+        for scene in patch.add_approved_scenes:
+            if scene.key not in known:
+                known.add(scene.key)
+                stamped = scene.model_copy(update={"approved_at": scene.approved_at or now})
+                scenes.append(stamped.model_dump(mode="json"))
+        artifacts["approved_scenes"] = scenes
+    if patch.add_tries:
+        tries = dict(current.get("tries", {}))
+        for key, amount in patch.add_tries.items():
+            tries[key] = max(0, tries.get(key, 0) + amount)  # a refund never goes below 0
+        artifacts["tries"] = tries
+    return artifacts
+
+
 def _values(row: ChatProduction, patch: ProductionPatch, now: datetime) -> dict[str, Any]:
     """The UPDATE's SET list: increments as SQL expressions, JSON columns rebuilt from ``row``."""
     values: dict[str, Any] = {}
@@ -153,11 +195,8 @@ def _values(row: ChatProduction, patch: ProductionPatch, now: datetime) -> dict[
     if patch.append_log:
         entries = [{"at": now.isoformat(), **entry.model_dump()} for entry in patch.append_log]
         values["log"] = [*row.log, *entries][-LOG_KEEP:]
-    if patch.add_media_ids or patch.add_clip_ids:
-        values["artifacts"] = {
-            "media_ids": list(dict.fromkeys([*row.artifacts.get("media_ids", []), *(patch.add_media_ids or [])])),
-            "clip_ids": list(dict.fromkeys([*row.artifacts.get("clip_ids", []), *(patch.add_clip_ids or [])])),
-        }
+    if patch.add_media_ids or patch.add_clip_ids or patch.add_approved_scenes or patch.add_tries:
+        values["artifacts"] = _artifacts(row, patch, now)
     if patch.watches is not None:
         values["watches"] = [watch.model_dump(mode="json") for watch in patch.watches]
     if patch.bump_wake is not None:
