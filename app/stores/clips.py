@@ -78,19 +78,51 @@ def _ref_ids(media_refs: dict | None) -> list[str]:
     return [form for form in forms if form]
 
 
-def _media_filter(user_id: str | None):
-    """WHERE clause for the media a caller may use: its own, or a row with no owner.
+def _media_owner(row: ClipPrompt, user_id: str | None) -> str | None:
+    """Whose media a clip may use: its owner's, whoever asks and whether or not a
+    header is sent. A clip with no owner (legacy) falls back to the caller; with
+    neither there is no one to filter by (an internal job on a legacy clip)."""
+    return row.user_id or user_id or None
 
-    No caller (an internal job) is not filtered, as for the clips themselves.
-    PUT/PATCH do not check the ids a clip names: the backend writes a clip's refs
-    while a placeholder item is still generating and its row not yet saved, so a
-    missing id has to be accepted, and then a foreign id must be accepted exactly
-    the same (any other answer tells a caller which ids exist). The check is on
-    the read instead: /full returns only media the caller may use.
+
+def _usable_media(owner: str):
+    """WHERE clause for the media a clip owned by ``owner`` may use: the owner's
+    own, or a row with no owner (system or legacy media)."""
+    return or_(MediaItem.user_id.is_(None), MediaItem.user_id == owner)
+
+
+async def _without_foreign_refs(
+    session: AsyncSession, media_refs, row: ClipPrompt | None, user_id: str | None
+):
+    """media_refs, canonical, minus the ids of media the clip's owner may not use.
+
+    The owner is the existing row's, else the caller (a new row is theirs). An id
+    with no media row is kept: the backend writes a clip's refs while a placeholder
+    item is still generating and its row not yet saved. Dropping silently, and
+    answering the write from what was submitted, is what keeps a caller from
+    telling a dropped id from a kept one by the write itself.
     """
-    if not user_id:
-        return None
-    return or_(MediaItem.user_id.is_(None), MediaItem.user_id == user_id)
+    refs = _canonical_refs(media_refs)
+    owner = (row.user_id if row is not None else None) or user_id
+    ids = _ref_ids(refs)
+    if not owner or not ids:
+        return refs
+    result = await session.execute(
+        select(MediaItem.id).where(
+            MediaItem.id.in_(ids), MediaItem.user_id.is_not(None), MediaItem.user_id != owner
+        )
+    )
+    foreign = {str(i) for i in result.scalars()}
+    if not foreign:
+        return refs
+    return {
+        **refs,
+        **{
+            bucket: [v for v in refs[bucket] if _uuid_form(v) not in foreign]
+            for bucket in _BUCKETS
+            if isinstance(refs.get(bucket), list)
+        },
+    }
 
 
 async def list_clips(
@@ -186,11 +218,13 @@ async def get_full_clip(
     all_ids = _ref_ids(media_refs)
     media_items: list[MediaItemOut] = []
     if all_ids:
-        # Only media the caller may use: a ref to another user's media (or to a
-        # row not saved) is simply not returned, whatever form it was written in.
+        # Only media the clip's owner may use: a ref to someone else's media (or
+        # to a row not saved) is simply not returned, whatever form it was
+        # written in and whether or not the reader sends a header. A reader with
+        # none (an internal path) must not become the way to someone's media.
         query = select(MediaItem).where(MediaItem.id.in_(all_ids))
-        if (usable := _media_filter(user_id)) is not None:
-            query = query.where(usable)
+        if owner := _media_owner(row, user_id):
+            query = query.where(_usable_media(owner))
         result = await session.execute(query)
         media_items = [MediaItemOut.from_orm_row(m) for m in result.scalars()]
     return ClipFullOut(clip=clip_out, media=media_items)
@@ -204,6 +238,7 @@ async def upsert_clip(
     # does not own: another user's clip is not found, and nothing is written.
     if row is not None and _is_foreign(row, user_id):
         return None
+    refs = await _without_foreign_refs(session, body.media_refs, row, user_id)
     if row is None:
         row = ClipPrompt(id=body.id)
         if user_id:
@@ -212,14 +247,16 @@ async def upsert_clip(
     row.name = body.name
     row.metadata_ = body.metadata
     row.style = body.style
-    row.media_refs = _canonical_refs(body.media_refs)
+    row.media_refs = refs
     row.render_output_urls = body.render_output_urls
     row.is_dirty = body.is_dirty
     row.finished_at = body.finished_at
     row.thumbnail_url = body.thumbnail_url
     await session.commit()
     await session.refresh(row)
-    return ClipPromptOut.from_orm_row(row)
+    out = ClipPromptOut.from_orm_row(row)
+    out.media_refs = _canonical_refs(body.media_refs)  # as submitted, not as kept
+    return out
 
 
 async def patch_clip(
@@ -236,14 +273,19 @@ async def patch_clip(
     row = await session.get(ClipPrompt, id)
     if row is None or _is_foreign(row, user_id):
         return None
+    submitted = fields.get("media_refs")
     if "media_refs" in fields:
-        fields = {**fields, "media_refs": _canonical_refs(fields["media_refs"])}
+        kept = await _without_foreign_refs(session, submitted, row, user_id)
+        fields = {**fields, "media_refs": kept}
     for key, value in fields.items():
         attr = "metadata_" if key == "metadata" else key
         setattr(row, attr, value)
     await session.commit()
     await session.refresh(row)
-    return ClipPromptOut.from_orm_row(row)
+    out = ClipPromptOut.from_orm_row(row)
+    if "media_refs" in fields and submitted is not None:
+        out.media_refs = _canonical_refs(submitted)  # as submitted, not as kept
+    return out
 
 
 # A bucket's kind must agree with the TYPE of the media item being swapped
@@ -302,8 +344,10 @@ async def swap_clip_media(
 
     new_media_id = _canonical(body.new_media_id)
     new_item = await session.get(MediaItem, new_media_id)
-    # Another user's media is a missing media id: same branch, same answer.
-    if new_item is not None and user_id and new_item.user_id not in (None, user_id):
+    # Media the clip's owner may not use is a missing media id: same branch, same
+    # answer, with or without a header (see _media_owner).
+    owner = _media_owner(row, user_id)
+    if new_item is not None and owner and new_item.user_id not in (None, owner):
         new_item = None
     if new_item is None:
         logger.warning(

@@ -1,18 +1,17 @@
-"""A clip uses only media its caller may use: their own, or a row with no owner.
+"""A clip uses only media its owner may use: their own, or a row with no owner.
 
-Before this, swap took any new_media_id and GET /v1/clips/{id}/full loaded media
-by id with no owner filter: a caller who knew another user's media id could put
-it on a clip of their own and read the row (prompt, file_url, metadata) back.
-Now swap answers another user's media as a missing media id, and /full returns
-only the media the caller may use.
-
-PUT and PATCH do not check the ids a clip names, on purpose: the backend writes a
-clip's refs while a placeholder item is still generating and its row not yet
-saved. So another user's id has to get exactly the answer a missing id gets, or
-the answer tells a caller which ids exist; the read is where it is held back.
-Media ids are compared in one canonical form, however they were written. No
-header is an internal job: unfiltered. Shares its sqlite fixture with
-tests/test_clips_ownership.py.
+Before this, swap took any new_media_id, PUT/PATCH took any media_refs and
+GET /v1/clips/{id}/full loaded media by id with no owner filter: a caller who knew
+another user's media id could put it on a clip of their own and read the row
+(prompt, file_url, metadata) back, and so could any internal reader that sends no
+header. Now every read keyed off a clip filters by the CLIP's owner, header or
+not (a clip with no owner falls back to the caller, and with no caller either is
+unfiltered); swap answers media the owner may not use as a missing media id; and
+PUT/PATCH drop such ids before saving. An id with no media row is kept: the
+backend writes a clip's refs while a placeholder item is still generating. The
+answer to a write is built from what was submitted, so it is the same whether an
+id was dropped or kept. Media ids are compared in one canonical form.
+Shares its sqlite fixture with tests/test_clips_ownership.py.
 """
 from __future__ import annotations
 
@@ -47,14 +46,14 @@ def _patch(env: Env, user: str | None, cid: str, **body):
     return env.client.patch(f"/v1/clips/{cid}", json=body, headers=_headers(user))
 
 
-def _full_ids(env: Env, user: str | None, cid: str) -> list[str]:
+def _full(env: Env, user: str | None, cid: str) -> list[str]:
     r = env.client.get(f"/v1/clips/{cid}/full", headers=_headers(user))
     assert r.status_code == 200, r.text
-    return [m["id"] for m in r.json()["media"]]
+    return sorted(m["id"] for m in r.json()["media"])
 
 
 def _shape(response, *ids: str) -> tuple:
-    """What an answer says, with the ids the caller named and the clock left out."""
+    """What an answer says, with the ids named in it and the clock left out."""
     body = response.text
     for media_id in ids:
         body = body.replace(media_id, "<id>")
@@ -65,12 +64,8 @@ def _shape(response, *ids: str) -> tuple:
 
 def _forms(media_id: str) -> dict[str, str]:
     """The ways uuid.UUID reads one id, other than its canonical spelling."""
-    return {
-        "upper": media_id.upper(),
-        "braces": "{" + media_id + "}",
-        "urn": "urn:uuid:" + media_id,
-        "no hyphens": media_id.replace("-", ""),
-    }
+    return {"upper": media_id.upper(), "braces": "{" + media_id + "}", "urn": "urn:uuid:" + media_id,
+            "no hyphens": media_id.replace("-", "")}
 
 
 FORMS = list(_forms(str(uuid.uuid4())))
@@ -79,13 +74,13 @@ FORMS = list(_forms(str(uuid.uuid4())))
 # ── swap ─────────────────────────────────────────────────────────────────────
 
 
-def test_swapping_in_another_users_media_is_a_missing_media_id(env):
+@pytest.mark.parametrize("caller", [USER_B, None])
+def test_swapping_in_media_the_clip_owner_may_not_use_is_a_missing_media_id(env, caller):
     cid = env.clip(USER_B)
     old = env.images(cid)[0]
     theirs, missing = env.new_media(USER_A), str(uuid.uuid4())
 
-    foreign = _swap(env, USER_B, cid, old, theirs)
-    absent = _swap(env, USER_B, cid, old, missing)
+    foreign, absent = _swap(env, caller, cid, old, theirs), _swap(env, caller, cid, old, missing)
 
     assert (foreign.status_code, absent.status_code) == (404, 404)
     # The same answer byte for byte, bar the id the caller itself named.
@@ -102,102 +97,148 @@ def test_swap_reads_a_media_id_in_any_spelling(env, form):
 
     assert _swap(env, USER_B, cid, old, _forms(theirs)[form]).status_code == 404
     assert env.images(cid) == [old]
-    # Own media in that spelling works, and is stored in the canonical one.
     assert _swap(env, USER_B, cid, old, _forms(mine)[form]).status_code == 200
+    assert env.images(cid) == [mine]  # stored canonical
+
+
+def test_swap_takes_the_owners_media_and_media_with_no_owner(env):
+    cid = env.clip(USER_B)
+    system, mine = env.new_media(None), env.new_media(USER_B)
+
+    assert _swap(env, USER_B, cid, env.images(cid)[0], system).status_code == 200
+    assert _swap(env, None, cid, system, mine).status_code == 200
     assert env.images(cid) == [mine]
 
 
-def test_swap_takes_own_media_and_media_with_no_owner(env):
-    cid = env.clip(USER_B)
+def test_a_clip_with_no_owner_uses_the_callers_media_or_anyones_without_a_caller(env):
+    cid = env.clip(None)
     old = env.images(cid)[0]
-    system = env.new_media(None)
+    theirs = env.new_media(USER_A)
 
-    assert _swap(env, USER_B, cid, old, system).status_code == 200
-    mine = env.new_media(USER_B)
-    assert _swap(env, USER_B, cid, system, mine).status_code == 200
-    assert env.images(cid) == [mine]
-
-
-def test_swap_without_a_user_still_takes_any_media(env):
-    cid = env.clip(USER_B)
-
-    r = _swap(env, None, cid, env.images(cid)[0], env.new_media(USER_A))
-
-    assert r.status_code == 200
+    assert _swap(env, USER_B, cid, old, theirs).status_code == 404
+    assert _swap(env, USER_B, cid, old, env.new_media(USER_B)).status_code == 200
+    assert _swap(env, None, cid, env.images(cid)[0], theirs).status_code == 200
 
 
-# ── PUT and PATCH: another user's id is a missing id ─────────────────────────
+# ── PUT and PATCH: a foreign id is dropped, a missing id is kept ─────────────
 
 
-def test_put_and_patch_answer_another_users_media_id_exactly_as_a_missing_one(env):
+def _writes(env: Env, user: str | None):
+    """PUT and PATCH of refs onto a fresh clip owned by USER_B; each returns (clip id, answer)."""
+    def put(refs):
+        cid = env.clip(USER_B)
+        return cid, _put(env, user, cid, name="Same", media_refs=refs)
+
+    def patch(refs):
+        cid = env.clip(USER_B)
+        return cid, _patch(env, user, cid, name="Same", media_refs=refs)
+
+    return put, patch
+
+
+@pytest.mark.parametrize("caller", [USER_B, None])
+def test_a_foreign_id_is_dropped_on_write_and_a_missing_one_is_kept(env, caller):
+    mine, theirs, missing = env.new_media(USER_B), env.new_media(USER_A), str(uuid.uuid4())
+
+    for write in _writes(env, caller):
+        cid, r = write(_refs(mine, theirs, missing))
+        assert r.status_code == 200
+        assert env.images(cid) == [mine, missing]
+
+
+def test_a_new_clip_put_drops_media_the_caller_may_not_use(env):
+    theirs, missing, cid = env.new_media(USER_A), str(uuid.uuid4()), str(uuid.uuid4())
+
+    assert _put(env, USER_B, cid, media_refs=_refs(theirs, missing)).status_code == 200
+    assert env.images(cid) == [missing]
+
+
+def test_the_answer_to_a_write_is_the_same_for_a_foreign_and_a_missing_id(env):
     theirs, missing = env.new_media(USER_A), str(uuid.uuid4())
-    for write in (
-        lambda cid, ref: _put(env, USER_B, cid, name="Same", media_refs=_refs(ref)),
-        lambda cid, ref: _patch(env, USER_B, cid, name="Same", media_refs=_refs(ref)),
-    ):
-        foreign_clip, missing_clip = env.clip(USER_B), env.clip(USER_B)
-
-        foreign, absent = write(foreign_clip, theirs), write(missing_clip, missing)
+    for write in _writes(env, USER_B):
+        (foreign_clip, foreign), (missing_clip, absent) = write(_refs(theirs)), write(_refs(missing))
 
         assert foreign.status_code == 200
         assert _shape(foreign, theirs, foreign_clip) == _shape(absent, missing, missing_clip)
-        # Neither is returned on a read, so the read tells them apart no better.
-        assert _full_ids(env, USER_B, foreign_clip) == _full_ids(env, USER_B, missing_clip) == []
+
+
+def test_an_attacker_cannot_reach_media_through_their_own_clip(env):
+    theirs, mine = env.new_media(USER_A), env.new_media(USER_B)
+    cid = env.clip(USER_B)
+
+    assert _put(env, USER_B, cid, media_refs=_refs(mine, theirs)).status_code == 200
+
+    assert _full(env, None, cid) == [mine]  # an internal reader, no header
+    assert _full(env, USER_B, cid) == [mine]
 
 
 @pytest.mark.parametrize("form", FORMS)
-def test_put_and_patch_store_media_ids_in_canonical_form(env, form):
+def test_media_ids_are_dropped_and_stored_in_canonical_form(env, form):
     mine, theirs = env.new_media(USER_B), env.new_media(USER_A)
+    put, patch = _writes(env, USER_B)
+
+    for write in (put, patch):
+        cid, r = write(_refs(_forms(mine)[form], _forms(theirs)[form]))
+        assert r.status_code == 200
+        assert env.images(cid) == [mine]
+
+
+def test_refs_that_are_not_ids_are_kept_and_cost_the_read_nothing(env):
+    mine, unsaved, malformed = env.new_media(USER_B), str(uuid.uuid4()), "not-a-uuid"
     cid = env.clip(USER_B)
 
-    assert _put(env, USER_B, cid, media_refs=_refs(_forms(mine)[form], _forms(theirs)[form])).status_code == 200
+    assert _put(env, USER_B, cid, media_refs=_refs(mine, unsaved, malformed)).status_code == 200
+    assert env.images(cid) == [mine, unsaved, malformed]
+    assert _full(env, USER_B, cid) == [mine]
+
+
+def test_a_clip_with_no_owner_drops_what_the_caller_may_not_use_or_nothing_without_one(env):
+    theirs, mine = env.new_media(USER_A), env.new_media(USER_B)
+    cid = env.clip(None)
+
+    assert _patch(env, USER_B, cid, media_refs=_refs(mine, theirs)).status_code == 200
+    assert env.images(cid) == [mine]
+    assert _patch(env, None, cid, media_refs=_refs(mine, theirs)).status_code == 200
     assert env.images(cid) == [mine, theirs]
-    assert _full_ids(env, USER_B, cid) == [mine]  # the foreign one in any spelling is held back
-
-    assert _patch(env, USER_B, cid, media_refs=_refs(_forms(theirs)[form], _forms(mine)[form])).status_code == 200
-    assert env.images(cid) == [theirs, mine]
-    assert _full_ids(env, USER_B, cid) == [mine]
 
 
-def test_put_and_patch_still_take_refs_that_are_not_saved_or_not_ids(env):
-    mine, system = env.new_media(USER_B), env.new_media(None)
-    unsaved, malformed = str(uuid.uuid4()), "not-a-uuid"  # a placeholder item's row is not saved yet
-    cid = env.clip(USER_B)
+def test_a_patch_without_refs_leaves_them_alone_and_another_users_clip_is_not_found(env):
+    cid = _clip_with(env, USER_B, env.new_media(USER_A))
+    before = env.images(cid)
 
-    assert _put(env, USER_B, cid, media_refs=_refs(mine, system, unsaved, malformed)).status_code == 200
-    assert env.images(cid) == [mine, system, unsaved, malformed]
-    assert _patch(env, USER_B, cid, media_refs=_refs(unsaved, mine)).status_code == 200
-    assert env.images(cid) == [unsaved, mine]
-    assert _full_ids(env, USER_B, cid) == [mine]  # a ref that is not an id costs the read nothing
+    assert _patch(env, USER_B, cid, name="Renamed").status_code == 200
+    assert env.images(cid) == before
 
-
-def test_another_users_clip_is_still_just_not_found_whatever_media_it_names(env):
-    cid = env.clip(USER_A)
-
-    for r in (_put(env, USER_B, cid, media_refs=_refs(env.new_media(USER_A))),
-              _patch(env, USER_B, cid, media_refs=_refs(env.new_media(USER_A)))):
+    theirs = env.clip(USER_A)
+    for r in (_put(env, USER_B, theirs, media_refs=_refs()), _patch(env, USER_B, theirs, media_refs=_refs())):
         assert (r.status_code, r.json()) == (404, {"detail": "not_found"})
 
 
 # ── GET /full ────────────────────────────────────────────────────────────────
 
 
-def test_full_returns_only_media_the_caller_may_use(env):
+def test_full_returns_only_media_the_clip_owner_may_use_header_or_not(env):
     mine, theirs, system = env.new_media(USER_B), env.new_media(USER_A), env.new_media(None)
+    # An old clip, from before refs were dropped on write.
     cid = _clip_with(env, USER_B, mine, theirs, system, str(uuid.uuid4()))
 
-    assert sorted(_full_ids(env, USER_B, cid)) == sorted([mine, system])
-    # No caller: an internal job sees every row the clip names.
-    assert sorted(_full_ids(env, None, cid)) == sorted([mine, theirs, system])
-    # The ref itself is left on the clip.
-    assert env.images(cid)[:3] == [mine, theirs, system]
+    assert _full(env, USER_B, cid) == sorted([mine, system])
+    assert _full(env, None, cid) == sorted([mine, system])  # not the victim's media
+    assert env.images(cid)[:3] == [mine, theirs, system]  # the ref itself is left
+
+
+def test_full_of_a_clip_with_no_owner_filters_by_the_caller_or_not_at_all(env):
+    mine, theirs, system = env.new_media(USER_B), env.new_media(USER_A), env.new_media(None)
+    cid = _clip_with(env, None, mine, theirs, system)
+
+    assert _full(env, USER_B, cid) == sorted([mine, system])
+    assert _full(env, None, cid) == sorted([mine, theirs, system])
 
 
 @pytest.mark.parametrize("form", FORMS)
-def test_full_holds_back_another_users_media_whatever_spelling_the_ref_has(env, form):
+def test_full_holds_back_foreign_media_whatever_spelling_the_ref_has(env, form):
     mine, theirs = env.new_media(USER_B), env.new_media(USER_A)
-    # An old clip, written before refs were canonical.
     cid = _clip_with(env, USER_B, _forms(mine)[form], _forms(theirs)[form])
 
-    assert _full_ids(env, USER_B, cid) == [mine]
-    assert sorted(_full_ids(env, None, cid)) == sorted([mine, theirs])
+    assert _full(env, USER_B, cid) == [mine]
+    assert _full(env, None, cid) == [mine]
