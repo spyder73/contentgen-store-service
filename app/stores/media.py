@@ -264,6 +264,13 @@ async def _get_by_id(session: AsyncSession, id: str, user_id: str | None) -> Med
     return row
 
 
+async def stored_file_url(session: AsyncSession, id: str, user_id: str) -> str | None:
+    """The file_url of the row ``id`` when the caller may write it (their own, or one with no
+    owner), else None. Another user's row reads as a missing one."""
+    row = await _get_owned(session, id, user_id)
+    return None if row is None else row.file_url
+
+
 async def get_media(
     session: AsyncSession, id: str, user_id: str | None = None
 ) -> MediaItemOut | None:
@@ -341,6 +348,8 @@ async def get_related_media(
 async def upsert_media(
     session: AsyncSession, body: MediaItemIn, user_id: str | None = None
 ) -> MediaItemOut | None:
+    if not user_id:
+        raise ValueError("upsert_media requires user_id")
     # A frozen asset's row is never overwritten (I1): `ON CONFLICT DO UPDATE` below would otherwise
     # rewrite its bytes/metadata out from under an approved version. A row that is frozen always
     # exists and is owned (freeze_assets only inserts for a real, owned, hidden-asset media row, and
@@ -356,8 +365,8 @@ async def upsert_media(
     #     writing anything. (Fix round 1's version let a non-owner fall through to this function's
     #     separate, pre-existing lack of ownership scoping, which could overwrite a frozen row's
     #     file_url/metadata/user_id for good; that was the regression this round closes.)
-    # A non-owner's upsert of a non-frozen id they don't own is unchanged — that pre-existing gap is
-    # tracked separately, postponed.
+    # A non-owner's upsert of a non-frozen id they don't own is refused the same way, by the
+    # conflict's WHERE below, and never changes the row's owner.
     from app.stores.clipstyle_assets import media_is_frozen  # local: clipstyle_assets imports this module
 
     if await media_is_frozen(session, body.id):
@@ -380,15 +389,27 @@ async def upsert_media(
         "parent_media_id": body.parent_media_id,
         "role": body.role,
     }
-    if user_id:
-        data["user_id"] = user_id
+    # A NEW row is the caller's. An existing row's owner is never changed by an
+    # upsert: user_id is not among the columns the conflict updates, so a row
+    # with no owner (legacy) stays without one rather than being claimed, and
+    # the WHERE below leaves another user's row untouched.
+    table = MediaItem.__table__
     update_cols = {k: v for k, v in data.items() if k != "id"}
     stmt = (
-        pg_insert(MediaItem.__table__)
-        .values(**data)
-        .on_conflict_do_update(index_elements=["id"], set_=update_cols)
+        pg_insert(table)
+        .values(**data, user_id=user_id)
+        .on_conflict_do_update(
+            index_elements=["id"],
+            set_=update_cols,
+            where=table.c.user_id.is_(None) | (table.c.user_id == user_id),
+        )
+        .returning(table.c.id)
     )
-    await session.execute(stmt)
+    if (await session.execute(stmt)).scalar_one_or_none() is None:
+        # Conflicted with another user's row and updated nothing: answered as a
+        # missing row (404), with no id echoed and nothing written.
+        await session.rollback()
+        return None
     await session.commit()
     row = await session.get(MediaItem, body.id, populate_existing=True)
     return MediaItemOut.from_orm_row(row)

@@ -1,22 +1,21 @@
 from __future__ import annotations
 
-import logging
-
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
-logger = logging.getLogger(__name__)
+from ..models import ClipPrompt
+from ..schemas import ClipPromptIn, ClipPromptOut, ClipSummaryOut, PagedResponse
 
-from ..models import ClipPrompt, MediaItem
-from ..schemas import (
-    ClipFullOut,
-    ClipPromptIn,
-    ClipPromptOut,
-    ClipSummaryOut,
-    MediaItemOut,
-    PagedResponse,
-    SwapClipMediaBody,
-)
+# get_full_clip and swap_clip_media live beside the media rules they apply
+# (clip_media.py, clip_swap.py) and are re-exported: callers use clips.<name>.
+from .clip_media import canonical_refs, get_full_clip, is_foreign, without_foreign_refs
+from .clip_swap import swap_clip_media
+
+__all__ = [
+    "delete_clip", "get_clip", "get_full_clip", "list_clip_summaries", "list_clips",
+    "patch_clip", "swap_clip_media", "upsert_clip",
+]
 
 
 def _user_filter(user_id: str):
@@ -90,46 +89,24 @@ async def list_clip_summaries(
     return PagedResponse(items=items, total=total, page=page, limit=limit)
 
 
-async def get_clip(session: AsyncSession, id: str) -> ClipPromptOut | None:
+async def get_clip(
+    session: AsyncSession, id: str, user_id: str | None = None
+) -> ClipPromptOut | None:
     row = await session.get(ClipPrompt, id)
-    if row is None:
+    if row is None or is_foreign(row, user_id):
         return None
     return ClipPromptOut.from_orm_row(row)
 
 
-async def get_full_clip(session: AsyncSession, id: str) -> ClipFullOut | None:
-    # NOTE: deliberately no ORDER BY on the `id.in_(all_ids)` query below —
-    # Postgres does not guarantee IN-list order, so a caller computing a
-    # POSITIONAL media_index off this response's array can drift from
-    # media_refs' own bucket order (this was a live hazard: swap_clip_media
-    # was positional-only). Fixing the query's ordering was consciously
-    # skipped here: it is a wide-blast-radius change (every consumer of this
-    # endpoint), and SwapClipMediaBody.old_media_id below removes the
-    # load-bearing need for order to matter — a slot resolved BY ID cannot be
-    # the wrong one regardless of what order this array comes back in.
-    row = await session.get(ClipPrompt, id)
-    if row is None:
-        return None
-    clip_out = ClipPromptOut.from_orm_row(row)
-    media_refs = row.media_refs or {"images": [], "ai_videos": [], "audios": []}
-    all_ids = (
-        media_refs.get("images", [])
-        + media_refs.get("ai_videos", [])
-        + media_refs.get("audios", [])
-    )
-    media_items: list[MediaItemOut] = []
-    if all_ids:
-        result = await session.execute(
-            select(MediaItem).where(MediaItem.id.in_(all_ids))
-        )
-        media_items = [MediaItemOut.from_orm_row(m) for m in result.scalars()]
-    return ClipFullOut(clip=clip_out, media=media_items)
-
-
 async def upsert_clip(
     session: AsyncSession, body: ClipPromptIn, user_id: str | None = None
-) -> ClipPromptOut:
+) -> ClipPromptOut | None:
     row = await session.get(ClipPrompt, body.id)
+    # The id is the caller's choice, so an upsert must not overwrite a row it
+    # does not own: another user's clip is not found, and nothing is written.
+    if row is not None and is_foreign(row, user_id):
+        return None
+    refs = await without_foreign_refs(session, body.media_refs, row, user_id)
     if row is None:
         row = ClipPrompt(id=body.id)
         if user_id:
@@ -138,17 +115,25 @@ async def upsert_clip(
     row.name = body.name
     row.metadata_ = body.metadata
     row.style = body.style
-    row.media_refs = body.media_refs
+    row.media_refs = refs
+    # Always written, even when dropping a foreign id left the refs as they were:
+    # an UPDATE that moved updated_at only when a submitted id was kept would show
+    # a caller which ids were dropped.
+    flag_modified(row, "media_refs")
     row.render_output_urls = body.render_output_urls
     row.is_dirty = body.is_dirty
     row.finished_at = body.finished_at
     row.thumbnail_url = body.thumbnail_url
     await session.commit()
     await session.refresh(row)
-    return ClipPromptOut.from_orm_row(row)
+    out = ClipPromptOut.from_orm_row(row)
+    out.media_refs = canonical_refs(body.media_refs)  # as submitted, not as kept
+    return out
 
 
-async def patch_clip(session: AsyncSession, id: str, fields: dict) -> ClipPromptOut | None:
+async def patch_clip(
+    session: AsyncSession, id: str, fields: dict, user_id: str | None = None
+) -> ClipPromptOut | None:
     """Write only the keys present in ``fields`` (from ``model_dump(exclude_unset=True)``
     on ``ClipPromptPatch``). Unlike ``upsert_clip``, an omitted key leaves its column
     untouched — that is the whole point: a metadata-only patch must never default
@@ -158,95 +143,30 @@ async def patch_clip(session: AsyncSession, id: str, fields: dict) -> ClipPrompt
     reserved attribute name on the Declarative base).
     """
     row = await session.get(ClipPrompt, id)
-    if row is None:
+    if row is None or is_foreign(row, user_id):
         return None
+    submitted = fields.get("media_refs")
+    if "media_refs" in fields:
+        kept = await without_foreign_refs(session, submitted, row, user_id)
+        fields = {**fields, "media_refs": kept}
     for key, value in fields.items():
         attr = "metadata_" if key == "metadata" else key
         setattr(row, attr, value)
+    if "media_refs" in fields:
+        flag_modified(row, "media_refs")  # see upsert_clip
     await session.commit()
     await session.refresh(row)
-    return ClipPromptOut.from_orm_row(row)
+    out = ClipPromptOut.from_orm_row(row)
+    if "media_refs" in fields and submitted is not None:
+        out.media_refs = canonical_refs(submitted)  # as submitted, not as kept
+    return out
 
 
-# A bucket's kind must agree with the TYPE of the media item being swapped
-# into it: "ai_video" is stored as "ai_video" going forward but "video" on
-# legacy rows (see app/stores/media.py's own _TYPE_BUCKETS note on the same
-# split), so ai_video tolerates both; image/audio are exact. Enforced
-# unconditionally in swap_clip_media, on both the id-based and positional
-# paths — kills the latent hazard where ClipFullDTOToClipPrompt (the Go
-# backend's viewModel.go) re-buckets by media TYPE rather than by which
-# media_refs bucket an id lives in: a wrong-typed id in a bucket would
-# silently re-bucket to a different slide kind on the next read.
-_KIND_TYPE_ALIASES: dict[str, tuple[str, ...]] = {
-    "image": ("image",),
-    "ai_video": ("ai_video", "video"),
-    "audio": ("audio",),
-}
-
-
-async def swap_clip_media(
-    session: AsyncSession, clip_id: str, body: SwapClipMediaBody
-) -> ClipFullOut | None:
-    row = await session.get(ClipPrompt, clip_id)
-    if row is None:
-        logger.warning("swap_clip_media: clip_id=%s not found in DB", clip_id)
-        return None
-
-    kind_map = {"image": "images", "ai_video": "ai_videos", "audio": "audios"}
-    kind_key = kind_map.get(body.kind)
-    if kind_key is None:
-        raise ValueError(f"Unknown kind '{body.kind}'. Must be one of: image, ai_video, audio")
-
-    media_refs = dict(row.media_refs or {"images": [], "ai_videos": [], "audios": []})
-    bucket: list = list(media_refs.get(kind_key, []))
-
-    # Resolve WHICH slot swaps: by id when the caller names the row it means
-    # to replace, positionally otherwise (the legacy fallback). Id-based
-    # resolution is immune to get_full_clip's lack of an ORDER BY (see that
-    # function's own comment): a media_index computed off a differently- or
-    # non-deterministically-ordered read can name the wrong slot; an id
-    # cannot, because bucket.index() searches the store's OWN current order
-    # rather than trusting the caller's.
-    old_media_id = (body.old_media_id or "").strip()
-    if old_media_id:
-        try:
-            media_index = bucket.index(old_media_id)
-        except ValueError:
-            raise ValueError(
-                f"old_media_id '{old_media_id}' not found in '{kind_key}' bucket for clip {clip_id}"
-            ) from None
-    else:
-        media_index = body.media_index
-        if media_index < 0 or media_index >= len(bucket):
-            raise IndexError(
-                f"media_index {media_index} out of range for '{kind_key}' (len={len(bucket)})"
-            )
-
-    new_item = await session.get(MediaItem, body.new_media_id)
-    if new_item is None:
-        logger.warning(
-            "swap_clip_media: media_item=%s not found in DB (clip=%s, kind=%s, index=%d)",
-            body.new_media_id, clip_id, body.kind, media_index,
-        )
-        raise LookupError(f"media item '{body.new_media_id}' not found")
-
-    allowed_types = _KIND_TYPE_ALIASES.get(body.kind, ())
-    if new_item.type not in allowed_types:
-        raise ValueError(
-            f"media item '{body.new_media_id}' has type '{new_item.type}', which does not "
-            f"match kind '{body.kind}' ('{kind_key}' bucket)"
-        )
-
-    bucket[media_index] = body.new_media_id
-    media_refs[kind_key] = bucket
-    row.media_refs = media_refs
-    row.is_dirty = True
-    await session.commit()
-    await session.refresh(row)
-    return await get_full_clip(session, clip_id)
-
-
-async def delete_clip(session: AsyncSession, id: str) -> bool:
-    result = await session.execute(delete(ClipPrompt).where(ClipPrompt.id == id))
+async def delete_clip(session: AsyncSession, id: str, user_id: str | None = None) -> bool:
+    stmt = delete(ClipPrompt).where(ClipPrompt.id == id)
+    if user_id:
+        # In the statement, not after a read: another user's row is not matched.
+        stmt = stmt.where(or_(ClipPrompt.user_id.is_(None), ClipPrompt.user_id == user_id))
+    result = await session.execute(stmt)
     await session.commit()
     return result.rowcount > 0

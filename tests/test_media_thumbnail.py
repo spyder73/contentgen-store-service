@@ -341,6 +341,7 @@ def test_list_media_has_thumbnail_false_for_image_without_bytes():
 def test_media_item_out_has_thumbnail_from_thumbnail_content_type():
     row = MagicMock()
     row.id = str(uuid.uuid4())
+    row.user_id = None
     row.clip_id = None
     row.type = "video"  # not an image, but a derivative was stored
     row.prompt = "p"
@@ -385,7 +386,7 @@ def client():
         yield c
 
 
-_AUTH = {"X-Internal-Secret": INTERNAL_SECRET, "X-User-ID": "user-thumb"}
+_AUTH = {"X-Internal-Secret": INTERNAL_SECRET, "X-User-ID": "00000000-0000-0000-0000-0000000000c3"}
 
 
 def test_thumbnail_endpoint_returns_derivative(client):

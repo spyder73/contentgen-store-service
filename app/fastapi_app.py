@@ -138,6 +138,8 @@ from .stores import (
     clipstyle_package_metadata,
 )
 from app.stores import clipstyle_assets
+from app.media_urls import valid_file_url
+from app.uuids import uuid_form
 
 logger = logging.getLogger(__name__)
 
@@ -145,8 +147,22 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
 def _get_user_id(request: Request) -> str | None:
-    """Extract user_id from X-User-ID header (set by Go backend)."""
-    return request.headers.get("X-User-ID") or None
+    """The caller from the X-User-ID header (set by the Go backend), in canonical form.
+
+    No header (or an empty one) is None: an internal job, which routes serve
+    unfiltered. Real user ids are uuids (users.id, and so the JWT's subject), and
+    routes compare them as strings against the owner a row names, so one spelled
+    another way (uppercase, braces) is read as the user it names. A header that is
+    present but not a uuid is refused on every route, 401: it must never be read as
+    no header, which means unfiltered.
+    """
+    raw = request.headers.get("X-User-ID")
+    if not raw or not raw.strip():
+        return None
+    user_id = uuid_form(raw)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="invalid_user_id")
+    return user_id
 
 
 def _require_user_id(request: Request) -> str:
@@ -154,6 +170,21 @@ def _require_user_id(request: Request) -> str:
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id_required")
     return user_id
+
+
+async def _require_valid_file_url(session: AsyncSession, media_id: str, file_url: str | None, user_id: str) -> None:
+    """422 invalid_file_url, without the value: it is the caller's string, not ours to echo.
+
+    Only a value that is new or changed is checked: a row already holding an odd value
+    (written before the rule, and read by the backend as no local file) can have the same
+    value resent with its other fields. The stored value counts only for a row the caller
+    may write, so another user's row neither passes nor answers differently.
+    """
+    if valid_file_url(file_url):
+        return
+    if file_url == await media.stored_file_url(session, media_id, user_id):
+        return
+    raise HTTPException(status_code=422, detail="invalid_file_url")
 
 
 def _chat_error(exc: chat.ChatError) -> HTTPException:
@@ -290,7 +321,7 @@ def create_fastapi_app() -> FastAPI:
         import time as _t
         rid = request.headers.get("x-request-id") or new_request_id()
         set_request_id(rid)
-        set_user_id(request.headers.get("x-user-id", ""))
+        set_user_id(uuid_form(request.headers.get("x-user-id", "")) or "")  # what a log line may name
         start = _t.perf_counter()
         try:
             response = await call_next(request)
@@ -729,9 +760,12 @@ def create_fastapi_app() -> FastAPI:
             search=search,
         )
 
+    # The by-id clip routes take the caller from X-User-ID. Another user's clip
+    # answers as a missing one (the id never reveals it exists); no header is an
+    # internal job (pipeline runner, scheduler) and is not filtered.
     @app.get("/v1/clips/{id}", response_model=ClipPromptOut)
-    async def get_clip_handler(id: str, session: SessionDep) -> Any:
-        row = await clips.get_clip(session, id)
+    async def get_clip_handler(id: str, request: Request, session: SessionDep) -> Any:
+        row = await clips.get_clip(session, id, user_id=_get_user_id(request))
         if row is None:
             raise HTTPException(status_code=404, detail="not_found")
         return row
@@ -739,10 +773,13 @@ def create_fastapi_app() -> FastAPI:
     @app.put("/v1/clips/{id}", response_model=ClipPromptOut)
     async def upsert_clip_handler(id: str, body: ClipPromptIn, request: Request, session: SessionDep) -> Any:
         body.id = id
-        return await clips.upsert_clip(session, body, user_id=_get_user_id(request))
+        row = await clips.upsert_clip(session, body, user_id=_get_user_id(request))
+        if row is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        return row
 
     @app.patch("/v1/clips/{id}", response_model=ClipPromptOut)
-    async def patch_clip_handler(id: str, body: ClipPromptPatch, session: SessionDep) -> Any:
+    async def patch_clip_handler(id: str, body: ClipPromptPatch, request: Request, session: SessionDep) -> Any:
         # exclude_unset, not the model's values: an absent key must leave its
         # column untouched (unlike the PUT above, which assigns every column
         # unconditionally). An explicit `null` in the body still clears a
@@ -750,30 +787,30 @@ def create_fastapi_app() -> FastAPI:
         fields = body.model_dump(exclude_unset=True)
         if not fields:
             raise HTTPException(status_code=400, detail="empty_body")
-        row = await clips.patch_clip(session, id, fields)
+        row = await clips.patch_clip(session, id, fields, user_id=_get_user_id(request))
         if row is None:
             raise HTTPException(status_code=404, detail="not_found")
         return row
 
     @app.delete("/v1/clips/{id}", status_code=204)
-    async def delete_clip_handler(id: str, session: SessionDep) -> None:
-        deleted = await clips.delete_clip(session, id)
+    async def delete_clip_handler(id: str, request: Request, session: SessionDep) -> None:
+        deleted = await clips.delete_clip(session, id, user_id=_get_user_id(request))
         if not deleted:
             raise HTTPException(status_code=404, detail="not_found")
 
     @app.get("/v1/clips/{id}/full", response_model=ClipFullOut)
-    async def get_full_clip_handler(id: str, session: SessionDep) -> Any:
-        result = await clips.get_full_clip(session, id)
+    async def get_full_clip_handler(id: str, request: Request, session: SessionDep) -> Any:
+        result = await clips.get_full_clip(session, id, user_id=_get_user_id(request))
         if result is None:
             raise HTTPException(status_code=404, detail="not_found")
         return result
 
     @app.post("/v1/clips/{id}/swap", response_model=ClipFullOut)
     async def swap_clip_media_handler(
-        id: str, body: SwapClipMediaBody, session: SessionDep
+        id: str, body: SwapClipMediaBody, request: Request, session: SessionDep
     ) -> Any:
         try:
-            result = await clips.swap_clip_media(session, id, body)
+            result = await clips.swap_clip_media(session, id, body, user_id=_get_user_id(request))
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=f"media_not_found: {exc}")
         except (ValueError, IndexError) as exc:
@@ -952,6 +989,7 @@ def create_fastapi_app() -> FastAPI:
     async def upsert_media_handler(id: str, body: MediaItemIn, request: Request, session: SessionDep) -> Any:
         user_id = _require_user_id(request)
         body.id = id
+        await _require_valid_file_url(session, id, body.file_url, user_id)
         try:
             result = await media.upsert_media(session, body, user_id=user_id)
         except ValueError as exc:
@@ -970,6 +1008,7 @@ def create_fastapi_app() -> FastAPI:
         session: SessionDep,
     ) -> Any:
         user_id = _require_user_id(request)
+        await _require_valid_file_url(session, id, body.file_url, user_id)
         try:
             result = await media.patch_media(session, id, body, user_id=user_id)
         except ValueError as exc:

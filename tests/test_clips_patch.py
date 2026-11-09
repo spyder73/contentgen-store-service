@@ -37,6 +37,7 @@ def _clip_row(**overrides) -> SimpleNamespace:
     now = datetime.now(timezone.utc)
     base = dict(
         id=CLIP_ID,
+        user_id=None,
         name="original name",
         metadata_={"a": 1},
         style={"look": "cinematic"},
@@ -144,6 +145,6 @@ def test_empty_body_returns_400(client):
     resp = client.patch(
         "/v1/clips/" + CLIP_ID,
         json={},
-        headers={"X-Internal-Secret": "test-secret-xyz", "X-User-ID": "u1"},
+        headers={"X-Internal-Secret": "test-secret-xyz", "X-User-ID": "00000000-0000-0000-0000-0000000000a1"},
     )
     assert resp.status_code == 400

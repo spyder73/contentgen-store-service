@@ -364,6 +364,9 @@ class ClipPromptOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    # The owner. None for a legacy clip made before multi-tenancy, which stays
+    # reachable by every caller (see is_foreign in app/stores/clip_media.py).
+    user_id: str | None = None
     name: str
     metadata: dict[str, Any] = {}
     style: dict[str, Any] = {}
@@ -379,6 +382,7 @@ class ClipPromptOut(BaseModel):
     def from_orm_row(cls, row) -> "ClipPromptOut":
         return cls(
             id=row.id,
+            user_id=row.user_id,
             name=row.name,
             metadata=row.metadata_ or {},
             style=row.style or {},
@@ -433,6 +437,9 @@ class MediaItemOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    # The owner. None for system or legacy media with no owner, which any user may
+    # use but none owns: a caller deleting local files must tell the two apart.
+    user_id: str | None = None
     clip_id: str | None = None
     type: str
     prompt: str
@@ -469,6 +476,7 @@ class MediaItemOut(BaseModel):
             has_thumbnail = bool(getattr(row, "file_mime_type", None))
         return cls(
             id=row.id,
+            user_id=getattr(row, "user_id", None),
             clip_id=row.clip_id,
             type=row.type,
             prompt=row.prompt,
@@ -541,7 +549,7 @@ class SwapClipMediaBody(BaseModel):
     # Optional: when set, swap_clip_media resolves the slot to replace by
     # FINDING this id in the bucket rather than by trusting media_index's
     # position. get_full_clip's media array has no guaranteed order (see its
-    # own comment in stores/clips.py), so an index a caller computed off an
+    # own comment in stores/clip_media.py), so an index a caller computed off an
     # earlier fetch of that array can drift from the store's current
     # media_refs order; naming the id a caller means to replace cannot drift
     # the same way. media_index stays required and is used as the positional
