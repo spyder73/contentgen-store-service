@@ -138,6 +138,7 @@ from .stores import (
     clipstyle_package_metadata,
 )
 from app.stores import clipstyle_assets
+from app.media_urls import valid_file_url
 from app.uuids import uuid_form
 
 logger = logging.getLogger(__name__)
@@ -169,6 +170,12 @@ def _require_user_id(request: Request) -> str:
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id_required")
     return user_id
+
+
+def _require_valid_file_url(file_url: str | None) -> None:
+    """422 invalid_file_url, without the value: it is the caller's string, not ours to echo."""
+    if not valid_file_url(file_url):
+        raise HTTPException(status_code=422, detail="invalid_file_url")
 
 
 def _chat_error(exc: chat.ChatError) -> HTTPException:
@@ -973,6 +980,7 @@ def create_fastapi_app() -> FastAPI:
     async def upsert_media_handler(id: str, body: MediaItemIn, request: Request, session: SessionDep) -> Any:
         user_id = _require_user_id(request)
         body.id = id
+        _require_valid_file_url(body.file_url)
         try:
             result = await media.upsert_media(session, body, user_id=user_id)
         except ValueError as exc:
@@ -991,6 +999,7 @@ def create_fastapi_app() -> FastAPI:
         session: SessionDep,
     ) -> Any:
         user_id = _require_user_id(request)
+        _require_valid_file_url(body.file_url)
         try:
             result = await media.patch_media(session, id, body, user_id=user_id)
         except ValueError as exc:
