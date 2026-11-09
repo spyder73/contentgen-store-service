@@ -341,6 +341,8 @@ async def get_related_media(
 async def upsert_media(
     session: AsyncSession, body: MediaItemIn, user_id: str | None = None
 ) -> MediaItemOut | None:
+    if not user_id:
+        raise ValueError("upsert_media requires user_id")
     # A frozen asset's row is never overwritten (I1): `ON CONFLICT DO UPDATE` below would otherwise
     # rewrite its bytes/metadata out from under an approved version. A row that is frozen always
     # exists and is owned (freeze_assets only inserts for a real, owned, hidden-asset media row, and
@@ -385,15 +387,14 @@ async def upsert_media(
     # with no owner (legacy) stays without one rather than being claimed, and
     # the WHERE below leaves another user's row untouched.
     table = MediaItem.__table__
-    insert_values = {**data, "user_id": user_id} if user_id else data
     update_cols = {k: v for k, v in data.items() if k != "id"}
     stmt = (
         pg_insert(table)
-        .values(**insert_values)
+        .values(**data, user_id=user_id)
         .on_conflict_do_update(
             index_elements=["id"],
             set_=update_cols,
-            where=(table.c.user_id.is_(None) | (table.c.user_id == user_id)) if user_id else None,
+            where=table.c.user_id.is_(None) | (table.c.user_id == user_id),
         )
         .returning(table.c.id)
     )

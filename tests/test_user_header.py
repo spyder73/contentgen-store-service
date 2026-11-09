@@ -3,8 +3,9 @@
 Real user ids are uuids (users.id, so the JWT's subject), and routes compare them
 as strings against the owner a row names. A header spelled another way (uppercase,
 braces, no hyphens, padded) used to name a user who owned nothing; it now names the
-same user. A header that is not a uuid names no valid user: it is treated as no
-header, so a route that needs a user answers 401.
+same user. A header that is present but not a uuid is refused on every route, 401
+invalid_user_id: it is never read as no header, which means unfiltered. An absent or
+empty header is no header, as before.
 """
 from __future__ import annotations
 
