@@ -31,6 +31,10 @@ BAD = [
     "/assets/sub/x.png", "/media/proxy/a.mp4", "/media/uploads/a\\b.png", "/media/uploads/a\x01.png",
     "file:///etc/passwd", "ftp://example.com/a.png", "data:image/png;base64,AAAA", "javascript:alert(1)", "https://", "http:///nohost",
     " /media/uploads/a.png", "/media/uploads/a.png ",
+    "/media/uploads/.", "/media/uploads/.hidden", "/assets/.env", "/media/uploads/.png",  # a leading dot
+    "/media/uploads/%2e%2e", "/media/uploads/%2e%2e%2fsecret", "/media/uploads/a%2Fb.png", "/media/uploads/50%.png",  # "%"
+    "/media/uploads/a\n.png", "/media/uploads/a\x7f.png", "/media/uploads/\ta.png", "/media/uploads/ a.png",  # control, padding
+    "https://example.com/a\x7f.png",
 ]
 
 
