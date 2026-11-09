@@ -264,6 +264,13 @@ async def _get_by_id(session: AsyncSession, id: str, user_id: str | None) -> Med
     return row
 
 
+async def stored_file_url(session: AsyncSession, id: str, user_id: str) -> str | None:
+    """The file_url of the row ``id`` when the caller may write it (their own, or one with no
+    owner), else None. Another user's row reads as a missing one."""
+    row = await _get_owned(session, id, user_id)
+    return None if row is None else row.file_url
+
+
 async def get_media(
     session: AsyncSession, id: str, user_id: str | None = None
 ) -> MediaItemOut | None:

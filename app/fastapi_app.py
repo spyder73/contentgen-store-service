@@ -172,10 +172,19 @@ def _require_user_id(request: Request) -> str:
     return user_id
 
 
-def _require_valid_file_url(file_url: str | None) -> None:
-    """422 invalid_file_url, without the value: it is the caller's string, not ours to echo."""
-    if not valid_file_url(file_url):
-        raise HTTPException(status_code=422, detail="invalid_file_url")
+async def _require_valid_file_url(session: AsyncSession, media_id: str, file_url: str | None, user_id: str) -> None:
+    """422 invalid_file_url, without the value: it is the caller's string, not ours to echo.
+
+    Only a value that is new or changed is checked: a row already holding an odd value
+    (written before the rule, and read by the backend as no local file) can have the same
+    value resent with its other fields. The stored value counts only for a row the caller
+    may write, so another user's row neither passes nor answers differently.
+    """
+    if valid_file_url(file_url):
+        return
+    if file_url == await media.stored_file_url(session, media_id, user_id):
+        return
+    raise HTTPException(status_code=422, detail="invalid_file_url")
 
 
 def _chat_error(exc: chat.ChatError) -> HTTPException:
@@ -980,7 +989,7 @@ def create_fastapi_app() -> FastAPI:
     async def upsert_media_handler(id: str, body: MediaItemIn, request: Request, session: SessionDep) -> Any:
         user_id = _require_user_id(request)
         body.id = id
-        _require_valid_file_url(body.file_url)
+        await _require_valid_file_url(session, id, body.file_url, user_id)
         try:
             result = await media.upsert_media(session, body, user_id=user_id)
         except ValueError as exc:
@@ -999,7 +1008,7 @@ def create_fastapi_app() -> FastAPI:
         session: SessionDep,
     ) -> Any:
         user_id = _require_user_id(request)
-        _require_valid_file_url(body.file_url)
+        await _require_valid_file_url(session, id, body.file_url, user_id)
         try:
             result = await media.patch_media(session, id, body, user_id=user_id)
         except ValueError as exc:

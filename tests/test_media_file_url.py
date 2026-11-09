@@ -12,7 +12,7 @@ import uuid
 
 import pytest
 
-from tests.conftest import USER_A
+from tests.conftest import USER_A, USER_B
 
 GOOD = [
     "",
@@ -74,3 +74,44 @@ def test_a_patch_that_does_not_set_a_file_url_is_not_checked(env):
 
     assert r.status_code == 200
     assert env.media_row(mid).file_url == "/media/uploads/original.png"
+
+
+# ── a row that already holds an odd value ────────────────────────────────────
+
+LEGACY = "/etc/legacy-odd-value"
+
+
+def test_an_unchanged_odd_value_can_be_resent_so_the_rest_of_the_row_still_saves(env):
+    mid = env.new_media(USER_A, file_url=LEGACY, prompt="before")
+
+    put = env.client.put(f"/v1/media/{mid}", json={"id": mid, "type": "image", "prompt": "after", "file_url": LEGACY}, headers=env.headers(USER_A))
+    patch = _patch(env, mid, LEGACY)
+
+    assert (put.status_code, patch.status_code) == (200, 200)
+    assert env.media_row(mid).prompt == "after" and env.media_row(mid).file_url == LEGACY
+
+
+def test_changing_a_row_to_a_bad_value_is_still_refused(env):
+    mid = env.new_media(USER_A, file_url=LEGACY)
+
+    for r in (_put(env, mid, "/etc/other-odd-value"), _patch(env, mid, "//app/x")):
+        assert (r.status_code, r.json()) == (422, {"detail": "invalid_file_url"})
+    assert env.media_row(mid).file_url == LEGACY
+
+    # ...and an odd row can still be changed to a good value.
+    assert _patch(env, mid, "/media/uploads/fixed.png").status_code == 200
+
+
+def test_a_new_row_with_a_bad_value_is_still_refused(env):
+    mid = str(uuid.uuid4())
+
+    assert _put(env, mid, LEGACY).status_code == 422
+    assert env.media_row(mid) is None
+
+
+def test_another_users_stored_value_does_not_make_a_value_pass(env):
+    mid = env.new_media(USER_B, file_url=LEGACY)
+
+    for r in (_put(env, mid, LEGACY), _patch(env, mid, LEGACY)):
+        assert (r.status_code, r.json()) == (422, {"detail": "invalid_file_url"})
+    assert env.media_row(mid).user_id == USER_B and env.media_row(mid).file_url == LEGACY
