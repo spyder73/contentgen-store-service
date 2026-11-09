@@ -385,7 +385,7 @@ def client():
         yield c
 
 
-_AUTH = {"X-Internal-Secret": INTERNAL_SECRET, "X-User-ID": "user-thumb"}
+_AUTH = {"X-Internal-Secret": INTERNAL_SECRET, "X-User-ID": "00000000-0000-0000-0000-0000000000c3"}
 
 
 def test_thumbnail_endpoint_returns_derivative(client):

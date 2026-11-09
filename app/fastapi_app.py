@@ -138,6 +138,7 @@ from .stores import (
     clipstyle_package_metadata,
 )
 from app.stores import clipstyle_assets
+from app.uuids import uuid_form
 
 logger = logging.getLogger(__name__)
 
@@ -145,8 +146,14 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
 def _get_user_id(request: Request) -> str | None:
-    """Extract user_id from X-User-ID header (set by Go backend)."""
-    return request.headers.get("X-User-ID") or None
+    """The caller from the X-User-ID header (set by the Go backend), in canonical form.
+
+    Real user ids are uuids (users.id, and so the JWT's subject), and every route
+    compares them as strings, so a header spelled another way (uppercase, braces)
+    would not match the owner it names. A header that is not a uuid names no valid
+    user: it is treated as no header, so a route that needs a user answers 401.
+    """
+    return uuid_form(request.headers.get("X-User-ID") or "")
 
 
 def _require_user_id(request: Request) -> str:

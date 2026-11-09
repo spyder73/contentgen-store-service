@@ -7,7 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import ClipPrompt, MediaItem
 from ..schemas import ClipFullOut, SwapClipMediaBody
-from .clip_media import canonical, get_full_clip, is_foreign, media_owner
+from ..uuids import canonical
+from .clip_media import get_full_clip, is_foreign, may_use, media_owner
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,7 @@ async def swap_clip_media(
     # Media the clip's owner may not use is a missing media id: same branch, same
     # answer, with or without a header (see media_owner).
     owner = media_owner(row, user_id)
-    if new_item is not None and owner and new_item.user_id not in (None, owner):
+    if new_item is not None and not may_use(new_item.user_id, owner):
         new_item = None
     if new_item is None:
         logger.warning(

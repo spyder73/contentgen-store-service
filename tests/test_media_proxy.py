@@ -183,7 +183,7 @@ def client():
         yield c
 
 
-_AUTH = {"X-Internal-Secret": INTERNAL_SECRET, "X-User-ID": "user-proxy"}
+_AUTH = {"X-Internal-Secret": INTERNAL_SECRET, "X-User-ID": "00000000-0000-0000-0000-0000000000b2"}
 _AUTH_NO_USER = {"X-Internal-Secret": INTERNAL_SECRET}
 
 

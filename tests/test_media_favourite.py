@@ -25,7 +25,7 @@ from app.db import get_session
 
 AUTH_HEADERS = {
     "X-Internal-Secret": INTERNAL_SECRET,
-    "X-User-ID": "user-1",
+    "X-User-ID": "00000000-0000-0000-0000-0000000000a1",
 }
 
 

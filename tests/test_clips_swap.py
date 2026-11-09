@@ -53,6 +53,7 @@ def _media_row(media_id: str, type_: str) -> SimpleNamespace:
     now = datetime.now(timezone.utc)
     return SimpleNamespace(
         id=media_id,
+        user_id=None,
         clip_id=None,
         type=type_,
         prompt="a prompt",

@@ -8,33 +8,14 @@ however the caller typed it.
 """
 from __future__ import annotations
 
-import uuid
-
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import ClipPrompt, MediaItem
 from ..schemas import ClipFullOut, ClipPromptOut, MediaItemOut
+from ..uuids import canonical, uuid_form
 
 BUCKETS = ("images", "ai_videos", "audios")
-
-
-def uuid_form(value) -> str | None:
-    """A uuid string in its one canonical form (lowercase, hyphenated), else None.
-
-    uuid.UUID also takes uppercase, braces, a urn: prefix and no hyphens, and
-    Postgres reads every one of them as the same uuid, so a media id is never
-    compared or stored as the caller happened to type it.
-    """
-    try:
-        return str(uuid.UUID(str(value)))
-    except ValueError:
-        return None
-
-
-def canonical(value):
-    """``value`` as a canonical uuid string; anything that is not a uuid unchanged."""
-    return uuid_form(value) or value
 
 
 def canonical_refs(media_refs):
@@ -55,16 +36,22 @@ def ref_ids(media_refs: dict | None) -> list[str]:
     return [form for form in forms if form]
 
 
-def media_owner(row: ClipPrompt, user_id: str | None) -> str | None:
+def media_owner(row: ClipPrompt | None, user_id: str | None) -> str | None:
     """Whose media a clip may use: its owner's, whoever asks and whether or not a
-    header is sent. A clip with no owner (legacy) falls back to the caller; with
-    neither there is no one to filter by (an internal job on a legacy clip)."""
-    return row.user_id or user_id or None
+    header is sent. A clip with no owner (legacy), or none yet (a new row), falls
+    back to the caller; with neither there is no one to filter by (an internal
+    job on a legacy clip)."""
+    return (row.user_id if row is not None else None) or user_id or None
+
+
+def may_use(media_user_id: str | None, owner: str | None) -> bool:
+    """The rule, once: a clip owned by ``owner`` may use media with no owner (system
+    or legacy) and media that is the owner's. With no owner to filter by, any."""
+    return owner is None or media_user_id in (None, owner)
 
 
 def usable_media(owner: str):
-    """WHERE clause for the media a clip owned by ``owner`` may use: the owner's
-    own, or a row with no owner (system or legacy media)."""
+    """``may_use`` as a WHERE clause."""
     return or_(MediaItem.user_id.is_(None), MediaItem.user_id == owner)
 
 
@@ -80,14 +67,12 @@ async def without_foreign_refs(
     telling a dropped id from a kept one by the write itself.
     """
     refs = canonical_refs(media_refs)
-    owner = (row.user_id if row is not None else None) or user_id
+    owner = media_owner(row, user_id)
     ids = ref_ids(refs)
     if not owner or not ids:
         return refs
     result = await session.execute(
-        select(MediaItem.id).where(
-            MediaItem.id.in_(ids), MediaItem.user_id.is_not(None), MediaItem.user_id != owner
-        )
+        select(MediaItem.id).where(MediaItem.id.in_(ids), ~usable_media(owner))
     )
     foreign = {str(i) for i in result.scalars()}
     if not foreign:
@@ -123,9 +108,9 @@ async def get_full_clip(
     # media_refs' own bucket order (this was a live hazard: swap_clip_media
     # was positional-only). Fixing the query's ordering was consciously
     # skipped here: it is a wide-blast-radius change (every consumer of this
-    # endpoint), and SwapClipMediaBody.old_media_id below removes the
-    # load-bearing need for order to matter — a slot resolved BY ID cannot be
-    # the wrong one regardless of what order this array comes back in.
+    # endpoint), and SwapClipMediaBody.old_media_id (see clip_swap.py) removes
+    # the load-bearing need for order to matter — a slot resolved BY ID cannot
+    # be the wrong one regardless of what order this array comes back in.
     row = await session.get(ClipPrompt, id)
     if row is None or is_foreign(row, user_id):
         return None

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from sqlalchemy import delete, func, or_, select, text
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from ..models import ClipPrompt
 from ..schemas import ClipPromptIn, ClipPromptOut, ClipSummaryOut, PagedResponse
@@ -115,6 +116,10 @@ async def upsert_clip(
     row.metadata_ = body.metadata
     row.style = body.style
     row.media_refs = refs
+    # Always written, even when dropping a foreign id left the refs as they were:
+    # an UPDATE that moved updated_at only when a submitted id was kept would show
+    # a caller which ids were dropped.
+    flag_modified(row, "media_refs")
     row.render_output_urls = body.render_output_urls
     row.is_dirty = body.is_dirty
     row.finished_at = body.finished_at
@@ -147,6 +152,8 @@ async def patch_clip(
     for key, value in fields.items():
         attr = "metadata_" if key == "metadata" else key
         setattr(row, attr, value)
+    if "media_refs" in fields:
+        flag_modified(row, "media_refs")  # see upsert_clip
     await session.commit()
     await session.refresh(row)
     out = ClipPromptOut.from_orm_row(row)
