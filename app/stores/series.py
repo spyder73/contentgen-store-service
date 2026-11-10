@@ -48,23 +48,35 @@ async def get_series(
     return SeriesOut.from_orm_row(row)
 
 
+async def series_is_callers(session: AsyncSession, series_id: str, user_id: str | None) -> bool:
+    """The series exists and is the caller's (a legacy row with no owner is
+    anyone's, as it is for reads). A caller with no user owns none: it is not
+    let into a legacy series either."""
+    if not user_id:
+        return False
+    row = await session.get(Series, series_id)
+    return row is not None and (row.user_id is None or row.user_id == user_id)
+
+
 async def upsert_series(
     session: AsyncSession, body: SeriesIn, user_id: str | None = None
 ) -> SeriesOut:
+    if not user_id:
+        # A new row would be minted with no owner, which every user may read
+        # and write: the route answers 401, and this never fails open.
+        raise ValueError("upsert_series requires user_id")
     row = await session.get(Series, body.id)
     # Another user's series is not found, as a read of it is, and nothing is
     # written: the id is the caller's choice (the backend's create route takes
     # it from the request), so an upsert must not merge into a row it does not
-    # own. A caller with no user owns nothing. Legacy rows with no owner stay
-    # writable, as they stay readable.
+    # own. Legacy rows with no owner stay writable, as they stay readable; a
+    # write does not claim one.
     if row is not None and row.user_id is not None and row.user_id != user_id:
         raise SeriesError(404, "not_found")
     if row is None:
         if body.name is None:
             raise SeriesError(422, "name is required for a new series")
-        row = Series(id=body.id)
-        if user_id:
-            row.user_id = user_id
+        row = Series(id=body.id, user_id=user_id)
         session.add(row)
     # Narrow write: a field the caller never mentioned keeps its stored value,
     # so a caller can send just the keys it changes. (A new row takes the column

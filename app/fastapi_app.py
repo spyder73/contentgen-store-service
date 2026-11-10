@@ -1118,8 +1118,9 @@ def create_fastapi_app() -> FastAPI:
     @app.put("/v1/series/{id}", response_model=SeriesOut)
     async def upsert_series_handler(id: str, body: SeriesIn, request: Request, session: SessionDep) -> Any:
         body.id = id
+        user_id = _require_user_id(request)
         try:
-            return await series.upsert_series(session, body, user_id=_get_user_id(request))
+            return await series.upsert_series(session, body, user_id=user_id)
         except series.SeriesError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message)
 
@@ -1133,12 +1134,16 @@ def create_fastapi_app() -> FastAPI:
 
     @app.get("/v1/characters", response_model=PagedResponse)
     async def list_characters_handler(
+        request: Request,
         session: SessionDep,
         series_id: str | None = Query(None),
         page: int = Query(1, ge=1),
         limit: int = Query(50, ge=1, le=200),
     ) -> Any:
-        return await characters.list_characters(session, series_id=series_id, page=page, limit=limit)
+        user_id = _require_user_id(request)
+        return await characters.list_characters(
+            session, user_id=user_id, series_id=series_id, page=page, limit=limit
+        )
 
     @app.get("/v1/characters/{id}", response_model=CharacterOut)
     async def get_character_handler(id: str, request: Request, session: SessionDep) -> Any:
@@ -1150,8 +1155,9 @@ def create_fastapi_app() -> FastAPI:
     @app.put("/v1/characters/{id}", response_model=CharacterOut)
     async def upsert_character_handler(id: str, body: CharacterIn, request: Request, session: SessionDep) -> Any:
         body.id = id
+        user_id = _require_user_id(request)
         try:
-            return await characters.upsert_character(session, body, user_id=_get_user_id(request))
+            return await characters.upsert_character(session, body, user_id=user_id)
         except series.SeriesError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message)
 
@@ -1165,12 +1171,16 @@ def create_fastapi_app() -> FastAPI:
 
     @app.get("/v1/episodes", response_model=PagedResponse)
     async def list_episodes_handler(
+        request: Request,
         session: SessionDep,
         series_id: str | None = Query(None),
         page: int = Query(1, ge=1),
         limit: int = Query(50, ge=1, le=200),
     ) -> Any:
-        return await episodes.list_episodes(session, series_id=series_id, page=page, limit=limit)
+        user_id = _require_user_id(request)
+        return await episodes.list_episodes(
+            session, user_id=user_id, series_id=series_id, page=page, limit=limit
+        )
 
     @app.get("/v1/episodes/{id}", response_model=EpisodeOut)
     async def get_episode_handler(id: str, request: Request, session: SessionDep) -> Any:
@@ -1180,9 +1190,13 @@ def create_fastapi_app() -> FastAPI:
         return row
 
     @app.put("/v1/episodes/{id}", response_model=EpisodeOut)
-    async def upsert_episode_handler(id: str, body: EpisodeIn, session: SessionDep) -> Any:
+    async def upsert_episode_handler(id: str, body: EpisodeIn, request: Request, session: SessionDep) -> Any:
         body.id = id
-        return await episodes.upsert_episode(session, body)
+        user_id = _require_user_id(request)
+        try:
+            return await episodes.upsert_episode(session, body, user_id=user_id)
+        except series.SeriesError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message)
 
     @app.patch("/v1/episodes/{id}", response_model=EpisodeOut)
     async def patch_episode_handler(

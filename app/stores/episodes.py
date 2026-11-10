@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Episode, Series
 from ..schemas import EpisodeIn, EpisodeOut, EpisodePatch, PagedResponse
+from .series import SeriesError, series_is_callers
 
 
 # Ledger references that may legitimately be cleared: an explicit null unlinks,
@@ -22,10 +23,20 @@ def _owned_series_ids(user_id: str):
 
 
 async def list_episodes(
-    session: AsyncSession, series_id: str | None = None, page: int = 1, limit: int = 50
+    session: AsyncSession,
+    *,
+    user_id: str,
+    series_id: str | None = None,
+    page: int = 1,
+    limit: int = 50,
 ) -> PagedResponse:
+    """The episodes of the caller's series (legacy series with no owner
+    included), all of them or one series'. Another user's series_id is an empty
+    page, as a series of no episodes is."""
+    if not user_id:
+        raise ValueError("user_id is required for episode listing")
     offset = (page - 1) * limit
-    where = []
+    where = [Episode.series_id.in_(_owned_series_ids(user_id))]
     if series_id:
         where.append(Episode.series_id == series_id)
     count_q = select(func.count()).select_from(Episode)
@@ -54,8 +65,22 @@ async def get_episode(
     return EpisodeOut.from_orm_row(row)
 
 
-async def upsert_episode(session: AsyncSession, body: EpisodeIn) -> EpisodeOut:
+async def upsert_episode(
+    session: AsyncSession, body: EpisodeIn, user_id: str | None = None
+) -> EpisodeOut:
+    if not user_id:
+        raise ValueError("upsert_episode requires user_id")
     row = await session.get(Episode, body.id)
+    # An episode is the caller's through its series: the one it is in and the
+    # one it is put in must both be theirs (legacy series with no owner count).
+    # Anything else is not found, as a read of it is, and nothing is written —
+    # the id is the caller's choice, so an upsert must not merge into another
+    # user's episode, nor move one into another user's series. A series that
+    # does not exist answers the same as one that is not theirs.
+    if row is not None and not await series_is_callers(session, row.series_id, user_id):
+        raise SeriesError(404, "not_found")
+    if not await series_is_callers(session, body.series_id, user_id):
+        raise SeriesError(404, "not_found")
     if row is None:
         row = Episode(id=body.id)
         session.add(row)

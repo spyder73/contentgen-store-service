@@ -120,9 +120,11 @@ def _get(client, user, path: str) -> dict:
 def test_a_series_of_another_user_is_not_found_and_left_as_it_was(client):
     sid = _series_of(client, USER_A, "Coconut")
 
-    for user in (USER_B, None):
-        r = _put_series(client, user, sid, name="Taken", description="", metadata={})
-        assert r.status_code == 404, r.text
+    r = _put_series(client, USER_B, sid, name="Taken", description="", metadata={})
+    assert r.status_code == 404, r.text
+    # No caller is refused as the series list refuses it, never let through.
+    r = _put_series(client, None, sid, name="Taken", description="", metadata={})
+    assert (r.status_code, r.json()["detail"]) == (401, "user_id_required"), r.text
 
     got = _get(client, USER_A, f"/v1/series/{sid}")
     assert (got["name"], got["description"], got["metadata"]) == ("Coconut", "Coconut's show", {"cover": "palm"})
@@ -148,7 +150,7 @@ def test_a_character_of_another_user_is_not_found_and_left_as_it_was(client):
     for target in (sid_a, sid_b):
         r = _put_character(client, USER_B, cid, target, name="Taken", description="")
         assert r.status_code == 404, r.text
-    assert _put_character(client, None, cid, sid_a, name="Taken").status_code == 404
+    assert _put_character(client, None, cid, sid_a, name="Taken").status_code == 401
 
     got = _get(client, USER_A, f"/v1/characters/{cid}")
     assert (got["series_id"], got["name"], got["description"]) == (sid_a, "Captain", "Captain of the show")
@@ -169,9 +171,8 @@ def test_a_new_character_in_another_users_series_is_refused(client):
     sid_a = _series_of(client, USER_A, "Coconut")
     cid = str(uuid.uuid4())
 
-    for user in (USER_B, None):
-        r = _put_character(client, user, cid, sid_a, name="Stowaway")
-        assert r.status_code == 404, r.text
+    assert _put_character(client, USER_B, cid, sid_a, name="Stowaway").status_code == 404
+    assert _put_character(client, None, cid, sid_a, name="Stowaway").status_code == 401
 
     assert client.get(f"/v1/characters/{cid}", headers=_headers(USER_A)).status_code == 404
     listed = _get(client, USER_A, f"/v1/characters?series_id={sid_a}")
