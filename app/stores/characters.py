@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Character, Series
 from ..schemas import CharacterIn, CharacterOut, PagedResponse
-from .series import SeriesError
+from .series import SeriesError, series_is_callers
 
 
 def _owned_series_ids(user_id: str):
@@ -18,10 +18,20 @@ def _owned_series_ids(user_id: str):
 
 
 async def list_characters(
-    session: AsyncSession, series_id: str | None = None, page: int = 1, limit: int = 50
+    session: AsyncSession,
+    *,
+    user_id: str,
+    series_id: str | None = None,
+    page: int = 1,
+    limit: int = 50,
 ) -> PagedResponse:
+    """The cast of the caller's series (legacy series with no owner included),
+    all of them or one series'. Another user's series_id is an empty page, as
+    a series of no cast is."""
+    if not user_id:
+        raise ValueError("user_id is required for character listing")
     offset = (page - 1) * limit
-    where = []
+    where = [Character.series_id.in_(_owned_series_ids(user_id))]
     if series_id:
         where.append(Character.series_id == series_id)
     count_q = select(func.count()).select_from(Character)
@@ -50,13 +60,6 @@ async def get_character(
     return CharacterOut.from_orm_row(row)
 
 
-async def _series_is_callers(session: AsyncSession, series_id: str, user_id: str | None) -> bool:
-    """The series exists and is the caller's (a legacy row with no owner is
-    anyone's, as it is for reads)."""
-    series = await session.get(Series, series_id)
-    return series is not None and (series.user_id is None or series.user_id == user_id)
-
-
 async def upsert_character(
     session: AsyncSession, body: CharacterIn, user_id: str | None = None
 ) -> CharacterOut:
@@ -65,10 +68,11 @@ async def upsert_character(
     # the one it is put in must both be theirs. Anything else is not found, as
     # a read of it is, and nothing is written — the id is the caller's choice,
     # so an upsert must not merge into another user's cast row, nor move one
-    # into another user's series. A caller with no user owns no series.
-    if row is not None and not await _series_is_callers(session, row.series_id, user_id):
+    # into another user's series. A caller with no user owns no series, and the
+    # route refuses one before this.
+    if row is not None and not await series_is_callers(session, row.series_id, user_id):
         raise SeriesError(404, "not_found")
-    if not await _series_is_callers(session, body.series_id, user_id):
+    if not await series_is_callers(session, body.series_id, user_id):
         raise SeriesError(404, "not_found")
     if row is None:
         if body.name is None:

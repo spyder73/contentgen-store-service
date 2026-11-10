@@ -120,9 +120,11 @@ def _get(client, user, path: str) -> dict:
 def test_a_series_of_another_user_is_not_found_and_left_as_it_was(client):
     sid = _series_of(client, USER_A, "Coconut")
 
-    for user in (USER_B, None):
-        r = _put_series(client, user, sid, name="Taken", description="", metadata={})
-        assert r.status_code == 404, r.text
+    r = _put_series(client, USER_B, sid, name="Taken", description="", metadata={})
+    assert r.status_code == 404, r.text
+    # No caller is refused as the series list refuses it, never let through.
+    r = _put_series(client, None, sid, name="Taken", description="", metadata={})
+    assert (r.status_code, r.json()["detail"]) == (401, "user_id_required"), r.text
 
     got = _get(client, USER_A, f"/v1/series/{sid}")
     assert (got["name"], got["description"], got["metadata"]) == ("Coconut", "Coconut's show", {"cover": "palm"})
@@ -147,11 +149,23 @@ def test_a_character_of_another_user_is_not_found_and_left_as_it_was(client):
     # Neither in place nor moved into the caller's own series.
     for target in (sid_a, sid_b):
         r = _put_character(client, USER_B, cid, target, name="Taken", description="")
-        assert r.status_code == 404, r.text
-    assert _put_character(client, None, cid, sid_a, name="Taken").status_code == 404
+        assert (r.status_code, r.json()["detail"]) == (404, "not_found"), r.text
+    assert _put_character(client, None, cid, sid_a, name="Taken").status_code == 401
 
     got = _get(client, USER_A, f"/v1/characters/{cid}")
     assert (got["series_id"], got["name"], got["description"]) == (sid_a, "Captain", "Captain of the show")
+
+
+def test_a_foreign_character_answers_exactly_as_a_missing_one(client):
+    sid_a = _series_of(client, USER_A, "Coconut")
+    foreign = _character_of(client, USER_A, sid_a, "Captain")
+
+    # Same caller, same target series: only whether the character id exists differs.
+    for target in (sid_a, str(uuid.uuid4())):
+        r_foreign = _put_character(client, USER_B, foreign, target, name="Taken")
+        r_missing = _put_character(client, USER_B, str(uuid.uuid4()), target, name="Taken")
+        assert (r_foreign.status_code, r_foreign.json()) == (r_missing.status_code, r_missing.json())
+        assert (r_foreign.status_code, r_foreign.json()["detail"]) == (404, "not_found")
 
 
 def test_a_character_is_never_moved_into_another_users_series(client):
@@ -169,9 +183,8 @@ def test_a_new_character_in_another_users_series_is_refused(client):
     sid_a = _series_of(client, USER_A, "Coconut")
     cid = str(uuid.uuid4())
 
-    for user in (USER_B, None):
-        r = _put_character(client, user, cid, sid_a, name="Stowaway")
-        assert r.status_code == 404, r.text
+    assert _put_character(client, USER_B, cid, sid_a, name="Stowaway").status_code == 404
+    assert _put_character(client, None, cid, sid_a, name="Stowaway").status_code == 401
 
     assert client.get(f"/v1/characters/{cid}", headers=_headers(USER_A)).status_code == 404
     listed = _get(client, USER_A, f"/v1/characters?series_id={sid_a}")

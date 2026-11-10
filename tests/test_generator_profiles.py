@@ -505,7 +505,7 @@ class TestCharacterGeneratorProfileLink:
         with patch.object(characters, "upsert_character", new=_fake_upsert):
             resp = client.put(
                 f"/v1/characters/{_id(50)}",
-                headers=_headers(),
+                headers={**_headers(), "X-User-ID": _id(70)},
                 json={
                     "id": _id(50),
                     "series_id": _id(60),

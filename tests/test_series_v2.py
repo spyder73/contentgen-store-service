@@ -344,6 +344,7 @@ def test_episode_v2_columns_and_backfill():
                         storyline=storyline,
                         last_frame_media_id=frame_id,
                     ),
+                    user_id=USER_A,
                 )
 
             async with factory() as s:
@@ -369,7 +370,8 @@ def test_episode_v2_columns_and_backfill():
             plain = str(uuid.uuid4())
             async with factory() as s:
                 await episodes_store.upsert_episode(
-                    s, EpisodeIn(id=plain, series_id=sid, episode_number=2)
+                    s, EpisodeIn(id=plain, series_id=sid, episode_number=2),
+                    user_id=USER_A,
                 )
             async with factory() as s:
                 row = await episodes_store.get_episode(s, plain, user_id=USER_A)
@@ -722,6 +724,7 @@ def test_old_shape_put_preserves_episode_v2_columns():
                         storyline=storyline,
                         last_frame_media_id=frame_id,
                     ),
+                    user_id=USER_A,
                 )
 
             # A rename from the current UI: v1 shape, no ledger fields.
@@ -737,6 +740,7 @@ def test_old_shape_put_preserves_episode_v2_columns():
                         prev_episode_summary="",
                         metadata={},
                     ),
+                    user_id=USER_A,
                 )
 
             async with factory() as s:
@@ -754,6 +758,7 @@ def test_old_shape_put_preserves_episode_v2_columns():
                 await episodes_store.upsert_episode(
                     s,
                     EpisodeIn(id=eid, series_id=sid, episode_number=1, storyline={}),
+                    user_id=USER_A,
                 )
             async with factory() as s:
                 row = await episodes_store.get_episode(s, eid, user_id=USER_A)
@@ -961,12 +966,14 @@ def test_episode_null_ledger_refs_clear_via_put_and_patch():
                         idea_id=idea_id,
                         clip_id=clip_id,
                     ),
+                    user_id=USER_A,
                 )
 
             # Absent: the whole ledger survives.
             async with factory() as s:
                 await episodes_store.upsert_episode(
-                    s, EpisodeIn.model_validate({**base, "title": "renamed"})
+                    s, EpisodeIn.model_validate({**base, "title": "renamed"}),
+                    user_id=USER_A,
                 )
             async with factory() as s:
                 row = await episodes_store.get_episode(s, eid, user_id=USER_A)
@@ -976,7 +983,8 @@ def test_episode_null_ledger_refs_clear_via_put_and_patch():
             # Explicit null on one reference clears only that one.
             async with factory() as s:
                 await episodes_store.upsert_episode(
-                    s, EpisodeIn.model_validate({**base, "run_id": None})
+                    s, EpisodeIn.model_validate({**base, "run_id": None}),
+                    user_id=USER_A,
                 )
             async with factory() as s:
                 row = await episodes_store.get_episode(s, eid, user_id=USER_A)
@@ -1032,6 +1040,7 @@ def test_patch_episode_writes_only_given_keys():
                         storyline={"beats": ["a"]},
                         metadata={"keep": "me"},
                     ),
+                    user_id=USER_A,
                 )
 
             # The recorder knows one fact at a time.
@@ -1079,6 +1088,7 @@ def test_patch_episode_is_owner_scoped():
                     EpisodeIn(
                         id=eid, series_id=sid, episode_number=1, status="running"
                     ),
+                    user_id=USER_A,
                 )
 
             async with factory() as s:
