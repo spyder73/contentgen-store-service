@@ -22,18 +22,9 @@ from .schemas import (
     ClipPromptOut,
     ClipPromptPatch,
     ClipSummaryOut,
-    DatasetTemplateCreate,
-    DatasetTemplateOut,
-    DatasetTemplateUpdate,
     EpisodeIn,
     EpisodeOut,
     EpisodePatch,
-    GeneratorProfileCreate,
-    GeneratorProfileOut,
-    GeneratorProfileUpdate,
-    PuppetPosePresetCreate,
-    PuppetPosePresetOut,
-    PuppetPosePresetUpdate,
     MediaItemIn,
     MediaItemOut,
     MediaItemPatch,
@@ -118,8 +109,6 @@ from .stores import (
     credits_reaper,
     credits_spent,
     episodes,
-    generator_profiles,
-    puppet_pose_presets,
     media,
     clip_ratings,
     ideas,
@@ -1218,119 +1207,6 @@ def create_fastapi_app() -> FastAPI:
         if not deleted:
             raise HTTPException(status_code=404, detail="not_found")
 
-    # ── generator profiles ───────────────────────────────────────────────────
-    # Versioned generator definitions (base model + adapters + prompt + params).
-    # A slug groups versions; a slug holds at most one draft. Publishing freezes
-    # a row (immutable, undeletable); drafts are the only mutable/deletable rows.
-
-    @app.get("/v1/generator-profiles", response_model=list[GeneratorProfileOut])
-    async def list_generator_profiles_handler(
-        session: SessionDep,
-        status: str | None = Query(None),
-        user_id: str | None = Query(None),
-        slug: str | None = Query(None),
-    ) -> Any:
-        return await generator_profiles.list_profiles(
-            session, status=status, user_id=user_id, slug=slug
-        )
-
-    # NOTE: /v1/generator-profiles/by-ref/{ref} must precede /{id}.
-    @app.get("/v1/generator-profiles/by-ref/{ref}", response_model=GeneratorProfileOut)
-    async def get_generator_profile_by_ref_handler(ref: str, session: SessionDep) -> Any:
-        try:
-            row = await generator_profiles.get_profile_by_ref(session, ref)
-        except generator_profiles.GeneratorProfileError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=exc.message)
-        if row is None:
-            raise HTTPException(status_code=404, detail="not_found")
-        return row
-
-    @app.get("/v1/generator-profiles/{id}", response_model=GeneratorProfileOut)
-    async def get_generator_profile_handler(id: str, session: SessionDep) -> Any:
-        row = await generator_profiles.get_profile(session, id)
-        if row is None:
-            raise HTTPException(status_code=404, detail="not_found")
-        return row
-
-    @app.post("/v1/generator-profiles", response_model=GeneratorProfileOut)
-    async def create_generator_profile_handler(
-        body: GeneratorProfileCreate, session: SessionDep
-    ) -> Any:
-        try:
-            return await generator_profiles.create_profile(session, body)
-        except generator_profiles.GeneratorProfileError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=exc.message)
-
-    @app.put("/v1/generator-profiles/{id}", response_model=GeneratorProfileOut)
-    async def update_generator_profile_handler(
-        id: str, body: GeneratorProfileUpdate, session: SessionDep
-    ) -> Any:
-        try:
-            row = await generator_profiles.update_profile(session, id, body)
-        except generator_profiles.GeneratorProfileError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=exc.message)
-        if row is None:
-            raise HTTPException(status_code=404, detail="not_found")
-        return row
-
-    @app.post("/v1/generator-profiles/{id}/publish", response_model=GeneratorProfileOut)
-    async def publish_generator_profile_handler(id: str, session: SessionDep) -> Any:
-        try:
-            row = await generator_profiles.publish_profile(session, id)
-        except generator_profiles.GeneratorProfileError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=exc.message)
-        if row is None:
-            raise HTTPException(status_code=404, detail="not_found")
-        return row
-
-    @app.delete("/v1/generator-profiles/{id}", status_code=204)
-    async def delete_generator_profile_handler(id: str, session: SessionDep) -> None:
-        try:
-            deleted = await generator_profiles.delete_profile(session, id)
-        except generator_profiles.GeneratorProfileError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=exc.message)
-        if deleted is None:
-            raise HTTPException(status_code=404, detail="not_found")
-
-    # ── user Puppet pose library ────────────────────────────────────────────
-
-    @app.get("/v1/puppet-poses", response_model=list[PuppetPosePresetOut])
-    async def list_puppet_poses_handler(request: Request, session: SessionDep) -> Any:
-        return await puppet_pose_presets.list_presets(session, _require_user_id(request))
-
-    @app.get("/v1/puppet-poses/{id}", response_model=PuppetPosePresetOut)
-    async def get_puppet_pose_handler(id: str, request: Request, session: SessionDep) -> Any:
-        row = await puppet_pose_presets.get_preset(session, id, _require_user_id(request))
-        if row is None:
-            raise HTTPException(status_code=404, detail="not_found")
-        return row
-
-    @app.post("/v1/puppet-poses", response_model=PuppetPosePresetOut)
-    async def create_puppet_pose_handler(
-        body: PuppetPosePresetCreate, request: Request, session: SessionDep
-    ) -> Any:
-        try:
-            return await puppet_pose_presets.create_preset(session, _require_user_id(request), body)
-        except puppet_pose_presets.PuppetPosePresetConflict as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
-
-    @app.put("/v1/puppet-poses/{id}", response_model=PuppetPosePresetOut)
-    async def update_puppet_pose_handler(
-        id: str, body: PuppetPosePresetUpdate, request: Request, session: SessionDep
-    ) -> Any:
-        try:
-            row = await puppet_pose_presets.update_preset(session, id, _require_user_id(request), body)
-        except puppet_pose_presets.PuppetPosePresetConflict as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
-        if row is None:
-            raise HTTPException(status_code=404, detail="not_found")
-        return row
-
-    @app.delete("/v1/puppet-poses/{id}", status_code=204)
-    async def delete_puppet_pose_handler(id: str, request: Request, session: SessionDep) -> None:
-        if not await puppet_pose_presets.delete_preset(session, id, _require_user_id(request)):
-            raise HTTPException(status_code=404, detail="not_found")
-
     # ── credits ──────────────────────────────────────────────────────────────
 
     @app.get("/v1/users/{user_id}/credits")
@@ -1988,55 +1864,6 @@ def create_fastapi_app() -> FastAPI:
         if body.visibility != "global":
             body.visibility = "global"
         return await prompts.seed_prompt(session, body)
-
-    # ── dataset templates ────────────────────────────────────────────────────────
-
-    from .stores import dataset_templates
-
-    @app.get("/v1/dataset-templates", response_model=list[DatasetTemplateOut])
-    async def list_dataset_templates_handler(request: Request, session: SessionDep) -> Any:
-        user_id = _get_user_id(request)
-        return await dataset_templates.list_templates(session, user_id=user_id, include_system=True)
-
-    @app.get("/v1/dataset-templates/{id}", response_model=DatasetTemplateOut)
-    async def get_dataset_template_handler(id: str, session: SessionDep) -> Any:
-        template = await dataset_templates.get_template(session, id)
-        if template is None:
-            raise HTTPException(status_code=404, detail="not_found")
-        return template
-
-    @app.post("/v1/dataset-templates", response_model=DatasetTemplateOut, status_code=201)
-    async def create_dataset_template_handler(
-        body: DatasetTemplateCreate,
-        request: Request,
-        session: SessionDep,
-    ) -> Any:
-        user_id = _require_user_id(request)
-        return await dataset_templates.create_template(session, body, user_id=user_id)
-
-    @app.patch("/v1/dataset-templates/{id}", response_model=DatasetTemplateOut)
-    async def update_dataset_template_handler(
-        id: str,
-        body: DatasetTemplateUpdate,
-        request: Request,
-        session: SessionDep,
-    ) -> Any:
-        user_id = _require_user_id(request)
-        template = await dataset_templates.update_template(session, id, body, user_id=user_id)
-        if template is None:
-            raise HTTPException(status_code=404, detail="not_found_or_unauthorized")
-        return template
-
-    @app.delete("/v1/dataset-templates/{id}", status_code=204)
-    async def delete_dataset_template_handler(
-        id: str,
-        request: Request,
-        session: SessionDep,
-    ) -> None:
-        user_id = _require_user_id(request)
-        deleted = await dataset_templates.delete_template(session, id, user_id=user_id)
-        if deleted is None:
-            raise HTTPException(status_code=404, detail="not_found_or_unauthorized")
 
     # ── error handler ────────────────────────────────────────────────────────
 

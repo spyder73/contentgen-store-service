@@ -9,7 +9,7 @@ from ..schemas import PagedResponse, SeriesIn, SeriesOut
 
 class SeriesError(Exception):
     """Domain error for the series and cast writes, carrying an HTTP status;
-    the routes translate it (see GeneratorProfileError)."""
+    the routes translate it."""
 
     def __init__(self, status_code: int, message: str):
         super().__init__(message)
