@@ -612,8 +612,8 @@ def test_chat_routes_need_a_user_and_the_internal_secret(env):
 # ── access feature ───────────────────────────────────────────────────────────
 
 
-def test_chat_is_a_default_whitelisted_feature():
-    assert ("chat", True) in DEFAULT_FEATURES and TAB_FEATURES["chat"] == "chat"
+def test_chat_is_a_default_feature_open_to_everyone():
+    assert ("chat", False) in DEFAULT_FEATURES and TAB_FEATURES["chat"] == "chat"
 
 
 # ── migration ────────────────────────────────────────────────────────────────
