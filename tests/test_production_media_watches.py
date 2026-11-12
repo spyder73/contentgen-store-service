@@ -101,7 +101,7 @@ def test_render_watch_without_media_fields_still_valid(env):
     )
     row = _get(env, old["id"])
     assert row["watches"][0]["clip_id"] == "c9" and row["watches"][0]["media_id"] == ""
-    assert row["artifacts"] == {"media_ids": ["m0"], "clip_ids": ["c9"], "approved_scenes": [], "tries": {}}
+    assert row["artifacts"] == {"media_ids": ["m0"], "clip_ids": ["c9"], "approved_scenes": [], "tries": {}, "scenes": {}}
     found = env.client.get("/v1/chat/productions/watching?clip_id=c9", headers=_h(None)).json()
     assert [x["id"] for x in found] == [old["id"]]
 

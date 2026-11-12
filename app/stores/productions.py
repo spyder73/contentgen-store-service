@@ -22,7 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import ChatProduction
-from ..schemas import ProductionIn, ProductionPatch
+from ..schemas import ProductionIn, ProductionPatch, SceneShow
 from .chat import ChatError, _now, _owned_thread, _usd, _uuid
 
 LOG_KEEP = 200
@@ -174,6 +174,14 @@ def _artifacts(row: ChatProduction, patch: ProductionPatch, now: datetime) -> di
                 stamped = scene.model_copy(update={"approved_at": scene.approved_at or now})
                 scenes.append(stamped.model_dump(mode="json"))
         artifacts["approved_scenes"] = scenes
+    if patch.add_scene_shows:
+        shown = {number: list(shows) for number, shows in current.get("scenes", {}).items()}
+        for show in patch.add_scene_shows:
+            history = shown.setdefault(str(show.number), [])
+            if all(earlier["preview_id"] != show.preview_id for earlier in history):
+                entry = SceneShow(preview_id=show.preview_id, key=show.key, media_ids=show.media_ids, shown_at=now)
+                history.append(entry.model_dump(mode="json"))
+        artifacts["scenes"] = shown
     if patch.add_tries:
         tries = dict(current.get("tries", {}))
         for key, amount in patch.add_tries.items():
@@ -195,7 +203,10 @@ def _values(row: ChatProduction, patch: ProductionPatch, now: datetime) -> dict[
     if patch.append_log:
         entries = [{"at": now.isoformat(), **entry.model_dump()} for entry in patch.append_log]
         values["log"] = [*row.log, *entries][-LOG_KEEP:]
-    if patch.add_media_ids or patch.add_clip_ids or patch.add_approved_scenes or patch.add_tries:
+    if (
+        patch.add_media_ids or patch.add_clip_ids or patch.add_approved_scenes or patch.add_scene_shows
+        or patch.add_tries
+    ):
         values["artifacts"] = _artifacts(row, patch, now)
     if patch.watches is not None:
         values["watches"] = [watch.model_dump(mode="json") for watch in patch.watches]

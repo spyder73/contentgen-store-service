@@ -1082,6 +1082,15 @@ class ChatThreadSummary(BaseModel):
     updated_at: datetime
 
 
+class ChatThreadListItem(ChatThreadSummary):
+    """A thread as the list route answers it, never as a single read does. ``needs_you``: its
+    open production has a pending card to press. ``jobs_running``: its open production has a
+    render or media job in flight."""
+
+    needs_you: bool = False
+    jobs_running: bool = False
+
+
 class ChatThreadOut(ChatThreadSummary):
     transcript: list[Any] = []
     known_media: list[Any] = []
@@ -1253,13 +1262,33 @@ class ApprovedScene(BaseModel):
     approved_at: datetime | None = None
 
 
+class SceneShow(BaseModel):
+    """One preview that showed a scene number: ``preview_id`` is the card's id, ``key`` the input
+    key of what it showed (opaque, as in ``ApprovedScene``), ``media_ids`` the pictures."""
+
+    preview_id: str
+    key: str
+    media_ids: list[str] = []
+    shown_at: datetime | None = None
+
+
 class ProductionArtifacts(BaseModel):
-    """``tries`` counts the video tries spent per scene key."""
+    """``tries`` counts the video tries spent per scene key. ``scenes`` is the history of what
+    was shown per scene number (the number as a string), oldest first; the last entry of a
+    number is the scene as it stands. A row from before it has none."""
 
     media_ids: list[str] = []
     clip_ids: list[str] = []
     approved_scenes: list[ApprovedScene] = []
     tries: dict[str, int] = {}
+    scenes: dict[str, list[SceneShow]] = {}
+
+
+class SceneShowIn(BaseModel):
+    number: int = Field(ge=1, le=999)
+    preview_id: str = Field(min_length=1)
+    key: str = Field(min_length=1)
+    media_ids: list[str] = []
 
 
 class ProductionWake(BaseModel):
@@ -1275,8 +1304,10 @@ class ProductionPatch(BaseModel):
     increments, never replacements. ``add_budget_usd`` is a card being applied: it names the
     ``budget_version`` it was priced against and is refused (409) if the budget has moved on.
     ``watches`` replaces the list; ``acked_seq`` is the only change a closed production takes.
-    ``add_approved_scenes`` appends the scenes whose key is not there yet. ``add_tries`` adds to
-    the per-key try counts (a negative amount refunds one, never below 0)."""
+    ``add_approved_scenes`` appends the scenes whose key is not there yet. ``add_scene_shows``
+    appends each show to its scene number's history, skipping a (number, preview_id) already
+    there. ``add_tries`` adds to the per-key try counts (a negative amount refunds one, never
+    below 0)."""
 
     expect_budget_version: int | None = Field(default=None, ge=0)
     add_budget_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
@@ -1286,6 +1317,7 @@ class ProductionPatch(BaseModel):
     add_media_ids: list[str] | None = None
     add_clip_ids: list[str] | None = None
     add_approved_scenes: list[ApprovedScene] | None = None
+    add_scene_shows: list[SceneShowIn] | None = None
     add_tries: dict[str, int] | None = None
     watches: list[ProductionWatch] | None = None
     bump_wake: ProductionWake | None = None

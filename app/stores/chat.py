@@ -33,6 +33,7 @@ from ..schemas import (
     ChatMessageIn,
     ChatMessagePatch,
     ChatThreadIn,
+    ChatThreadListItem,
     ChatThreadPatch,
 )
 
@@ -136,8 +137,12 @@ async def create_thread(session: AsyncSession, user_id: str, payload: ChatThread
 
 async def list_threads(
     session: AsyncSession, user_id: str, *, limit: int = 100, offset: int = 0
-) -> list[ChatThread]:
-    """Newest activity first. The transcript and known media are not loaded."""
+) -> list[ChatThreadListItem]:
+    """Newest activity first. The transcript and known media are not loaded. Each thread says
+    whether its open production needs the user (a pending card of that production) and whether
+    a job of it is in flight; both come from two grouped queries over the page's thread ids."""
+    from .productions import _in_flight  # productions imports this module
+
     query = (
         select(ChatThread)
         .options(defer(ChatThread.transcript), defer(ChatThread.known_media))
@@ -146,7 +151,37 @@ async def list_threads(
         .limit(max(1, min(limit, LIST_THREADS_MAX)))
         .offset(max(0, offset))
     )
-    return list((await session.execute(query)).scalars())
+    threads = list((await session.execute(query)).scalars())
+    ids = [thread.id for thread in threads]
+    items = [ChatThreadListItem.model_validate(thread) for thread in threads]
+    if not ids:
+        return items
+    open_rows = (
+        await session.execute(
+            select(ChatProduction.thread_id, ChatProduction.id, ChatProduction.watches).where(
+                ChatProduction.thread_id.in_(ids), ChatProduction.status == "open"
+            )
+        )
+    ).all()
+    # A thread has at most one open production (a partial unique index).
+    open_ids = {thread_id: production_id for thread_id, production_id, _ in open_rows}
+    running = {thread_id for thread_id, _, watches in open_rows if any(_in_flight(w) for w in watches)}
+    pending = []
+    if open_ids:
+        pending = (
+            await session.execute(
+                select(ChatApproval.thread_id, ChatApproval.subject).where(
+                    ChatApproval.thread_id.in_(list(open_ids)), ChatApproval.status == "pending"
+                )
+            )
+        ).all()
+    needing = {
+        thread_id for thread_id, subject in pending if subject.startswith(f"production:{open_ids[thread_id]}|")
+    }
+    for item in items:
+        item.needs_you = item.id in needing
+        item.jobs_running = item.id in running
+    return items
 
 
 async def get_thread(session: AsyncSession, user_id: str, thread_id: str) -> ChatThread | None:
