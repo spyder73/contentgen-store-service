@@ -1,7 +1,7 @@
 """Phase 5a: generator training is retired, its data stays.
 
 The generator-profile, puppet-pose and dataset-template routes are gone, the
-access defaults no longer list the generators, datasets and training features,
+access defaults no longer list the generators, datasets, training and docs features,
 and chat is open to everyone on a new install. The tables, the model classes and
 ``characters.generator_profile_id`` stay, so old rows still resolve and a
 character that still points at a profile still saves.
@@ -37,7 +37,7 @@ from app.stores import access  # noqa: E402
 
 SECRET = "retired-features-secret"
 USER_A = str(uuid.uuid4())
-RETIRED_FEATURES = {"generators", "datasets", "training"}
+RETIRED_FEATURES = {"generators", "datasets", "training", "docs"}
 
 
 def _headers(user: str | None = USER_A) -> dict[str, str]:
