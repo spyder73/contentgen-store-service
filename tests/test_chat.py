@@ -213,6 +213,91 @@ def test_list_threads_newest_first_without_transcript(env):
     assert [t["id"] for t in page] == [new["id"]]
 
 
+def _open_production(env, thread_id: str, user: str = USER_A) -> dict:
+    r = env.client.post(
+        f"/v1/chat/threads/{thread_id}/productions", json={"title": "t", "goal": "g", "agent_cap_usd": 1}, headers=_h(user)
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def _flags(env, user: str = USER_A, query: str = "") -> dict[str, tuple[bool, bool]]:
+    listed = env.client.get(f"/v1/chat/threads{query}", headers=_h(user)).json()
+    return {t["id"]: (t["needs_you"], t["jobs_running"]) for t in listed}
+
+
+def test_thread_list_flags(env):
+    # A: an open production with a pending card of its own: it needs you.
+    a = env.thread(title="a")
+    pa = _open_production(env, a["id"])
+    env.approval(a["id"], action="production.budget", subject=f"production:{pa['id']}|preview:x")
+    # B: an open production with a media job running: jobs running.
+    b = env.thread(title="b")
+    pb = _open_production(env, b["id"])
+    watch = {"kind": "media", "media_id": "m1", "status": "running"}
+    assert env.client.patch(f"/v1/chat/productions/{pb['id']}", json={"watches": [watch]}, headers=_h()).status_code == 200
+    # C: a pending card left on a closed production: neither.
+    c = env.thread(title="c")
+    pc = _open_production(env, c["id"])
+    env.approval(c["id"], action="production.budget", subject=f"production:{pc['id']}|v0|plan:abc")
+    assert env.client.patch(f"/v1/chat/productions/{pc['id']}", json={"close": {"outcome": "x"}}, headers=_h()).status_code == 200
+    # Another user's thread, with both conditions, is never listed for A.
+    other = env.thread(USER_B, title="other")
+    po = _open_production(env, other["id"], USER_B)
+    env.approval(other["id"], USER_B, action="production.budget", subject=f"production:{po['id']}|preview:x")
+
+    flags = _flags(env)
+    assert flags == {a["id"]: (True, False), b["id"]: (False, True), c["id"]: (False, False)}
+    assert _flags(env, USER_B) == {other["id"]: (True, False)}
+
+
+def test_thread_flags_follow_the_open_production_only(env):
+    t = env.thread()
+    old = _open_production(env, t["id"])
+    env.approval(t["id"], action="production.budget", subject=f"production:{old['id']}|v0|plan:abc")
+    assert _flags(env)[t["id"]] == (True, False)
+    assert env.client.patch(f"/v1/chat/productions/{old['id']}", json={"close": {"outcome": "x"}}, headers=_h()).status_code == 200
+    assert _flags(env)[t["id"]] == (False, False)
+
+    # A new production does not inherit the old one's pending card, nor a card that names no
+    # production, nor another production's id (the id ends at the bar: no prefix collision).
+    new = _open_production(env, t["id"])
+    env.approval(t["id"], action="playbook.save", subject="series-1")
+    env.approval(t["id"], action="production.budget", subject=f"production:{new['id']}x|v0")
+    env.approval(t["id"], action="production.budget", subject=f"production:{new['id']}")
+    assert _flags(env)[t["id"]] == (False, False)
+
+    # Only a pending card counts: one that was approved or declined has been answered.
+    answered = env.approval(t["id"], action="production.budget", subject=f"production:{new['id']}|v1|plan:def")
+    assert env.client.post(f"/v1/chat/approvals/{answered['id']}/decline", headers=_h()).status_code == 200
+    assert _flags(env)[t["id"]] == (False, False)
+    env.approval(t["id"], action="production.budget", subject=f"production:{new['id']}|v2|plan:ghi")
+    assert _flags(env)[t["id"]] == (True, False)
+
+    # Both flags can hold at once; a job that has ended is not running. Finished watches and a
+    # render in flight are read as the production reads them.
+    done = {"kind": "media", "media_id": "m1", "status": "done"}
+    patch = lambda *watches: env.client.patch(  # noqa: E731
+        f"/v1/chat/productions/{new['id']}", json={"watches": list(watches)}, headers=_h()
+    )
+    assert patch(done).status_code == 200 and _flags(env)[t["id"]] == (True, False)
+    assert patch(done, {"kind": "render", "clip_id": "c1", "status": "rendering"}).status_code == 200
+    assert _flags(env)[t["id"]] == (True, True)
+
+
+def test_the_flags_are_on_the_list_only_and_paging_keeps_them(env):
+    first = env.thread(title="first")
+    second = env.thread(title="second")
+    p = _open_production(env, second["id"])
+    env.approval(second["id"], action="production.budget", subject=f"production:{p['id']}|v0")
+    one = env.client.get(f"/v1/chat/threads/{second['id']}", headers=_h()).json()
+    assert "needs_you" not in one and "jobs_running" not in one
+    # Newest activity first: a page of one still carries its own flags, and a thread without a
+    # production says false twice.
+    assert _flags(env, query="?limit=1&offset=1") == {first["id"]: (False, False)}
+    assert _flags(env, query="?limit=1")[second["id"]] == (True, False)
+
+
 def test_patch_thread_sets_fields_and_leaves_the_rest(env):
     t = env.thread(title="a", provider="p", model="m", series_id=str(uuid.uuid4()))
     sid = str(uuid.uuid4())

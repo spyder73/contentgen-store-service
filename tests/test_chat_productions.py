@@ -41,7 +41,7 @@ NO_MEDIA = {
     "media_id": "", "batch": "", "what": "", "vendor": "", "vendor_job_id": "", "request_id": "",
     "scene_key": "", "failure_kind": "", "failure": "",
 }
-NO_SCENES = {"approved_scenes": [], "tries": {}}
+NO_SCENES = {"approved_scenes": [], "tries": {}, "scenes": {}}
 
 
 def _new(env: Env, thread_id: str | None = None, user: str = USER_A, **over) -> dict:
@@ -217,6 +217,49 @@ def test_artifacts_dedupe(env):
     assert out["artifacts"] == {"media_ids": ["m1", "m2", "m3"], "clip_ids": ["c1"], **NO_SCENES}
 
 
+def test_scene_shows_append_and_dedupe(env):
+    p = _new(env)
+    first = _patch(env, p["id"], add_scene_shows=[{"number": 3, "preview_id": "p1", "key": "f:a", "media_ids": ["m1"]}])
+    assert first.status_code == 200, first.text
+    second = _patch(env, p["id"], add_scene_shows=[{"number": 3, "preview_id": "p2", "key": "f:b", "media_ids": ["m2", "m3"]}])
+    shows = second.json()["artifacts"]["scenes"]["3"]
+    assert [(s["preview_id"], s["key"], s["media_ids"]) for s in shows] == [("p1", "f:a", ["m1"]), ("p2", "f:b", ["m2", "m3"])]
+    assert all(datetime.fromisoformat(s["shown_at"]) for s in shows)
+
+    # A repeat of (3, p2) adds nothing and leaves the stored show as it was.
+    again = _patch(env, p["id"], add_scene_shows=[{"number": 3, "preview_id": "p2", "key": "f:other", "media_ids": ["x"]}])
+    assert again.json()["artifacts"]["scenes"] == {"3": shows}
+
+    # The number is part of the identity: the same preview may show another scene; a pair
+    # repeated inside one patch lands once; the keys are the scene number as a string.
+    mixed = _patch(
+        env, p["id"],
+        add_scene_shows=[
+            {"number": 4, "preview_id": "p2", "key": "f:c"},
+            {"number": 4, "preview_id": "p2", "key": "f:c"},
+            {"number": 12, "preview_id": "p3", "key": "f:d"},
+        ],
+    ).json()["artifacts"]
+    assert sorted(mixed["scenes"]) == ["12", "3", "4"]
+    assert [s["preview_id"] for s in mixed["scenes"]["4"]] == ["p2"]
+    assert mixed["scenes"]["4"][0]["media_ids"] == []
+    assert mixed["scenes"]["3"] == shows
+    # The rest of the artifacts is carried over, and an empty list is a no-op.
+    assert (mixed["media_ids"], mixed["approved_scenes"], mixed["tries"]) == ([], [], {})
+    assert _patch(env, p["id"], add_scene_shows=[]).json()["artifacts"] == mixed
+    assert _get(env, p["id"])["artifacts"] == mixed
+
+
+def test_a_scene_show_needs_a_number_a_preview_and_a_key(env):
+    p = _new(env)
+    good = {"number": 1, "preview_id": "p1", "key": "f:a"}
+    for bad in ({"number": 0}, {"number": 1000}, {"preview_id": ""}, {"key": ""}):
+        r = _patch(env, p["id"], add_scene_shows=[{**good, **bad}])
+        assert r.status_code == 422, bad
+    assert _get(env, p["id"])["artifacts"]["scenes"] == {}
+    assert _patch(env, p["id"], add_scene_shows=[{**good, "number": 999}]).status_code == 200
+
+
 def test_watches_replace_the_list(env):
     p = _new(env)
     one = {"kind": "render", "clip_id": "c1", "status": "rendering", "started_at": None}
@@ -359,6 +402,14 @@ def test_closed_production_refuses_changes_but_takes_acks(env):
     acked = _patch(env, p["id"], acked_seq=1)
     assert acked.status_code == 200 and acked.json()["acked_seq"] == 1
     assert _patch(env, p["id"], acked_seq=5).status_code == 422
+
+
+def test_closed_production_refuses_scene_shows(env):
+    p = _new(env)
+    _patch(env, p["id"], close={"outcome": "done"})
+    r = _patch(env, p["id"], add_scene_shows=[{"number": 3, "preview_id": "p1", "key": "f:a"}])
+    assert (r.status_code, r.json()) == (409, {"detail": "production_closed"})
+    assert _get(env, p["id"])["artifacts"]["scenes"] == {}
 
 
 def test_closed_productions_list_newest_first_for_their_user(env):

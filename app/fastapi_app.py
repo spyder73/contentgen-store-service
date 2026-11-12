@@ -70,9 +70,9 @@ from .schemas import (
     ChatMessageOut,
     ChatMessagePatch,
     ChatThreadIn,
+    ChatThreadListItem,
     ChatThreadOut,
     ChatThreadPatch,
-    ChatThreadSummary,
     PlaybookIn,
     PlaybookOut,
     PlaybookVersionOut,
@@ -1504,7 +1504,7 @@ def create_fastapi_app() -> FastAPI:
         except chat.ChatError as exc:
             raise _chat_error(exc)
 
-    @app.get("/v1/chat/threads", response_model=list[ChatThreadSummary])
+    @app.get("/v1/chat/threads", response_model=list[ChatThreadListItem])
     async def list_chat_threads_handler(
         request: Request, session: SessionDep, limit: int = 100, offset: int = 0
     ) -> Any:
