@@ -114,6 +114,22 @@ def _not_clipstyle_preview_filter_expr():
     return kind.is_(None) | kind.notin_(HIDDEN_MEDIA_KINDS)
 
 
+def _not_reel_clone_filter_expr():
+    """Exclude the rows a reel save cloned for its shots (the backend's ``models.IsReelCloneRow``).
+
+    A reel gives every shot a row of its own, a clone of the user's video: ``metadata.cloned_from``
+    names the video and the row names no clip. Such a row is a use of the user's file, not an item
+    of their library. A clone a clip holds (the clip editor's split) has a ``clip_id`` and stays,
+    and so does a row whose ``cloned_from`` is missing, null, or empty (blanks count as empty, as
+    the backend's check trims them).
+
+    NULL-safe on purpose, as `_not_clipstyle_preview_filter_expr` is: a bare ``!= ""`` would be NULL,
+    and drop the row, whenever ``cloned_from`` is missing.
+    """
+    cloned_from = func.trim(MediaItem.metadata_["cloned_from"].astext)
+    return cloned_from.is_(None) | (cloned_from == "") | MediaItem.clip_id.is_not(None)
+
+
 def _order_by(sort: str):
     """Return a deterministic global ordering for a paged media query."""
     if sort == "oldest":
@@ -151,7 +167,12 @@ async def list_media(
     page: int = 1,
     limit: int = 50,
     user_id: str | None = None,
+    exclude_reel_clones: bool = False,
 ) -> PagedResponse:
+    """A page of the user's media. ``exclude_reel_clones`` leaves out the rows a reel save cloned
+    (`_not_reel_clone_filter_expr`) in the query, so the page, the offset and the total are those
+    of the set without them: filtered after the page was cut, a reel's clones (the newest rows)
+    would leave a library page nearly empty."""
     if not user_id:
         raise ValueError("list_media requires user_id")
     offset = (page - 1) * limit
@@ -171,6 +192,10 @@ async def list_media(
         .where(MediaItem.user_id == user_id, _not_clipstyle_preview_filter_expr())
     )
 
+    if exclude_reel_clones:
+        not_clone = _not_reel_clone_filter_expr()
+        query = query.where(not_clone)
+        count_query = count_query.where(not_clone)
     if clip_id:
         query = query.where(MediaItem.clip_id == clip_id)
         count_query = count_query.where(MediaItem.clip_id == clip_id)
@@ -733,18 +758,23 @@ async def get_file_data(
     return row.file_data, (row.file_mime_type or "application/octet-stream")
 
 
-async def get_media_stats(session: AsyncSession, user_id: str | None = None) -> MediaStatsOut:
+async def get_media_stats(
+    session: AsyncSession, user_id: str | None = None, exclude_reel_clones: bool = False
+) -> MediaStatsOut:
     # Library-wide counts per type AND per source bucket. These are the canonical
     # facet totals the UI shows on the type/source chips — derived here over the
     # WHOLE library so a type/source absent from the current page never reads as
     # "0 videos". Counting both facets in one grouped pass keeps it a single scan.
     # Hidden clipstyle media (HIDDEN_MEDIA_KINDS) never counts here either (M4): otherwise an
     # owner's uploaded asset inflates the library total and its type chip while the grid, which
-    # applies the same filter, shows nothing for it.
+    # applies the same filter, shows nothing for it. With exclude_reel_clones the counts are those
+    # of the list's: the clones a reel made are not in either.
     src = MediaItem.metadata_["source"].astext
     query = select(MediaItem.type, src.label("source"), func.count().label("cnt")).where(
         _not_clipstyle_preview_filter_expr()
     )
+    if exclude_reel_clones:
+        query = query.where(_not_reel_clone_filter_expr())
     if user_id:
         query = query.where(MediaItem.user_id == user_id)
     query = query.group_by(MediaItem.type, src)

@@ -915,9 +915,13 @@ def create_fastapi_app() -> FastAPI:
 
     # NOTE: /v1/media/stats must be registered before /v1/media/{id}
     @app.get("/v1/media/stats", response_model=MediaStatsOut)
-    async def get_media_stats_handler(request: Request, session: SessionDep) -> Any:
+    async def get_media_stats_handler(
+        request: Request,
+        session: SessionDep,
+        exclude_reel_clones: bool = Query(False),
+    ) -> Any:
         user_id = _require_user_id(request)
-        return await media.get_media_stats(session, user_id=user_id)
+        return await media.get_media_stats(session, user_id=user_id, exclude_reel_clones=exclude_reel_clones)
 
     @app.get("/v1/media", response_model=PagedResponse)
     async def list_media_handler(
@@ -935,6 +939,7 @@ def create_fastapi_app() -> FastAPI:
         sort: Literal["newest", "oldest", "favourite", "name"] = Query("newest"),
         created_after: datetime | None = Query(None),
         has_controlnet: bool | None = Query(None),
+        exclude_reel_clones: bool = Query(False),
         page: int = Query(1, ge=1),
         limit: int = Query(50, ge=1, le=200),
     ) -> Any:
@@ -953,6 +958,7 @@ def create_fastapi_app() -> FastAPI:
             sort=sort,
             created_after=created_after,
             has_controlnet=has_controlnet,
+            exclude_reel_clones=exclude_reel_clones,
             page=page,
             limit=limit,
             user_id=user_id,
