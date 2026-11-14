@@ -982,7 +982,9 @@ def create_fastapi_app() -> FastAPI:
         try:
             result = await media.upsert_media(session, body, user_id=user_id)
         except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            # clip_not_found, conflict, media_frozen_in_clipstyle. `detail` is what every client reads
+            # from a store 409 (the Go store client decodes it); `error` is the coded-refusal key.
+            return JSONResponse(status_code=409, content={"error": str(exc), "detail": str(exc)})
         # None (M7 fix round 2): a frozen id that isn't the caller's — refused like any other media
         # they don't own, never revealing that it's frozen.
         if result is None:

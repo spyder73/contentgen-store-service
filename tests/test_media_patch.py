@@ -89,3 +89,30 @@ def test_patch_media_rolls_back_and_returns_none_when_row_is_not_owned():
     assert response is None
     session.rollback.assert_awaited_once()
     session.commit.assert_not_awaited()
+
+
+def test_patch_media_passes_a_null_value_through_so_the_merge_clears_that_key():
+    """`metadata_merge: {"k": null}` is a JSONB `||` with a JSON null: the key stays but its value is
+    cleared, which is how the backend un-sets a manifest key. sqlite cannot run `||` on JSON, so
+    this holds the statement: the null is in the bound merge operand, not dropped as 'empty'."""
+    media_id = "22222222-2222-2222-2222-222222222222"
+    session = MagicMock()
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = media_id
+    result.first.return_value = None
+    session.execute = AsyncMock(return_value=result)
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    session.get = AsyncMock(return_value=_row(media_id, "user-1"))
+
+    response = asyncio.run(media_store.patch_media(
+        session,
+        media_id,
+        MediaItemPatch(metadata_merge={"stale_key": None, "kept_key": 2}),
+        user_id="user-1",
+    ))
+
+    assert response is not None
+    compiled = session.execute.await_args.args[0].compile(dialect=postgresql.dialect())
+    assert {"stale_key": None, "kept_key": 2} in compiled.params.values()
+    session.commit.assert_awaited_once()

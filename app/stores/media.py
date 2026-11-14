@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_, bindparam, case, cast, delete, func, or_, select, text, Text, update
 from sqlalchemy.dialects.postgresql import JSONB, insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, defer
 
 from ..derivatives import is_image_content_type, make_micro_thumbnail, make_thumbnail
-from ..models import Character, DatasetTemplate, MediaItem
+from ..models import Character, ClipPrompt, DatasetTemplate, MediaItem
 from ..provenance import stamp_ai_provenance
 from ..schemas import (
     LegacyAssetMediaOut,
@@ -21,6 +23,7 @@ from ..schemas import (
     RelatedMediaOut,
 )
 
+logger = logging.getLogger(__name__)
 
 # "Uploaded" vs "generated" is not a single literal source value. Manual uploads
 # write metadata.source in this set; everything else (generated, render_output,
@@ -375,6 +378,11 @@ async def upsert_media(
             raise ValueError("media_frozen_in_clipstyle")
         return None
 
+    # `media_items.clip_id` is a foreign key. The backend can name a clip whose own row is still being
+    # written (it queues that write), and the database's refusal would answer 500: say so up front.
+    if body.clip_id is not None and not await _clip_exists(session, body.clip_id):
+        raise ValueError("clip_not_found")
+
     data = {
         "id": body.id,
         "clip_id": body.clip_id,
@@ -405,7 +413,20 @@ async def upsert_media(
         )
         .returning(table.c.id)
     )
-    if (await session.execute(stmt)).scalar_one_or_none() is None:
+    try:
+        written = (await session.execute(stmt)).scalar_one_or_none()
+    except IntegrityError as exc:
+        # Any other reference the database refuses (parent_media_id, a clip deleted between the check
+        # above and this write) is the caller's data, not a store failure: 409, never 500.
+        await session.rollback()
+        logger.warning(
+            "media upsert refused by the database",
+            # The first line of the database's message names the constraint. Not str(exc): that
+            # carries the statement and every bound value (prompt, file_url, metadata).
+            extra={"media_id": body.id, "db_error": type(exc.orig).__name__, "db_reason": _first_line(exc.orig)},
+        )
+        raise ValueError("conflict") from exc
+    if written is None:
         # Conflicted with another user's row and updated nothing: answered as a
         # missing row (404), with no id echoed and nothing written.
         await session.rollback()
@@ -413,6 +434,15 @@ async def upsert_media(
     await session.commit()
     row = await session.get(MediaItem, body.id, populate_existing=True)
     return MediaItemOut.from_orm_row(row)
+
+
+async def _clip_exists(session: AsyncSession, clip_id: str) -> bool:
+    return (await session.execute(select(ClipPrompt.id).where(ClipPrompt.id == clip_id))).first() is not None
+
+
+def _first_line(error: BaseException | None) -> str:
+    lines = str(error).splitlines() if error is not None else []
+    return lines[0][:300] if lines else ""
 
 
 async def patch_media(
