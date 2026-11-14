@@ -316,14 +316,15 @@ def create_fastapi_app() -> FastAPI:
             response = await call_next(request)
         finally:
             elapsed_ms = int((_t.perf_counter() - start) * 1000)
-            logger.info(
-                "request",
-                extra={
-                    "method": request.method,
-                    "path": request.url.path,
-                    "latency_ms": elapsed_ms,
-                },
-            )
+            if request.url.path != "/healthz":  # the container healthcheck polls it every few seconds
+                logger.info(
+                    "request",
+                    extra={
+                        "method": request.method,
+                        "path": request.url.path,
+                        "latency_ms": elapsed_ms,
+                    },
+                )
             set_request_id("")
             set_user_id("")
         response.headers["x-request-id"] = rid

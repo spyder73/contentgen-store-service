@@ -168,6 +168,9 @@ def main() -> None:
         host=host,
         port=port,
         log_config=None,
+        # The request middleware logs method, path and latency once per request; uvicorn's own
+        # access line would repeat it.
+        access_log=False,
     )
 
 
