@@ -115,6 +115,8 @@ def run_migrations() -> None:
         # Pin the script location to an absolute path so migrations resolve
         # regardless of the process working directory.
         config.set_main_option("script_location", os.path.join(_REPO_ROOT, "alembic"))
+        # init_logging already ran: keep alembic/env.py from replacing it with alembic.ini's logging.
+        config.attributes["configure_logger"] = False
 
         state = _database_state()
         if state == "legacy":

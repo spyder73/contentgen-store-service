@@ -13,7 +13,11 @@ import app.models  # noqa: F401
 
 config = context.config
 
-if config.config_file_name is not None:
+# The alembic CLI configures logging from alembic.ini. The store's own startup (app.main) already did
+# (JSON on stdout) and says so with `configure_logger=False`: fileConfig would replace the root handler
+# and, with its default disable_existing_loggers, silence every logger created before it, uvicorn's and
+# the app's among them, for the life of the process.
+if config.config_file_name is not None and config.attributes.get("configure_logger", True):
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
