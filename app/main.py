@@ -5,6 +5,7 @@ import os
 
 import uvicorn
 
+from .db import make_engine
 from .fastapi_app import create_fastapi_app
 from .logging_config import init_logging
 from .migration_state import set_migration_status
@@ -36,10 +37,9 @@ def _database_state() -> str:
     import asyncio
 
     from sqlalchemy import inspect
-    from sqlalchemy.ext.asyncio import create_async_engine
 
     async def probe() -> str:
-        engine = create_async_engine(os.environ["DATABASE_URL"])
+        engine = make_engine(os.environ["DATABASE_URL"])
         try:
             async with engine.connect() as conn:
                 def classify(sync_conn) -> str:
@@ -60,10 +60,9 @@ def _stamped_version() -> str:
     import asyncio
 
     from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import create_async_engine
 
     async def probe() -> str:
-        engine = create_async_engine(os.environ["DATABASE_URL"])
+        engine = make_engine(os.environ["DATABASE_URL"])
         try:
             async with engine.connect() as conn:
                 row = (

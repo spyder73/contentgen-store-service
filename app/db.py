@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import AsyncGenerator
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 DATABASE_URL: str = os.environ.get("DATABASE_URL", "")
@@ -16,10 +16,17 @@ class Base(DeclarativeBase):
     pass
 
 
+def make_engine(url: str, **kwargs) -> AsyncEngine:
+    """Every engine of the store is made here. ``hide_parameters`` keeps the bound values of a
+    statement (prompts, file_url, metadata, usernames, password hashes) out of the text of a
+    SQLAlchemy error, so out of every log line and the /healthz migration status that carries one."""
+    return create_async_engine(url, hide_parameters=True, **kwargs)
+
+
 def get_engine():
     global _engine
     if _engine is None and DATABASE_URL:
-        _engine = create_async_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
+        _engine = make_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
     return _engine
 
 
