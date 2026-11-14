@@ -7,7 +7,7 @@ import uvicorn
 
 from .db import make_engine
 from .fastapi_app import create_fastapi_app
-from .logging_config import init_logging
+from .logging_config import exception_text, init_logging, log_exception
 from .migration_state import set_migration_status
 
 logger = logging.getLogger(__name__)
@@ -150,8 +150,8 @@ def run_migrations() -> None:
         logger.info("alembic: database is at head")
         set_migration_status("ok")
     except Exception as exc:  # noqa: BLE001 — never crash-loop the store on migration failure
-        logger.critical("alembic: migration failed, serving anyway", exc_info=True)
-        set_migration_status(f"failed: {type(exc).__name__}: {str(exc)[:300]}")
+        log_exception(logger, logging.CRITICAL, "alembic: migration failed, serving anyway", exc=exc)
+        set_migration_status(f"failed: {exception_text(exc)}")
 
 
 def main() -> None:

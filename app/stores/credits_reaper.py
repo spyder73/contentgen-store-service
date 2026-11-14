@@ -12,6 +12,7 @@ from typing import Any
 from sqlalchemy import DateTime, bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.logging_config import log_exception
 from app.stores import credits
 
 logger = logging.getLogger(__name__)
@@ -56,14 +57,15 @@ async def reap_stale_holds(session: AsyncSession, rules: list[dict], *, now: dat
                 out = await credits.release(session, user_id=str(user_id), pipeline_run_id=str(run_id), reason="stale_hold_reaped",
                                             idempotency_key=f"reap:{run_id}:{checkpoint_id}:{attempt}",
                                             checkpoint_id=checkpoint_id, attempt=int(attempt))
-            except Exception:
+            except Exception as exc:
                 # PF4-15: one bad hold (a stale or failed release) never aborts the rest of the pass.
                 # Roll back any partial state the failed release left on the shared session before
                 # moving on, so the next hold's release starts clean.
                 await session.rollback()
-                logger.warning(
+                log_exception(
+                    logger, logging.WARNING,
                     "stale-hold reaper: could not release hold run=%s checkpoint=%s attempt=%s",
-                    run_id, checkpoint_id, attempt, exc_info=True,
+                    run_id, checkpoint_id, attempt, exc=exc,
                 )
                 continue
             if out.get("status") != "released":

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, defer
 
 from ..derivatives import is_image_content_type, make_micro_thumbnail, make_thumbnail
+from ..logging_config import first_line
 from ..models import Character, ClipPrompt, DatasetTemplate, MediaItem
 from ..provenance import stamp_ai_provenance
 from ..schemas import (
@@ -423,7 +424,7 @@ async def upsert_media(
             "media upsert refused by the database",
             # The first line of the database's message names the constraint. Not str(exc): that
             # carries the statement and every bound value (prompt, file_url, metadata).
-            extra={"media_id": body.id, "db_error": type(exc.orig).__name__, "db_reason": _first_line(exc.orig)},
+            extra={"media_id": body.id, "db_error": type(exc.orig).__name__, "db_reason": first_line(exc.orig)},
         )
         raise ValueError("conflict") from exc
     if written is None:
@@ -438,11 +439,6 @@ async def upsert_media(
 
 async def _clip_exists(session: AsyncSession, clip_id: str) -> bool:
     return (await session.execute(select(ClipPrompt.id).where(ClipPrompt.id == clip_id))).first() is not None
-
-
-def _first_line(error: BaseException | None) -> str:
-    lines = str(error).splitlines() if error is not None else []
-    return lines[0][:300] if lines else ""
 
 
 async def patch_media(

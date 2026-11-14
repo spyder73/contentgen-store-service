@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, Field, model_validator
 
 from .db import get_session
-from .logging_config import new_request_id, set_request_id, set_user_id
+from .logging_config import db_error_in, log_db_error, new_request_id, set_request_id, set_user_id
 from .migration_state import get_migration_status
 from .schemas import (
     CharacterIn,
@@ -1872,7 +1872,12 @@ def create_fastapi_app() -> FastAPI:
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request, exc: Exception):
-        logger.exception("unhandled error: %s", exc)
+        err = db_error_in(exc)
+        if err is None:
+            logger.exception("unhandled error: %s", exc)
+        else:
+            # Not logger.exception: a database error's text carries the row's values (see logging_config).
+            log_db_error(logger, logging.ERROR, "unhandled error", err, exc)
         return JSONResponse(status_code=500, content={"error": "internal_server_error"})
 
     return app
