@@ -5,15 +5,18 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy.ext.asyncio import create_async_engine
 
 # Import models so alembic can detect them
-from app.db import Base
+from app.db import Base, make_engine
 import app.models  # noqa: F401
 
 config = context.config
 
-if config.config_file_name is not None:
+# The alembic CLI configures logging from alembic.ini. The store's own startup (app.main) already did
+# (JSON on stdout) and says so with `configure_logger=False`: fileConfig would replace the root handler
+# and, with its default disable_existing_loggers, silence every logger created before it, uvicorn's and
+# the app's among them, for the life of the process.
+if config.config_file_name is not None and config.attributes.get("configure_logger", True):
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
@@ -39,7 +42,7 @@ def do_run_migrations(connection):
 
 
 async def run_migrations_online() -> None:
-    engine = create_async_engine(DATABASE_URL)
+    engine = make_engine(DATABASE_URL)
     async with engine.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await engine.dispose()

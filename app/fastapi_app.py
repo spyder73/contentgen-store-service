@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, Field, model_validator
 
 from .db import get_session
-from .logging_config import new_request_id, set_request_id, set_user_id
+from .logging_config import db_error_in, log_db_error, new_request_id, set_request_id, set_user_id
 from .migration_state import get_migration_status
 from .schemas import (
     CharacterIn,
@@ -316,14 +316,15 @@ def create_fastapi_app() -> FastAPI:
             response = await call_next(request)
         finally:
             elapsed_ms = int((_t.perf_counter() - start) * 1000)
-            logger.info(
-                "request",
-                extra={
-                    "method": request.method,
-                    "path": request.url.path,
-                    "latency_ms": elapsed_ms,
-                },
-            )
+            if request.url.path != "/healthz":  # the container healthcheck polls it every few seconds
+                logger.info(
+                    "request",
+                    extra={
+                        "method": request.method,
+                        "path": request.url.path,
+                        "latency_ms": elapsed_ms,
+                    },
+                )
             set_request_id("")
             set_user_id("")
         response.headers["x-request-id"] = rid
@@ -982,7 +983,9 @@ def create_fastapi_app() -> FastAPI:
         try:
             result = await media.upsert_media(session, body, user_id=user_id)
         except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            # clip_not_found, conflict, media_frozen_in_clipstyle. `detail` is what every client reads
+            # from a store 409 (the Go store client decodes it); `error` is the coded-refusal key.
+            return JSONResponse(status_code=409, content={"error": str(exc), "detail": str(exc)})
         # None (M7 fix round 2): a frozen id that isn't the caller's — refused like any other media
         # they don't own, never revealing that it's frozen.
         if result is None:
@@ -1869,7 +1872,12 @@ def create_fastapi_app() -> FastAPI:
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request, exc: Exception):
-        logger.exception("unhandled error: %s", exc)
+        err = db_error_in(exc)
+        if err is None:
+            logger.exception("unhandled error: %s", exc)
+        else:
+            # Not logger.exception: a database error's text carries the row's values (see logging_config).
+            log_db_error(logger, logging.ERROR, "unhandled error", err, exc)
         return JSONResponse(status_code=500, content={"error": "internal_server_error"})
 
     return app

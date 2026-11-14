@@ -5,8 +5,9 @@ import os
 
 import uvicorn
 
+from .db import make_engine
 from .fastapi_app import create_fastapi_app
-from .logging_config import init_logging
+from .logging_config import exception_text, init_logging, log_exception
 from .migration_state import set_migration_status
 
 logger = logging.getLogger(__name__)
@@ -36,10 +37,9 @@ def _database_state() -> str:
     import asyncio
 
     from sqlalchemy import inspect
-    from sqlalchemy.ext.asyncio import create_async_engine
 
     async def probe() -> str:
-        engine = create_async_engine(os.environ["DATABASE_URL"])
+        engine = make_engine(os.environ["DATABASE_URL"])
         try:
             async with engine.connect() as conn:
                 def classify(sync_conn) -> str:
@@ -60,10 +60,9 @@ def _stamped_version() -> str:
     import asyncio
 
     from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import create_async_engine
 
     async def probe() -> str:
-        engine = create_async_engine(os.environ["DATABASE_URL"])
+        engine = make_engine(os.environ["DATABASE_URL"])
         try:
             async with engine.connect() as conn:
                 row = (
@@ -115,6 +114,8 @@ def run_migrations() -> None:
         # Pin the script location to an absolute path so migrations resolve
         # regardless of the process working directory.
         config.set_main_option("script_location", os.path.join(_REPO_ROOT, "alembic"))
+        # init_logging already ran: keep alembic/env.py from replacing it with alembic.ini's logging.
+        config.attributes["configure_logger"] = False
 
         state = _database_state()
         if state == "legacy":
@@ -149,8 +150,8 @@ def run_migrations() -> None:
         logger.info("alembic: database is at head")
         set_migration_status("ok")
     except Exception as exc:  # noqa: BLE001 — never crash-loop the store on migration failure
-        logger.critical("alembic: migration failed, serving anyway", exc_info=True)
-        set_migration_status(f"failed: {type(exc).__name__}: {str(exc)[:300]}")
+        log_exception(logger, logging.CRITICAL, "alembic: migration failed, serving anyway", exc=exc)
+        set_migration_status(f"failed: {exception_text(exc)}")
 
 
 def main() -> None:
@@ -167,6 +168,9 @@ def main() -> None:
         host=host,
         port=port,
         log_config=None,
+        # The request middleware logs method, path and latency once per request; uvicorn's own
+        # access line would repeat it.
+        access_log=False,
     )
 
 

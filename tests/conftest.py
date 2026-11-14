@@ -8,6 +8,7 @@ variables at import time, before the app is first imported.
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 
 import pytest
@@ -142,3 +143,30 @@ def env(tmp_path, monkeypatch):
     with TestClient(app) as client:
         yield Env(client, factory)
     asyncio.run(engine.dispose())
+
+
+@pytest.fixture()
+def restore_logging():
+    """init_logging and alembic's fileConfig rewrite process-wide logging: put it back afterwards."""
+    root = logging.getLogger()
+    saved_root = (list(root.handlers), root.level)
+    saved = {
+        name: (list(lg.handlers), lg.level, lg.propagate, lg.disabled)
+        for name, lg in logging.root.manager.loggerDict.items()
+        if isinstance(lg, logging.Logger)
+    }
+    yield
+    root.handlers[:], root.level = saved_root[0], saved_root[1]
+    for name, (handlers, level, propagate, disabled) in saved.items():
+        lg = logging.getLogger(name)
+        lg.handlers[:], lg.level, lg.propagate, lg.disabled = handlers, level, propagate, disabled
+
+
+@pytest.fixture()
+def restore_migration_status():
+    """run_migrations records its outcome in a process-wide variable that /healthz reports."""
+    from app.migration_state import get_migration_status, set_migration_status
+
+    saved = get_migration_status()
+    yield
+    set_migration_status(saved)

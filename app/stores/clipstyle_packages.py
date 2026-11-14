@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..logging_config import log_exception
 from ..models import RenderTemplate
 from ..schemas import RenderTemplateIn, RenderTemplateOut
 from . import media as media_store
@@ -220,10 +221,11 @@ async def drop_stale_preview_media(
     try:
         async with session.begin_nested():
             await media_store.delete_clipstyle_preview_media(session, user_id, old_ids)
-    except Exception:
-        logger.warning(
+    except Exception as exc:
+        log_exception(
+            logger, logging.WARNING,
             "clipstyle package %s: could not delete %d orphaned preview media for user %s",
-            template_id, len(old_ids), user_id, exc_info=True,
+            template_id, len(old_ids), user_id, exc=exc,
         )
         return frozenset(old_ids)
     return frozenset()
