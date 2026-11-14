@@ -139,7 +139,8 @@ def test_an_integrity_error_of_the_write_is_409_conflict_and_logs_no_values(fk_e
     assert "FOREIGN KEY" in record.db_reason  # sqlite's wording; Postgres names the constraint
     assert "a-prompt-that-could-be-a-secret" not in repr(record.__dict__)
 
-    # The session was rolled back, so the next write on the app is served normally.
+    # Each request has its own session, so this proves the 409 and the log content, not the rollback;
+    # it only shows the app keeps serving writes after a refused one.
     assert _put(fk_env, str(uuid.uuid4())).status_code == 200
 
 

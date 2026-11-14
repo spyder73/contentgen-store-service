@@ -5,35 +5,20 @@ nothing. Cause: startup runs `alembic upgrade head` after init_logging, and alem
 `fileConfig(alembic.ini)`, which replaced the root handler with a plain stderr one (level WARN) and
 disabled every logger that already existed (app.fastapi_app, uvicorn.error, uvicorn.access, ...).
 app.main now tells env.py not to (`configure_logger=False`).
+
+The first test below passes on main too (the app's handler always logged; the logging around it was
+what got wiped). The second one, which runs the real migrations step, is the one that guards the fix.
 """
 from __future__ import annotations
 
 import json
 import logging
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app import main as app_main
 from app.logging_config import JSONFormatter, init_logging
-from tests.conftest import USER_A
-
-
-@pytest.fixture()
-def restore_logging():
-    """init_logging and alembic's fileConfig rewrite process-wide logging: put it back afterwards."""
-    root = logging.getLogger()
-    saved_root = (list(root.handlers), root.level)
-    saved = {
-        name: (list(lg.handlers), lg.level, lg.propagate, lg.disabled)
-        for name, lg in logging.root.manager.loggerDict.items()
-        if isinstance(lg, logging.Logger)
-    }
-    yield
-    root.handlers[:], root.level = saved_root[0], saved_root[1]
-    for name, (handlers, level, propagate, disabled) in saved.items():
-        lg = logging.getLogger(name)
-        lg.handlers[:], lg.level, lg.propagate, lg.disabled = handlers, level, propagate, disabled
+from tests.conftest import USER_A  # fixtures restore_logging and restore_migration_status live there
 
 
 def _break_the_store(env, monkeypatch) -> TestClient:
@@ -70,7 +55,7 @@ def test_an_unhandled_exception_is_one_json_line_on_stdout(env, monkeypatch, cap
 
 
 def test_startup_migrations_leave_the_logging_that_init_logging_set_up(
-    env, monkeypatch, tmp_path, capsys, restore_logging
+    env, monkeypatch, tmp_path, capsys, restore_logging, restore_migration_status
 ):
     """The order app.main uses: init_logging, then run_migrations (which runs alembic/env.py for real;
     against sqlite the first migration fails, which run_migrations survives)."""
