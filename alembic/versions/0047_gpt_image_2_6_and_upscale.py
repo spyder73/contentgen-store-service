@@ -40,7 +40,8 @@ def moved_settings(settings: dict) -> dict | None:
     out = copy.deepcopy(settings)
     changed = False
 
-    image = (out.get("generation") or {}).get("image")
+    gen = out.get("generation")
+    image = gen.get("image") if isinstance(gen, dict) else None
     if isinstance(image, dict) and image.get("model") == OLD:
         image["model"] = NEW
         changed = True

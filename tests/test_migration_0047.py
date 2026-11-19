@@ -88,3 +88,9 @@ def test_upgrade_rewrites_rows_on_sqlite():
     assert got["b"]["agent_tools"]["image_models"] == [_img(NEW)]
     assert got["c"]["agent_tools"]["video_edit_models"][-1] == UPSCALE
     assert len(got["c"]["agent_tools"]["video_edit_models"]) == 5
+
+
+def test_odd_shapes_do_not_raise():
+    for s in ({"generation": "x"}, {"generation": [1]}, {"agent_tools": "x"}, {"agent_tools": [1]},
+              {"generation": {"image": "x"}}, {"agent_tools": {"image_models": "x", "video_edit_models": "x"}}):
+        assert m.moved_settings(s) is None
