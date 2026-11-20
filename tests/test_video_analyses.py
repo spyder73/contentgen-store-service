@@ -309,3 +309,29 @@ def test_sequential_picks_posts_keep_both_sets(env):
     assert _picks(env, a["id"], brief="first").status_code == 200
     assert _picks(env, a["id"], brief="second").status_code == 200
     assert [p["brief"] for p in env.client.get(_url(), headers=_h()).json()["picks"]] == ["first", "second"]
+
+
+def test_the_users_row_is_locked_before_the_live_count(env, monkeypatch):
+    # The lock is a no-op on sqlite; this pins the order that makes the cap safe on Postgres.
+    events = []
+    real_lock = store._lock_user_row
+
+    async def spy_lock(session, user_id):
+        events.append(("lock", user_id))
+        await real_lock(session, user_id)
+
+    monkeypatch.setattr(store, "_lock_user_row", spy_lock)
+
+    real_count = store.func.count
+
+    class FuncSpy:
+        def __getattr__(self, name):
+            return getattr(store.func, name)
+
+        def count(self, *a, **k):
+            events.append(("count", None))
+            return real_count(*a, **k)
+
+    monkeypatch.setattr(store, "func", FuncSpy())
+    assert _put(env).status_code == 200
+    assert events == [("lock", USER_A), ("count", None)]

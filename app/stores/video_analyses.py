@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import VideoAnalysis
 from ..schemas import VideoAnalysisIn, VideoAnalysisPicksIn
+from .credits import _lock_user_row
 
 TTL = timedelta(days=30)
 PICKS_KEEP = 20
@@ -96,6 +97,8 @@ async def _write(
     )
     if row is None:
         # Only a save that creates a live row counts against the cap; replacing a live one never does.
+        # The user's row lock (held until the commit below) makes count and insert one step per user.
+        await _lock_user_row(session, user_id)
         live = (
             await session.execute(
                 select(func.count())
