@@ -1741,17 +1741,23 @@ def create_fastapi_app() -> FastAPI:
         session: SessionDep,
         video_id: str = Path(pattern=VIDEO_ID_PATTERN),
     ) -> Any:
-        return await video_analyses.save(
-            session, _path_user(request, user_id), platform, video_id, payload, now=chat._now()
-        )
+        try:
+            return await video_analyses.save(
+                session, _path_user(request, user_id), platform, video_id, payload, now=chat._now()
+            )
+        except video_analyses.VideoAnalysisError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
     @app.post("/v1/users/{user_id}/video-analyses/{analysis_id}/picks", response_model=VideoAnalysisOut)
     async def add_video_analysis_picks_handler(
         user_id: str, analysis_id: str, payload: VideoAnalysisPicksIn, request: Request, session: SessionDep
     ) -> Any:
-        row = await video_analyses.add_picks(
-            session, _path_user(request, user_id), analysis_id, payload, now=chat._now()
-        )
+        try:
+            row = await video_analyses.add_picks(
+                session, _path_user(request, user_id), analysis_id, payload, now=chat._now()
+            )
+        except video_analyses.VideoAnalysisError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail)
         return _chat_found(row, "video_analysis_not_found")
 
     # ── user settings ────────────────────────────────────────────────────────

@@ -20,6 +20,8 @@ from sqlalchemy.pool import NullPool
 from app.db import get_session
 from app.fastapi_app import create_fastapi_app
 from app.models import User, VideoAnalysis
+from app.schemas import VideoAnalysisIn
+from app.stores import video_analyses as store
 from tests.test_chat import SECRET, USER_A, USER_B, Env, _create_tables, _h, _render
 
 MIGRATION_PATH = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0049_video_analyses.py"
@@ -245,3 +247,65 @@ def test_migration_0049_creates_the_table_with_its_unique_key_and_cascade():
     assert "CHECK (platform IN ('youtube'))" in sql
     assert "DEFAULT '[]'::jsonb" in sql
     assert "DROP TABLE video_analyses" in _render(module.downgrade)
+
+
+# ── fix round 1: bounds and concurrency ──────────────────────────────────────
+
+
+def test_a_field_over_its_byte_cap_is_413_with_a_fixed_detail(env):
+    # Few items, so the count caps pass; each blob is one big string.
+    cases = (
+        ("transcript", {"segments": [{"text": "x" * (4 * 1024 * 1024)}]}, "transcript_too_large: over 4 MiB"),
+        ("signals", {"rows": [{"x": "x" * (1024 * 1024)}]}, "signals_too_large: over 1 MiB"),
+        ("candidates", [{"x": "x" * (256 * 1024)}], "candidates_too_large: over 256 KiB"),
+    )
+    for field, value, detail in cases:
+        r = _put(env, **{field: value})
+        assert (r.status_code, r.json()["detail"]) == (413, detail), field
+    assert env.count(VideoAnalysis) == 0
+    a = _saved(env)
+    r = env.client.post(
+        f"/v1/users/{USER_A}/video-analyses/{a['id']}/picks",
+        json={"brief": "x", "moments": [{"x": "x" * (64 * 1024)}]},
+        headers=_h(),
+    )
+    assert (r.status_code, r.json()["detail"]) == (413, "pick_too_large: over 64 KiB")
+    assert env.client.get(_url(), headers=_h()).json()["picks"] == []
+
+
+def test_the_201st_live_analysis_is_refused_but_an_update_is_not(env, monkeypatch):
+    monkeypatch.setattr(store, "MAX_LIVE_PER_USER", 3)
+    for vid in ("aaaaaaaaaa1", "aaaaaaaaaa2", "aaaaaaaaaa3"):
+        _saved(env, vid)
+    r = _put(env, "aaaaaaaaaa4")
+    assert (r.status_code, r.json()["detail"]) == (409, "video_analysis_limit_reached")
+    assert env.count(VideoAnalysis) == 3
+    assert _put(env, "aaaaaaaaaa2", title="again").status_code == 200  # an update at the cap
+    assert _saved(env, "aaaaaaaaaa4", user=USER_B)["video_id"] == "aaaaaaaaaa4"  # another user's count
+    _expire(env, "aaaaaaaaaa1")  # expired rows do not count
+    assert _put(env, "aaaaaaaaaa4").status_code == 200
+
+
+def test_a_lost_race_on_the_first_save_updates_the_winners_row(env, monkeypatch):
+    winner = _saved(env, title="winner")
+    real = store._find
+    calls = []
+
+    async def blind_first(*args, **kwargs):
+        calls.append(1)
+        return None if len(calls) == 1 else await real(*args, **kwargs)
+
+    monkeypatch.setattr(store, "_find", blind_first)
+    r = _put(env, title="loser")  # looks up nothing, inserts, loses the unique key, retries
+    assert r.status_code == 200, r.text
+    assert len(calls) == 2
+    assert (r.json()["id"], r.json()["title"]) == (winner["id"], "loser")
+    assert env.count(VideoAnalysis) == 1
+
+
+def test_sequential_picks_posts_keep_both_sets(env):
+    # The row lock (SELECT ... FOR UPDATE) only matters on Postgres; sqlite ignores it.
+    a = _saved(env)
+    assert _picks(env, a["id"], brief="first").status_code == 200
+    assert _picks(env, a["id"], brief="second").status_code == 200
+    assert [p["brief"] for p in env.client.get(_url(), headers=_h()).json()["picks"]] == ["first", "second"]
