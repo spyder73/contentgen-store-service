@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import select, text
+from sqlalchemy import DateTime, bindparam, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -83,38 +83,62 @@ class CreditsError(Exception):
 # ── Reserve ─────────────────────────────────────────────────────────────────
 
 # The daily limit counts settled debits of the last 24 h (`:since`, bound from
-# Python so the SQL is portable) plus every credit still on hold
-# (`credits_reserved`, kept atomically by this same UPDATE).
+# Python so the SQL is portable) plus the open holds created since `:since`
+# (the same "open" closure as _OPEN_HOLDS_SQL: no debit/release with the same
+# key, no later legacy run-wide release). NOT `credits_reserved`: an orphaned
+# hold (restart, dropped release) must age out with the window, not eat the
+# daily room for good. The caller holds the user row lock (see reserve()).
+_SPENT_TODAY_SQL = """
+       (
+         SELECT COALESCE(SUM(-d.delta), 0)
+           FROM credits_ledger d
+          WHERE d.user_id = :user_id
+            AND d.kind = 'debit'
+            AND d.created_at > :since
+       ) + (
+         SELECT COALESCE(SUM(h.delta), 0)
+           FROM credits_ledger h
+          WHERE h.user_id = :user_id
+            AND h.kind = 'hold'
+            AND h.created_at > :since
+            AND NOT EXISTS (
+                  SELECT 1 FROM credits_ledger c
+                   WHERE c.user_id = h.user_id
+                     AND c.pipeline_run_id = h.pipeline_run_id
+                     AND c.kind IN ('debit', 'release')
+                     AND c.checkpoint_id = h.checkpoint_id
+                     AND c.attempt = h.attempt)
+            AND NOT EXISTS (
+                  SELECT 1 FROM credits_ledger l
+                   WHERE l.user_id = h.user_id
+                     AND l.pipeline_run_id = h.pipeline_run_id
+                     AND l.kind = 'release'
+                     AND l.checkpoint_id IS NULL
+                     AND l.created_at >= h.created_at)
+       )
+"""
+
+_SINCE_PARAM = bindparam("since", type_=DateTime(timezone=True))
+
 _RESERVE_SQL = text(
-    """
+    f"""
     UPDATE users
        SET credits_balance  = credits_balance - :amount,
            credits_reserved = credits_reserved + :amount
      WHERE id = :user_id
        AND credits_balance >= :amount
-       AND (
-         SELECT COALESCE(SUM(-delta), 0)
-           FROM credits_ledger
-          WHERE user_id = :user_id
-            AND kind = 'debit'
-            AND created_at > :since
-       ) + credits_reserved + :amount <= daily_spend_limit
+       AND {_SPENT_TODAY_SQL} + :amount <= daily_spend_limit
     RETURNING credits_balance, credits_reserved, daily_spend_limit
     """
-)
+).bindparams(_SINCE_PARAM)
 
 _DIAGNOSE_SQL = text(
-    """
+    f"""
     SELECT credits_balance, daily_spend_limit,
-           COALESCE((
-             SELECT SUM(-delta) FROM credits_ledger
-              WHERE user_id = :user_id
-                AND kind = 'debit'
-                AND created_at > :since
-           ), 0) + credits_reserved AS spent_today
+           {_SPENT_TODAY_SQL} AS spent_today
       FROM users WHERE id = :user_id
     """
-)
+).bindparams(_SINCE_PARAM)
 
 
 def _since() -> datetime:
@@ -145,6 +169,9 @@ async def reserve(
         return {"status": "already_reserved", "balance": found[1], "reserved": found[2]}
 
     since = _since()
+    # Same lock settle/release take: a concurrent reserve's new hold row (and a
+    # settle's debit row) is committed before this statement reads the ledger.
+    await _lock_user_row(session, user_id)
     result = await session.execute(
         _RESERVE_SQL, {"user_id": user_id, "amount": amount, "since": since}
     )
