@@ -324,6 +324,14 @@ def test_the_users_row_is_locked_before_the_live_count(env, monkeypatch):
 
     real_count = store.func.count
 
+    real_find = store._find
+
+    async def spy_find(*a, **k):
+        events.append(("find", None))
+        return await real_find(*a, **k)
+
+    monkeypatch.setattr(store, "_find", spy_find)
+
     class FuncSpy:
         def __getattr__(self, name):
             return getattr(store.func, name)
@@ -334,4 +342,29 @@ def test_the_users_row_is_locked_before_the_live_count(env, monkeypatch):
 
     monkeypatch.setattr(store, "func", FuncSpy())
     assert _put(env).status_code == 200
-    assert events == [("lock", USER_A), ("count", None)]
+    assert events == [("lock", USER_A), ("find", None), ("count", None)]
+    # An update of the existing row takes the lock first too.
+    events.clear()
+    assert _put(env, title="again").status_code == 200
+    assert events[:2] == [("lock", USER_A), ("find", None)]
+
+
+def test_size_caps_count_real_utf8_bytes_not_escaped_ones(env):
+    # 1,080 dense Cyrillic rows: ~0.6 MiB as UTF-8 but over 1 MiB with \uXXXX escapes.
+    row = {"t": 0, "text": "ж" * 450}
+    rows = [row] * 1080
+    import json as _json
+
+    assert len(_json.dumps({"rows": rows}, separators=(",", ":"), ensure_ascii=False).encode()) < 1024 * 1024
+    assert len(_json.dumps({"rows": rows}, separators=(",", ":")).encode()) > 1024 * 1024
+    assert _put(env, signals={"rows": rows}).status_code == 200
+    over = [{"t": 0, "text": "ж" * 1000}] * 1080  # genuinely over 1 MiB of UTF-8
+    r = _put(env, signals={"rows": over})
+    assert (r.status_code, r.json()["detail"]) == (413, "signals_too_large: over 1 MiB")
+
+
+def test_a_non_uuid_analysis_id_is_404(env):
+    r = env.client.post(
+        f"/v1/users/{USER_A}/video-analyses/not-a-uuid/picks", json={"brief": "x", "moments": []}, headers=_h()
+    )
+    assert (r.status_code, r.json()["detail"]) == (404, "video_analysis_not_found")

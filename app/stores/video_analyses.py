@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import VideoAnalysis
 from ..schemas import VideoAnalysisIn, VideoAnalysisPicksIn
+from .chat import _uuid
 from .credits import _lock_user_row
 
 TTL = timedelta(days=30)
@@ -43,7 +44,7 @@ class VideoAnalysisError(Exception):
 
 def _check_size(field: str, value: object) -> None:
     cap, label = FIELD_CAPS[field]
-    if len(json.dumps(value, separators=(",", ":")).encode()) > cap:
+    if len(json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8")) > cap:
         raise VideoAnalysisError(413, f"{field}_too_large: over {label}")
 
 
@@ -97,8 +98,7 @@ async def _write(
     )
     if row is None:
         # Only a save that creates a live row counts against the cap; replacing a live one never does.
-        # The user's row lock (held until the commit below) makes count and insert one step per user.
-        await _lock_user_row(session, user_id)
+        # The caller holds the user's row lock (taken in ``save``), so count and insert are one step per user.
         live = (
             await session.execute(
                 select(func.count())
@@ -141,11 +141,15 @@ async def save(
         _check_size("transcript", payload.transcript)
     _check_size("signals", payload.signals)
     _check_size("candidates", payload.candidates)
+    # The user's row lock comes first on every save and is held until the commit, so one user's
+    # saves run one at a time (no 500 from interleaved purge/insert, no overshoot of the cap).
+    await _lock_user_row(session, user_id)
     row = await _find(session, user_id, platform, video_id)
     try:
         return await _write(session, user_id, platform, video_id, payload, now, row)
     except IntegrityError:
         await session.rollback()
+        await _lock_user_row(session, user_id)
         row = await _find(session, user_id, platform, video_id)
         if row is None:
             raise
@@ -156,11 +160,14 @@ async def add_picks(
     session: AsyncSession, user_id: str, analysis_id: str, payload: VideoAnalysisPicksIn, *, now: datetime
 ) -> VideoAnalysis | None:
     """Append one pick set and keep the newest 20; a missing, expired or foreign row is ``None``."""
+    aid = _uuid(analysis_id)
+    if aid is None:  # not a UUID: postgres would raise instead of not finding
+        return None
     row = (
         await session.execute(
             select(VideoAnalysis)
             .where(
-                VideoAnalysis.id == analysis_id,
+                VideoAnalysis.id == aid,
                 VideoAnalysis.user_id == user_id,
                 VideoAnalysis.expires_at > now,
             )
