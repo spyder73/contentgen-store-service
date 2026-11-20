@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal
@@ -1094,6 +1095,7 @@ class ChatThreadListItem(ChatThreadSummary):
 class ChatThreadOut(ChatThreadSummary):
     transcript: list[Any] = []
     known_media: list[Any] = []
+    tool_groups: list[str] = []
 
 
 class ChatThreadPatch(BaseModel):
@@ -1106,10 +1108,26 @@ class ChatThreadPatch(BaseModel):
     series_id: str | None = None
     transcript: list[Any] | None = None
     known_media: list[Any] | None = None
+    tool_groups: list[str] | None = Field(default=None, max_length=8)
     status: ChatThreadStatus | None = None
     add_cost_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
     _canonical_series = field_validator("series_id")(_uuid_or_none)
+
+    @field_validator("tool_groups")
+    @classmethod
+    def _tool_group_names(cls, v: list[str] | None) -> list[str] | None:
+        """Names are 1-20 lowercase letters; repeats collapse to the first sighting."""
+        if v is None:
+            return None
+        out: list[str] = []
+        for name in v:
+            name = name.strip()
+            if not re.fullmatch(r"[a-z]{1,20}", name):
+                raise ValueError("tool group names are 1-20 lowercase letters")
+            if name not in out:
+                out.append(name)
+        return out
 
 
 class ChatMessageIn(BaseModel):

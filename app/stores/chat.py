@@ -194,7 +194,7 @@ async def patch_thread(
     row = await _owned_thread(session, user_id, thread_id)
     if row is None:
         return None
-    for field in ("title", "provider", "model", "transcript", "known_media", "status"):
+    for field in ("title", "provider", "model", "transcript", "known_media", "tool_groups", "status"):
         value = getattr(patch, field)
         if value is not None:
             setattr(row, field, value)
