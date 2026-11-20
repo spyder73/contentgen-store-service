@@ -1442,3 +1442,63 @@ class PlaybookVersionSummary(BaseModel):
 
 class PlaybookVersionOut(PlaybookVersionSummary):
     body: str
+
+
+
+# ── video analyses (migration 0049) ──────────────────────────────────────────
+
+VideoPlatform = Literal["youtube"]
+VIDEO_ID_PATTERN = r"^[A-Za-z0-9_-]{11}$"
+
+
+class VideoAnalysisIn(BaseModel):
+    """One analysis of a long video. ``transcript`` is optional (a long video can have no
+    captions); ``signals`` is stored as given."""
+
+    url: str = Field(max_length=500)
+    title: str = Field(max_length=300)
+    channel: str = Field(max_length=200)
+    duration_s: float = Field(gt=0, le=10800)
+    transcript: dict | None = None
+    signals: dict
+    candidates: list = Field(default_factory=list, max_length=40)
+
+    @field_validator("transcript")
+    @classmethod
+    def _transcript_size(cls, v: dict | None) -> dict | None:
+        segments = v.get("segments") if v else None
+        if isinstance(segments, list) and len(segments) > 12000:
+            raise ValueError("transcript_too_long")
+        return v
+
+    @field_validator("signals")
+    @classmethod
+    def _signals_size(cls, v: dict) -> dict:
+        rows = v.get("rows")
+        if isinstance(rows, list) and len(rows) > 1200:
+            raise ValueError("signals_too_long")
+        return v
+
+
+class VideoAnalysisPicksIn(BaseModel):
+    brief: str = Field(min_length=1, max_length=500)
+    moments: list[dict] = Field(max_length=20)
+
+
+class VideoAnalysisOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_id: str
+    platform: VideoPlatform
+    video_id: str
+    url: str
+    title: str
+    channel: str
+    duration_s: float
+    transcript: dict | None = None
+    signals: dict
+    candidates: list
+    picks: list
+    created_at: datetime
+    expires_at: datetime
