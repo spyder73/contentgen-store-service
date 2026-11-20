@@ -945,6 +945,8 @@ class ChatThread(Base):
     # engines cannot parse the ::jsonb cast, and the ORM always sends the Python default.
     transcript: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     known_media: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    # The optional tool groups its agent has loaded (migration 0048); never "core".
+    tool_groups: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     cost_usd: Mapped[float] = mapped_column(
         Numeric(12, 6, asdecimal=False), nullable=False, default=0, server_default="0"
     )

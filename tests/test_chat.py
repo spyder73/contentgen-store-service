@@ -322,6 +322,36 @@ def test_patch_thread_rejects_a_bad_status_and_a_negative_cost(env):
     assert env.client.patch(url, json={"add_cost_usd": -0.1}, headers=_h()).status_code == 422
 
 
+def test_a_new_thread_has_no_tool_groups(env):
+    t = env.thread()
+    assert t["tool_groups"] == []
+
+
+def test_patching_tool_groups_replaces_them(env):
+    t = env.thread()
+    url = f"/v1/chat/threads/{t['id']}"
+    r = env.client.patch(url, json={"tool_groups": ["media", "clips", "media"]}, headers=_h())
+    assert r.status_code == 200 and r.json()["tool_groups"] == ["media", "clips"]
+    assert env.client.get(url, headers=_h()).json()["tool_groups"] == ["media", "clips"]
+    assert env.client.patch(url, json={"tool_groups": []}, headers=_h()).json()["tool_groups"] == []
+
+
+def test_tool_groups_are_left_alone_when_not_sent(env):
+    t = env.thread()
+    url = f"/v1/chat/threads/{t['id']}"
+    env.client.patch(url, json={"tool_groups": ["research"]}, headers=_h())
+    out = env.client.patch(url, json={"title": "x"}, headers=_h()).json()
+    assert out["title"] == "x" and out["tool_groups"] == ["research"]
+
+
+def test_bad_tool_group_names_are_refused(env):
+    t = env.thread()
+    url = f"/v1/chat/threads/{t['id']}"
+    assert env.client.patch(url, json={"tool_groups": ["Media!"]}, headers=_h()).status_code == 422
+    nine = [f"g{chr(97 + i)}" for i in range(9)]
+    assert env.client.patch(url, json={"tool_groups": nine}, headers=_h()).status_code == 422
+
+
 def test_patch_thread_adds_cost_atomically(env):
     t = env.thread()
     url = f"/v1/chat/threads/{t['id']}"
