@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -81,6 +82,9 @@ class CreditsError(Exception):
 
 # ── Reserve ─────────────────────────────────────────────────────────────────
 
+# The daily limit counts settled debits of the last 24 h (`:since`, bound from
+# Python so the SQL is portable) plus every credit still on hold
+# (`credits_reserved`, kept atomically by this same UPDATE).
 _RESERVE_SQL = text(
     """
     UPDATE users
@@ -93,8 +97,8 @@ _RESERVE_SQL = text(
            FROM credits_ledger
           WHERE user_id = :user_id
             AND kind = 'debit'
-            AND created_at > now() - interval '24 hours'
-       ) + :amount <= daily_spend_limit
+            AND created_at > :since
+       ) + credits_reserved + :amount <= daily_spend_limit
     RETURNING credits_balance, credits_reserved, daily_spend_limit
     """
 )
@@ -106,11 +110,15 @@ _DIAGNOSE_SQL = text(
              SELECT SUM(-delta) FROM credits_ledger
               WHERE user_id = :user_id
                 AND kind = 'debit'
-                AND created_at > now() - interval '24 hours'
-           ), 0) AS spent_today
+                AND created_at > :since
+           ), 0) + credits_reserved AS spent_today
       FROM users WHERE id = :user_id
     """
 )
+
+
+def _since() -> datetime:
+    return datetime.now(timezone.utc) - timedelta(hours=24)
 
 
 async def reserve(
@@ -136,12 +144,13 @@ async def reserve(
     if found is not None:
         return {"status": "already_reserved", "balance": found[1], "reserved": found[2]}
 
+    since = _since()
     result = await session.execute(
-        _RESERVE_SQL, {"user_id": user_id, "amount": amount}
+        _RESERVE_SQL, {"user_id": user_id, "amount": amount, "since": since}
     )
     row = result.first()
     if row is None:
-        diag = await session.execute(_DIAGNOSE_SQL, {"user_id": user_id})
+        diag = await session.execute(_DIAGNOSE_SQL, {"user_id": user_id, "since": since})
         d = diag.first()
         if d is None:
             raise CreditsError("user_not_found")
