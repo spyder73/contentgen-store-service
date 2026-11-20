@@ -172,6 +172,22 @@ async def reserve(
     # Same lock settle/release take: a concurrent reserve's new hold row (and a
     # settle's debit row) is committed before this statement reads the ledger.
     await _lock_user_row(session, user_id)
+    # A hold's key (user, run, checkpoint, attempt) is what closes it. A NEW
+    # hold on a key that already has a hold row (closed or not) under another
+    # idempotency key would read as closed at once and slip past the daily limit.
+    reused = await session.execute(
+        select(CreditsLedger.id).where(
+            CreditsLedger.user_id == user_id,
+            CreditsLedger.kind == "hold",
+            CreditsLedger.pipeline_run_id == pipeline_run_id,
+            CreditsLedger.checkpoint_id == checkpoint_id,
+            CreditsLedger.attempt == attempt,
+            CreditsLedger.idempotency_key != idempotency_key,
+        ).limit(1)
+    )
+    if reused.first() is not None:
+        await session.rollback()  # release the user lock
+        raise CreditsError("hold_key_reused")
     result = await session.execute(
         _RESERVE_SQL, {"user_id": user_id, "amount": amount, "since": since}
     )

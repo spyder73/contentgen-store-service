@@ -134,3 +134,38 @@ async def test_second_reserve_sees_the_first_hold_row_and_takes_the_user_lock(le
         await _reserve(ledger, _run(), "b", amount=600)
     assert e.value.code == "daily_limit_exceeded"
     assert calls == ["lock", "lock"]
+
+
+async def _figures(ledger) -> tuple:
+    async with ledger.factory() as s:
+        r = await s.execute(
+            text("SELECT credits_balance, credits_reserved FROM users WHERE id = :u"), {"u": USER}
+        )
+        return tuple(r.one())
+
+
+@pytest.mark.asyncio
+async def test_a_closed_hold_key_cannot_be_reused_under_a_new_idempotency_key(ledger):
+    await _set_limit(ledger)
+    run = _run()
+    await _reserve(ledger, run, "a", amount=400)
+    await ledger.release(run, "not_needed", cp="a", attempt=1)
+    before = await _figures(ledger)
+    async with ledger.factory() as s:
+        with pytest.raises(CreditsError) as e:
+            await credits.reserve(
+                s, user_id=USER, amount=400, pipeline_run_id=run, checkpoint_id="a",
+                attempt=1, idempotency_key="a-different-key",
+            )
+    assert e.value.code == "hold_key_reused"
+    assert await _figures(ledger) == before
+    # Room is unchanged: the full limit is still available to a fresh key.
+    assert (await _reserve(ledger, _run(), "fresh", amount=LIMIT))["status"] == "reserved"
+
+
+@pytest.mark.asyncio
+async def test_same_key_replay_is_still_already_reserved(ledger):
+    await _set_limit(ledger)
+    run = _run()
+    assert (await _reserve(ledger, run, "a"))["status"] == "reserved"
+    assert (await _reserve(ledger, run, "a"))["status"] == "already_reserved"
