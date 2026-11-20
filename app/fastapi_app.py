@@ -5,7 +5,7 @@ import os
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -77,6 +77,11 @@ from .schemas import (
     PlaybookOut,
     PlaybookVersionOut,
     PlaybookVersionSummary,
+    VIDEO_ID_PATTERN,
+    VideoAnalysisIn,
+    VideoAnalysisOut,
+    VideoAnalysisPicksIn,
+    VideoPlatform,
     ProductionIn,
     ProductionOut,
     ProductionPatch,
@@ -123,6 +128,7 @@ from .stores import (
     series,
     system_prompts,
     user_settings,
+    video_analyses,
     users,
     clipstyle_package_metadata,
 )
@@ -1703,6 +1709,56 @@ def create_fastapi_app() -> FastAPI:
     ) -> Any:
         row = await playbooks.get_version(session, _path_user(request, user_id), slug, version)
         return _chat_found(row, "playbook_version_not_found")
+
+    # ── video analyses ───────────────────────────────────────────────────────
+    #
+    # A long video's analysis, kept 30 days (expiry is lazy: an expired row is a 404).
+    # The path user must be the caller.
+
+    @app.get(
+        "/v1/users/{user_id}/video-analyses/by-video/{platform}/{video_id}", response_model=VideoAnalysisOut
+    )
+    async def get_video_analysis_handler(
+        user_id: str,
+        platform: VideoPlatform,
+        request: Request,
+        session: SessionDep,
+        video_id: str = Path(pattern=VIDEO_ID_PATTERN),
+    ) -> Any:
+        row = await video_analyses.get_by_video(
+            session, _path_user(request, user_id), platform, video_id, now=chat._now()
+        )
+        return _chat_found(row, "video_analysis_not_found")
+
+    @app.put(
+        "/v1/users/{user_id}/video-analyses/by-video/{platform}/{video_id}", response_model=VideoAnalysisOut
+    )
+    async def save_video_analysis_handler(
+        user_id: str,
+        platform: VideoPlatform,
+        payload: VideoAnalysisIn,
+        request: Request,
+        session: SessionDep,
+        video_id: str = Path(pattern=VIDEO_ID_PATTERN),
+    ) -> Any:
+        try:
+            return await video_analyses.save(
+                session, _path_user(request, user_id), platform, video_id, payload, now=chat._now()
+            )
+        except video_analyses.VideoAnalysisError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+    @app.post("/v1/users/{user_id}/video-analyses/{analysis_id}/picks", response_model=VideoAnalysisOut)
+    async def add_video_analysis_picks_handler(
+        user_id: str, analysis_id: str, payload: VideoAnalysisPicksIn, request: Request, session: SessionDep
+    ) -> Any:
+        try:
+            row = await video_analyses.add_picks(
+                session, _path_user(request, user_id), analysis_id, payload, now=chat._now()
+            )
+        except video_analyses.VideoAnalysisError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+        return _chat_found(row, "video_analysis_not_found")
 
     # ── user settings ────────────────────────────────────────────────────────
     #

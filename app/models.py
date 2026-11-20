@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, LargeBinary, Numeric, Text, UniqueConstraint, func, text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, Numeric, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -1152,6 +1152,42 @@ class Playbook(Base):
         UniqueConstraint("user_id", "slug", name="uq_playbooks_user_slug"),
         CheckConstraint("status IN ('active', 'archived')", name="ck_playbooks_status"),
         CheckConstraint("version >= 1", name="ck_playbooks_version"),
+    )
+
+
+class VideoAnalysis(Base):
+    """A long video's analysis, kept 30 days (migration 0049). One row per (user, platform,
+    video); a save replaces it and clears ``picks``. Expiry is lazy: no job purges, so
+    ``stores/video_analyses.py`` treats an expired row as absent and deletes the caller's
+    expired rows on a save."""
+
+    __tablename__ = "video_analyses"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    platform: Mapped[str] = mapped_column(Text, nullable=False)
+    video_id: Mapped[str] = mapped_column(Text, nullable=False)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    channel: Mapped[str] = mapped_column(Text, nullable=False)
+    duration_s: Mapped[float] = mapped_column(Float, nullable=False)
+    transcript: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    signals: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    candidates: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    picks: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    # The migration also gives candidates and picks a ``'[]'::jsonb`` server default (sqlite, which the
+    # tests build tables on, cannot render it); the model always sets both.
+    # Mirrors 0049 (an autogenerate that "fixes" a drift here would rewrite production constraints).
+    __table_args__ = (
+        UniqueConstraint("user_id", "platform", "video_id", name="uq_video_analyses_user_platform_video"),
+        CheckConstraint("platform IN ('youtube')", name="ck_video_analyses_platform"),
     )
 
 
