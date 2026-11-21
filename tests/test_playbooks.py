@@ -36,6 +36,7 @@ ACTIONS_0045 = (
     "'graph.extend', 'sourcing.run', 'production.budget'"
 )
 ACTIONS_0046 = f"{ACTIONS_0045}, 'playbook.save'"
+ACTIONS_0050 = f"{ACTIONS_0046}, 'routine.save', 'routine.delete'"  # the live set (routines, 0050)
 
 SAVE = {
     "name": "Carousel",
@@ -340,8 +341,9 @@ def test_the_models_declare_what_the_migration_makes():
     ):
         assert f"CONSTRAINT {name} CHECK ({modelled[(table, name)]})" in sql, name
     action = "ck_chat_approvals_action"
-    assert f"ADD CONSTRAINT {action} CHECK ({modelled[('chat_approvals', action)]})" in sql
-    assert modelled[("chat_approvals", action)] == f"action IN ({ACTIONS_0046})"
+    # 0050 took the model's action list over from 0046; 0046's own DDL keeps its list.
+    assert f"ADD CONSTRAINT {action} CHECK (action IN ({ACTIONS_0046}))" in sql
+    assert modelled[("chat_approvals", action)] == f"action IN ({ACTIONS_0050})"
     for table in (Playbook.__table__, PlaybookVersion.__table__):
         assert all(f"{c.name} " in sql for c in table.columns), table.name
     uniques = {
@@ -355,7 +357,7 @@ def test_the_models_declare_what_the_migration_makes():
 
 
 def test_the_schema_literal_matches_the_check():
-    assert ", ".join(f"'{a}'" for a in get_args(ChatAction)) == ACTIONS_0046
+    assert ", ".join(f"'{a}'" for a in get_args(ChatAction)) == ACTIONS_0050
 
 
 # ── a seed: the text a first save replaces ───────────────────────────────────

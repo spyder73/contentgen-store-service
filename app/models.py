@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, Numeric, Text, UniqueConstraint, func, text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, Numeric, Text, UniqueConstraint, false, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -947,6 +948,10 @@ class ChatThread(Base):
     known_media: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     # The optional tool groups its agent has loaded (migration 0048); never "core".
     tool_groups: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    # Migration 0050: a routine's run left something the owner has not opened; the routine that owns
+    # the thread (no FK: the store clears it when the routine is deleted).
+    unread: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    routine_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     cost_usd: Mapped[float] = mapped_column(
         Numeric(12, 6, asdecimal=False), nullable=False, default=0, server_default="0"
     )
@@ -1034,7 +1039,8 @@ class ChatApproval(Base):
     __table_args__ = (
         CheckConstraint(
             "action IN ('run.start', 'run.continue', 'image.generate', 'clip.render', "
-            "'plan.approve', 'frames.approve', 'graph.extend', 'sourcing.run', 'production.budget', 'playbook.save')",
+            "'plan.approve', 'frames.approve', 'graph.extend', 'sourcing.run', 'production.budget', 'playbook.save', "
+            "'routine.save', 'routine.delete')",
             name="ck_chat_approvals_action",
         ),
         CheckConstraint(
@@ -1188,6 +1194,57 @@ class VideoAnalysis(Base):
     __table_args__ = (
         UniqueConstraint("user_id", "platform", "video_id", name="uq_video_analyses_user_platform_video"),
         CheckConstraint("platform IN ('youtube')", name="ck_video_analyses_platform"),
+    )
+
+
+class Routine(Base):
+    """A scheduled prompt the agent runs on its own (migration 0050). ``next_run_at`` is the only
+    schedule the sweeper reads; a claim moves it with a compare-and-set. Three failures in a row
+    pause the routine. ``thread_id`` is the chat thread its runs write to (no FK)."""
+
+    __tablename__ = "routines"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    cadence: Mapped[str] = mapped_column(Text, nullable=False)
+    weekday: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    time_of_day: Mapped[str] = mapped_column(Text, nullable=False)
+    time_zone: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False, default="active", server_default="active")
+    thread_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_outcome: Mapped[str | None] = mapped_column(Text, nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    last_error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, server_default=func.now()
+    )
+
+    # Mirrors 0050 (an autogenerate that "fixes" a drift here would rewrite production constraints).
+    __table_args__ = (
+        CheckConstraint("cadence IN ('daily', 'weekly')", name="ck_routines_cadence"),
+        CheckConstraint("state IN ('active', 'paused')", name="ck_routines_state"),
+        CheckConstraint("last_outcome IS NULL OR last_outcome IN ('ok', 'failed', 'skipped')", name="ck_routines_outcome"),
+        Index("ix_routines_state_next_run", "state", "next_run_at"),
+    )
+
+
+class RoutineSpendDay(Base):
+    """What a user's routines have spent on one local day (migration 0050); the daily budget's counter."""
+
+    __tablename__ = "routine_spend_days"
+
+    user_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    spent_usd: Mapped[Decimal] = mapped_column(
+        Numeric(10, 4), nullable=False, default=Decimal(0), server_default="0"
     )
 
 
