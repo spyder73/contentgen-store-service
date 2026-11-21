@@ -947,11 +947,12 @@ ChatRole = Literal["user", "operator"]
 # 0043 added ``node`` / ``event`` (the director's live graph) and the three director approvals.
 ChatKind = Literal["text", "tool", "approval", "run", "media", "error", "node", "event"]
 # 0044 added sourcing.run (the chat's paid searches); 0045 added production.budget (a production's budget card);
-# 0046 added playbook.save (the card an agent's playbook edit waits behind); 0051 the four clipstyle.* actions.
+# 0046 added playbook.save (the card an agent's playbook edit waits behind); 0051 the four clipstyle.* actions; 0052 scene.build and scene.render.
 ChatAction = Literal[
     "run.start", "run.continue", "image.generate", "clip.render", "plan.approve", "frames.approve", "graph.extend",
     "sourcing.run", "production.budget", "playbook.save", "routine.save", "routine.delete",
     "clipstyle.build", "clipstyle.edit", "clipstyle.save", "clipstyle.publish",
+    "scene.build", "scene.render",
 ]
 ChatApprovalStatus = Literal["pending", "approved", "used", "declined", "expired"]
 
@@ -1509,3 +1510,88 @@ class RoutineSpendReserve(BaseModel):
     day: date
     want_usd: float = Field(ge=0, le=1000, allow_inf_nan=False)
     budget_usd: float = Field(ge=0, le=1000, allow_inf_nan=False)
+
+
+# ── scene videos (migration 0052) ────────────────────────────────────────────
+
+SceneVideoStatus = Literal["draft", "voiced", "building", "built", "rendering", "ready", "failed"]
+SCENE_VIDEO_LIMIT = 500
+SCENE_FILES_MAX = 48
+SCENE_FILE_MAX_BYTES = 64 * 1024
+SCENE_FILES_MAX_BYTES = 512 * 1024
+
+
+def _scene_files(value: dict[str, str] | None) -> dict[str, str] | None:
+    if value is None:
+        return None
+    if len(value) > SCENE_FILES_MAX:
+        raise ValueError(f"at most {SCENE_FILES_MAX} files")
+    total = 0
+    for text in value.values():
+        size = len(text.encode("utf-8"))
+        if size > SCENE_FILE_MAX_BYTES:
+            raise ValueError("a file is over 64 KiB")
+        total += size
+    if total > SCENE_FILES_MAX_BYTES:
+        raise ValueError("files are over 512 KiB in all")
+    return value
+
+
+class SceneVideoIn(BaseModel):
+    thread_id: str | None = Field(default=None, max_length=80)
+    style_ref: str = Field(default="sceneStarter@1", min_length=1, max_length=120)
+    title: str = Field(default="", max_length=200)
+
+
+class SceneVideoPatch(BaseModel):
+    """Only the fields sent are changed; an explicit null clears a nullable one."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    thread_id: str | None = Field(default=None, max_length=80)
+    style_ref: str | None = Field(default=None, min_length=1, max_length=120)
+    title: str | None = Field(default=None, max_length=200)
+    status: SceneVideoStatus | None = None
+    files: dict[str, str] | None = None
+    files_hash: str | None = Field(default=None, max_length=128)
+    last_report: dict[str, Any] | None = None
+    bundle: dict[str, Any] | None = None
+    narration_media_id: str | None = Field(default=None, max_length=120)
+    voice_timeline: dict[str, Any] | None = None
+    plan: dict[str, Any] | None = None
+    final_media_id: str | None = Field(default=None, max_length=120)
+    session_id: str | None = Field(default=None, max_length=200)
+    woken_at: datetime | None = None
+
+    _files = field_validator("files")(_scene_files)
+    _utc = field_validator("woken_at")(lambda v: None if v is None else _as_utc(v))
+
+    @model_validator(mode="after")
+    def _not_null_columns(self) -> "SceneVideoPatch":
+        for name in ("style_ref", "title", "status"):
+            if name in self.model_fields_set and getattr(self, name) is None:
+                raise ValueError(f"{name} cannot be null")
+        return self
+
+
+class SceneVideoOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_id: str
+    thread_id: str | None = None
+    style_ref: str
+    title: str
+    status: SceneVideoStatus
+    files: dict[str, str] | None = None
+    files_hash: str | None = None
+    last_report: dict[str, Any] | None = None
+    bundle: dict[str, Any] | None = None
+    narration_media_id: str | None = None
+    voice_timeline: dict[str, Any] | None = None
+    plan: dict[str, Any] | None = None
+    final_media_id: str | None = None
+    session_id: str | None = None
+    woken_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime

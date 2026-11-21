@@ -77,6 +77,10 @@ from .schemas import (
     RoutinePatch,
     RoutineSpendAdd,
     RoutineSpendReserve,
+    SceneVideoIn,
+    SceneVideoOut,
+    SceneVideoPatch,
+    SceneVideoStatus,
     VideoAnalysisIn,
     VideoAnalysisOut,
     VideoAnalysisPicksIn,
@@ -125,6 +129,7 @@ from .stores import (
     system_prompts,
     user_settings,
     routines,
+    scene_videos,
     video_analyses,
     users,
     clipstyle_package_metadata,
@@ -1663,6 +1668,42 @@ def create_fastapi_app() -> FastAPI:
         except video_analyses.VideoAnalysisError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail)
         return _chat_found(row, "video_analysis_not_found")
+
+    # ── scene videos ─────────────────────────────────────────────────────────
+    #
+    # A user's code-made 3D explainer videos (at most 500), and the internal status list boot
+    # recovery reads (secret only, every user's rows).
+
+    @app.post("/v1/users/{user_id}/scene-videos", response_model=SceneVideoOut)
+    async def create_scene_video_handler(
+        user_id: str, payload: SceneVideoIn, request: Request, session: SessionDep
+    ) -> Any:
+        try:
+            return await scene_videos.create(session, _path_user(request, user_id), payload)
+        except scene_videos.SceneVideoError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+    @app.get("/v1/users/{user_id}/scene-videos", response_model=list[SceneVideoOut])
+    async def list_scene_videos_handler(
+        user_id: str, request: Request, session: SessionDep, limit: int = Query(default=50, ge=1, le=50)
+    ) -> Any:
+        return await scene_videos.list_for_user(session, _path_user(request, user_id), limit)
+
+    @app.get("/v1/users/{user_id}/scene-videos/{video_id}", response_model=SceneVideoOut)
+    async def get_scene_video_handler(user_id: str, video_id: str, request: Request, session: SessionDep) -> Any:
+        row = await scene_videos.get(session, _path_user(request, user_id), video_id)
+        return _chat_found(row, "scene_video_not_found")
+
+    @app.patch("/v1/users/{user_id}/scene-videos/{video_id}", response_model=SceneVideoOut)
+    async def patch_scene_video_handler(
+        user_id: str, video_id: str, payload: SceneVideoPatch, request: Request, session: SessionDep
+    ) -> Any:
+        row = await scene_videos.patch(session, _path_user(request, user_id), video_id, payload)
+        return _chat_found(row, "scene_video_not_found")
+
+    @app.get("/v1/internal/scene-videos", response_model=list[SceneVideoOut])
+    async def internal_scene_videos_handler(status: SceneVideoStatus, session: SessionDep) -> Any:
+        return await scene_videos.by_status(session, status)
 
     # ── routines ─────────────────────────────────────────────────────────────
     #

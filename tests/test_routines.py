@@ -291,4 +291,4 @@ def test_the_models_match_the_migration_check_set():
     assert {c.name for c in ChatThread.__table__.columns} >= {"unread", "routine_id"}
     check = next(c for c in __import__("app.models", fromlist=["ChatApproval"]).ChatApproval.__table__.constraints
                  if c.name == "ck_chat_approvals_action")
-    assert "'clipstyle.save', 'clipstyle.publish')" in str(check.sqltext)
+    assert "'clipstyle.save', 'clipstyle.publish', 'scene.build', 'scene.render')" in str(check.sqltext)

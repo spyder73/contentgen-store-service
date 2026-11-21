@@ -1041,7 +1041,8 @@ class ChatApproval(Base):
             "action IN ('run.start', 'run.continue', 'image.generate', 'clip.render', "
             "'plan.approve', 'frames.approve', 'graph.extend', 'sourcing.run', 'production.budget', 'playbook.save', "
             "'routine.save', 'routine.delete', "
-            "'clipstyle.build', 'clipstyle.edit', 'clipstyle.save', 'clipstyle.publish')",
+            "'clipstyle.build', 'clipstyle.edit', 'clipstyle.save', 'clipstyle.publish', "
+            "'scene.build', 'scene.render')",
             name="ck_chat_approvals_action",
         ),
         CheckConstraint(
@@ -1232,6 +1233,53 @@ class Routine(Base):
         CheckConstraint("state IN ('active', 'paused')", name="ck_routines_state"),
         CheckConstraint("last_outcome IS NULL OR last_outcome IN ('ok', 'failed', 'skipped')", name="ck_routines_outcome"),
         Index("ix_routines_state_next_run", "state", "next_run_at"),
+    )
+
+
+SCENE_VIDEO_STATUSES = ("draft", "voiced", "building", "built", "rendering", "ready", "failed")
+
+
+class SceneVideo(Base):
+    """One code-made 3D explainer video the chat agent is making (migration 0052). The backend reads
+    and patches the row as the video moves from narration to build to render. ``thread_id`` and the
+    media ids are plain text (no FK)."""
+
+    __tablename__ = "scene_videos"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    thread_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    style_ref: Mapped[str] = mapped_column(
+        Text, nullable=False, default="sceneStarter@1", server_default="sceneStarter@1"
+    )
+    title: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="draft", server_default="draft")
+    files: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    files_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_report: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    bundle: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    narration_media_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    voice_timeline: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    plan: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    final_media_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    session_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    woken_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    # Mirrors 0052 (an autogenerate that "fixes" a drift here would rewrite production constraints).
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft', 'voiced', 'building', 'built', 'rendering', 'ready', 'failed')",
+            name="ck_scene_videos_status",
+        ),
+        Index("ix_scene_videos_user_created", "user_id", "created_at"),
     )
 
 
