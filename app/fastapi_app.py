@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Annotated, Any, Literal
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Path, Query, Request, Response
@@ -70,6 +70,13 @@ from .schemas import (
     PlaybookVersionOut,
     PlaybookVersionSummary,
     VIDEO_ID_PATTERN,
+    RoutineClaimIn,
+    RoutineIn,
+    RoutineOut,
+    RoutineOutcomeIn,
+    RoutinePatch,
+    RoutineSpendAdd,
+    RoutineSpendReserve,
     VideoAnalysisIn,
     VideoAnalysisOut,
     VideoAnalysisPicksIn,
@@ -117,6 +124,7 @@ from .stores import (
     series,
     system_prompts,
     user_settings,
+    routines,
     video_analyses,
     users,
     clipstyle_package_metadata,
@@ -1654,6 +1662,79 @@ def create_fastapi_app() -> FastAPI:
         except video_analyses.VideoAnalysisError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail)
         return _chat_found(row, "video_analysis_not_found")
+
+    # ── routines ─────────────────────────────────────────────────────────────
+    #
+    # A user's scheduled prompts (at most five), the sweeper's cross-user due list, claim and
+    # outcome, and the per-local-day spend counter their budget reads.
+
+    def _routine_error(exc: routines.RoutineError) -> HTTPException:
+        return HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+    @app.post("/v1/users/{user_id}/routines", response_model=RoutineOut)
+    async def create_routine_handler(user_id: str, payload: RoutineIn, request: Request, session: SessionDep) -> Any:
+        try:
+            return await routines.create(session, _path_user(request, user_id), payload)
+        except routines.RoutineError as exc:
+            raise _routine_error(exc)
+
+    @app.get("/v1/users/{user_id}/routines", response_model=list[RoutineOut])
+    async def list_routines_handler(user_id: str, request: Request, session: SessionDep) -> Any:
+        return await routines.list_for_user(session, _path_user(request, user_id))
+
+    @app.get("/v1/users/{user_id}/routines/{routine_id}", response_model=RoutineOut)
+    async def get_routine_handler(user_id: str, routine_id: str, request: Request, session: SessionDep) -> Any:
+        row = await routines.get(session, _path_user(request, user_id), routine_id)
+        return _chat_found(row, "routine_not_found")
+
+    @app.patch("/v1/users/{user_id}/routines/{routine_id}", response_model=RoutineOut)
+    async def patch_routine_handler(
+        user_id: str, routine_id: str, payload: RoutinePatch, request: Request, session: SessionDep
+    ) -> Any:
+        row = await routines.patch(session, _path_user(request, user_id), routine_id, payload)
+        return _chat_found(row, "routine_not_found")
+
+    @app.delete("/v1/users/{user_id}/routines/{routine_id}", status_code=204)
+    async def delete_routine_handler(user_id: str, routine_id: str, request: Request, session: SessionDep) -> Response:
+        if not await routines.delete(session, _path_user(request, user_id), routine_id):
+            raise HTTPException(status_code=404, detail="routine_not_found")
+        return Response(status_code=204)
+
+    @app.get("/v1/routines/due", response_model=list[RoutineOut])
+    async def due_routines_handler(now: datetime, session: SessionDep) -> Any:
+        return await routines.due(session, now if now.tzinfo else now.replace(tzinfo=timezone.utc))
+
+    @app.post("/v1/routines/{routine_id}/claim", response_model=RoutineOut)
+    async def claim_routine_handler(routine_id: str, payload: RoutineClaimIn, session: SessionDep) -> Any:
+        try:
+            return await routines.claim(session, routine_id, payload)
+        except routines.RoutineError as exc:
+            raise _routine_error(exc)
+
+    @app.post("/v1/routines/{routine_id}/outcome", response_model=RoutineOut)
+    async def routine_outcome_handler(routine_id: str, payload: RoutineOutcomeIn, session: SessionDep) -> Any:
+        row = await routines.record_outcome(session, routine_id, payload)
+        return _chat_found(row, "routine_not_found")
+
+    @app.get("/v1/users/{user_id}/routine-spend")
+    async def get_routine_spend_handler(user_id: str, day: date, request: Request, session: SessionDep) -> Any:
+        return {"spent_usd": float(await routines.spent(session, _path_user(request, user_id), day))}
+
+    @app.post("/v1/users/{user_id}/routine-spend")
+    async def add_routine_spend_handler(
+        user_id: str, payload: RoutineSpendAdd, request: Request, session: SessionDep
+    ) -> Any:
+        total = await routines.add_spend(session, _path_user(request, user_id), payload.day, payload.add_usd)
+        return {"spent_usd": float(total)}
+
+    @app.post("/v1/users/{user_id}/routine-spend/reserve")
+    async def reserve_routine_spend_handler(
+        user_id: str, payload: RoutineSpendReserve, request: Request, session: SessionDep
+    ) -> Any:
+        granted = await routines.reserve_spend(
+            session, _path_user(request, user_id), payload.day, payload.want_usd, payload.budget_usd
+        )
+        return {"granted_usd": float(granted)}
 
     # ── user settings ────────────────────────────────────────────────────────
     #

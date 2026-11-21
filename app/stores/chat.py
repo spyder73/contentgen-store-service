@@ -194,6 +194,20 @@ async def patch_thread(
     row = await _owned_thread(session, user_id, thread_id)
     if row is None:
         return None
+    if patch.unread is not None and patch.model_fields_set == {"unread"}:
+        # Opening a thread is not activity: an unread-only patch keeps updated_at (an explicit
+        # value stops the column's onupdate).
+        await session.execute(
+            update(ChatThread)
+            .where(ChatThread.id == row.id)
+            .values(unread=patch.unread, updated_at=ChatThread.updated_at)
+            .execution_options(synchronize_session=False)
+        )
+        await session.commit()
+        await session.refresh(row)
+        return row
+    if patch.unread is not None:
+        row.unread = patch.unread
     for field in ("title", "provider", "model", "transcript", "known_media", "tool_groups", "status"):
         value = getattr(patch, field)
         if value is not None:

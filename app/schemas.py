@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -950,7 +950,7 @@ ChatKind = Literal["text", "tool", "approval", "run", "media", "error", "node", 
 # 0046 added playbook.save (the card an agent's playbook edit waits behind).
 ChatAction = Literal[
     "run.start", "run.continue", "image.generate", "clip.render", "plan.approve", "frames.approve", "graph.extend",
-    "sourcing.run", "production.budget", "playbook.save",
+    "sourcing.run", "production.budget", "playbook.save", "routine.save", "routine.delete",
 ]
 ChatApprovalStatus = Literal["pending", "approved", "used", "declined", "expired"]
 
@@ -995,6 +995,8 @@ class ChatThreadSummary(BaseModel):
     series_id: str | None = None
     cost_usd: float = 0
     status: ChatThreadStatus = "idle"
+    unread: bool = False
+    routine_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -1026,6 +1028,7 @@ class ChatThreadPatch(BaseModel):
     known_media: list[Any] | None = None
     tool_groups: list[str] | None = Field(default=None, max_length=8)
     status: ChatThreadStatus | None = None
+    unread: bool | None = None
     add_cost_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
     _canonical_series = field_validator("series_id")(_uuid_or_none)
@@ -1418,3 +1421,90 @@ class VideoAnalysisOut(BaseModel):
     picks: list
     created_at: datetime
     expires_at: datetime
+
+
+# ── routines (migration 0050) ────────────────────────────────────────────────
+
+RoutineCadence = Literal["daily", "weekly"]
+RoutineState = Literal["active", "paused"]
+RoutineOutcome = Literal["ok", "failed", "skipped"]
+ROUTINE_LIMIT = 5
+
+
+class RoutineIn(BaseModel):
+    """A new routine. ``thread_id`` is the chat thread it runs in: the store links the thread
+    to the routine in the same transaction."""
+
+    name: str = Field(min_length=1, max_length=80)
+    prompt: str = Field(min_length=1, max_length=2000)
+    cadence: RoutineCadence
+    weekday: int | None = Field(default=None, ge=0, le=6)
+    time_of_day: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    time_zone: str = Field(min_length=1, max_length=64)
+    thread_id: str | None = None
+    next_run_at: datetime
+
+    _utc = field_validator("next_run_at")(_as_utc)
+    _canonical_thread = field_validator("thread_id")(_uuid_or_none)
+
+    @model_validator(mode="after")
+    def _weekday_matches_cadence(self) -> "RoutineIn":
+        if (self.cadence == "weekly") != (self.weekday is not None):
+            raise ValueError("weekday is required for weekly and forbidden for daily")
+        return self
+
+
+class RoutinePatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    state: RoutineState | None = None
+    next_run_at: datetime | None = None
+
+    _utc = field_validator("next_run_at")(lambda v: None if v is None else _as_utc(v))
+
+
+class RoutineClaimIn(BaseModel):
+    due_at: datetime
+    next_run_at: datetime
+
+    _utc = field_validator("due_at", "next_run_at")(_as_utc)
+
+
+class RoutineOutcomeIn(BaseModel):
+    outcome: RoutineOutcome
+    error_code: str | None = Field(default=None, max_length=80)
+    at: datetime
+
+    _utc = field_validator("at")(_as_utc)
+
+
+class RoutineOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_id: str
+    name: str
+    prompt: str
+    cadence: RoutineCadence
+    weekday: int | None = None
+    time_of_day: str
+    time_zone: str
+    state: RoutineState
+    thread_id: str | None = None
+    next_run_at: datetime
+    last_run_at: datetime | None = None
+    last_outcome: RoutineOutcome | None = None
+    consecutive_failures: int
+    last_error_code: str | None = None
+    created_at: datetime
+
+
+class RoutineSpendAdd(BaseModel):
+    day: date
+    add_usd: float = Field(allow_inf_nan=False, ge=-1000, le=1000)
+
+
+class RoutineSpendReserve(BaseModel):
+    day: date
+    want_usd: float = Field(ge=0, le=1000, allow_inf_nan=False)
+    budget_usd: float = Field(ge=0, le=1000, allow_inf_nan=False)
