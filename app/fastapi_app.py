@@ -36,14 +36,6 @@ from .schemas import (
     RelatedMediaOut,
     AccessFeatureOut,
     AccessFeaturePatch,
-    PipelineAssignmentsUpdate,
-    PipelineRunSnapshotIn,
-    PipelineRunSnapshotOut,
-    PipelineTemplateIn,
-    PipelineTemplateOut,
-    PipelineVisibilityUpdate,
-    PromptTemplateIn,
-    PromptTemplateOut,
     RenameMediaBody,
     RenderProposalIn,
     RenderProposalOut,
@@ -117,14 +109,11 @@ from .stores import (
     media,
     clip_ratings,
     ideas,
-    pipelines,
     playbooks,
     productions,
-    prompts,
     render_templates,
     review_corrections,
     review_traces,
-    run_snapshots,
     series,
     system_prompts,
     user_settings,
@@ -370,100 +359,6 @@ def create_fastapi_app() -> FastAPI:
         if row is None:
             raise HTTPException(status_code=404, detail="user_not_found")
         return row
-
-    # ── pipeline templates ──────────────────────────────────────────────────
-
-    @app.get("/v1/pipelines", response_model=list[PipelineTemplateOut])
-    async def list_pipelines_handler(request: Request, session: SessionDep) -> Any:
-        user_id = _get_user_id(request)
-        return await pipelines.list_pipelines(session, user_id=user_id)
-
-    @app.get("/v1/pipelines/{id}", response_model=PipelineTemplateOut)
-    async def get_pipeline_handler(id: str, request: Request, session: SessionDep) -> Any:
-        user_id = _require_user_id(request)
-        row = await pipelines.get_pipeline(session, id, user_id=user_id)
-        if row is None:
-            raise HTTPException(status_code=404, detail="not_found")
-        return row
-
-    @app.put("/v1/pipelines/{id}", response_model=PipelineTemplateOut)
-    async def upsert_pipeline_handler(id: str, body: PipelineTemplateIn, request: Request, session: SessionDep) -> Any:
-        user_id = _require_user_id(request)
-        body.id = id
-        try:
-            return await pipelines.upsert_pipeline(session, body, user_id=user_id)
-        except pipelines.PipelineTemplateError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=exc.message)
-
-    @app.delete("/v1/pipelines/{id}", status_code=204)
-    async def delete_pipeline_handler(id: str, request: Request, session: SessionDep) -> None:
-        user_id = _require_user_id(request)
-        deleted = await pipelines.delete_pipeline(session, id, user_id=user_id)
-        if not deleted:
-            raise HTTPException(status_code=404, detail="not_found")
-
-    # ── pipeline run snapshots ──────────────────────────────────────────────
-    # Persisted run state so the Go backend can rehydrate runs after a restart
-    # (otherwise the frontend's stored run IDs 404 on regenerate).
-
-    @app.get("/v1/run-snapshots", response_model=list[PipelineRunSnapshotOut])
-    async def list_run_snapshots_handler(request: Request, session: SessionDep) -> Any:
-        user_id = _get_user_id(request)
-        return await run_snapshots.list_snapshots(session, user_id=user_id)
-
-    @app.get("/v1/run-snapshots/{id}", response_model=PipelineRunSnapshotOut)
-    async def get_run_snapshot_handler(id: str, session: SessionDep) -> Any:
-        row = await run_snapshots.get_snapshot(session, id)
-        if row is None:
-            raise HTTPException(status_code=404, detail="not_found")
-        return row
-
-    @app.put("/v1/run-snapshots/{id}", response_model=PipelineRunSnapshotOut)
-    async def upsert_run_snapshot_handler(
-        id: str, body: PipelineRunSnapshotIn, request: Request, session: SessionDep
-    ) -> Any:
-        body.id = id
-        return await run_snapshots.upsert_snapshot(session, body, user_id=_get_user_id(request))
-
-    @app.delete("/v1/run-snapshots/{id}", status_code=204)
-    async def delete_run_snapshot_handler(id: str, session: SessionDep) -> None:
-        await run_snapshots.delete_snapshot(session, id)
-
-    @app.delete("/v1/run-snapshots")
-    async def delete_all_run_snapshots_handler(session: SessionDep) -> Any:
-        deleted = await run_snapshots.delete_all_snapshots(session)
-        return {"deleted": deleted}
-
-    # ── prompt templates ────────────────────────────────────────────────────
-
-    @app.get("/v1/prompts", response_model=list[PromptTemplateOut])
-    async def list_prompts_handler(request: Request, session: SessionDep) -> Any:
-        user_id = _get_user_id(request)
-        return await prompts.list_prompts(session, user_id=user_id)
-
-    @app.get("/v1/prompts/{id}", response_model=PromptTemplateOut)
-    async def get_prompt_handler(id: str, request: Request, session: SessionDep) -> Any:
-        user_id = _require_user_id(request)
-        row = await prompts.get_prompt(session, id, user_id=user_id)
-        if row is None:
-            raise HTTPException(status_code=404, detail="not_found")
-        return row
-
-    @app.put("/v1/prompts/{id}", response_model=PromptTemplateOut)
-    async def upsert_prompt_handler(id: str, body: PromptTemplateIn, request: Request, session: SessionDep) -> Any:
-        user_id = _require_user_id(request)
-        body.id = id
-        try:
-            return await prompts.upsert_prompt(session, body, user_id=user_id)
-        except prompts.PromptTemplateError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=exc.message)
-
-    @app.delete("/v1/prompts/{id}", status_code=204)
-    async def delete_prompt_handler(id: str, request: Request, session: SessionDep) -> None:
-        user_id = _require_user_id(request)
-        deleted = await prompts.delete_prompt(session, id, user_id=user_id)
-        if not deleted:
-            raise HTTPException(status_code=404, detail="not_found")
 
     # ── system prompts ──────────────────────────────────────────────────────
 
@@ -1829,106 +1724,6 @@ def create_fastapi_app() -> FastAPI:
         if not await credits.is_admin(session, admin_id):
             raise HTTPException(status_code=403, detail="not_admin")
         return await access.set_user_features(session, user_id, body.feature_keys)
-
-    @app.get("/v1/internal/admin/pipelines", response_model=list[PipelineTemplateOut])
-    async def admin_list_pipelines_handler(request: Request, session: SessionDep) -> Any:
-        admin_id = _require_user_id(request)
-        if not await credits.is_admin(session, admin_id):
-            raise HTTPException(status_code=403, detail="not_admin")
-        return await pipelines.list_pipelines(session, user_id=admin_id, admin=True)
-
-    @app.put("/v1/internal/admin/pipelines/{id}", response_model=PipelineTemplateOut)
-    async def admin_upsert_pipeline_handler(
-        id: str,
-        body: PipelineTemplateIn,
-        request: Request,
-        session: SessionDep,
-    ) -> Any:
-        admin_id = _require_user_id(request)
-        if not await credits.is_admin(session, admin_id):
-            raise HTTPException(status_code=403, detail="not_admin")
-        body.id = id
-        return await pipelines.upsert_pipeline(session, body, user_id=admin_id, admin=True)
-
-    @app.patch("/v1/internal/admin/pipelines/{id}/visibility", response_model=PipelineTemplateOut)
-    async def admin_pipeline_visibility_handler(
-        id: str,
-        body: PipelineVisibilityUpdate,
-        request: Request,
-        session: SessionDep,
-    ) -> Any:
-        admin_id = _require_user_id(request)
-        if not await credits.is_admin(session, admin_id):
-            raise HTTPException(status_code=403, detail="not_admin")
-        row = await pipelines.set_pipeline_visibility(session, id, body.visibility)
-        if row is None:
-            raise HTTPException(status_code=404, detail="not_found")
-        return row
-
-    @app.put("/v1/internal/admin/pipelines/{id}/assignments", response_model=PipelineTemplateOut)
-    async def admin_pipeline_assignments_handler(
-        id: str,
-        body: PipelineAssignmentsUpdate,
-        request: Request,
-        session: SessionDep,
-    ) -> Any:
-        admin_id = _require_user_id(request)
-        if not await credits.is_admin(session, admin_id):
-            raise HTTPException(status_code=403, detail="not_admin")
-        row = await pipelines.set_pipeline_assignments(session, id, body.user_ids)
-        if row is None:
-            raise HTTPException(status_code=404, detail="not_found")
-        return row
-
-    @app.delete("/v1/internal/admin/pipelines/{id}", status_code=204)
-    async def admin_delete_pipeline_handler(id: str, request: Request, session: SessionDep) -> None:
-        admin_id = _require_user_id(request)
-        if not await credits.is_admin(session, admin_id):
-            raise HTTPException(status_code=403, detail="not_admin")
-        deleted = await pipelines.delete_pipeline(session, id, user_id=admin_id, admin=True)
-        if not deleted:
-            raise HTTPException(status_code=404, detail="not_found")
-
-    @app.get("/v1/internal/admin/prompts", response_model=list[PromptTemplateOut])
-    async def admin_list_prompts_handler(request: Request, session: SessionDep) -> Any:
-        admin_id = _require_user_id(request)
-        if not await credits.is_admin(session, admin_id):
-            raise HTTPException(status_code=403, detail="not_admin")
-        return await prompts.list_prompts(session, user_id=admin_id, admin=True)
-
-    @app.put("/v1/internal/admin/prompts/{id}", response_model=PromptTemplateOut)
-    async def admin_upsert_prompt_handler(
-        id: str,
-        body: PromptTemplateIn,
-        request: Request,
-        session: SessionDep,
-    ) -> Any:
-        admin_id = _require_user_id(request)
-        if not await credits.is_admin(session, admin_id):
-            raise HTTPException(status_code=403, detail="not_admin")
-        body.id = id
-        return await prompts.upsert_prompt(session, body, user_id=admin_id, admin=True)
-
-    @app.put("/v1/admin/prompt-templates/{id}", response_model=PromptTemplateOut)
-    async def admin_seed_prompt_template_handler(
-        id: str,
-        body: PromptTemplateIn,
-        session: SessionDep,
-    ) -> Any:
-        """Seed a built-in prompt template if missing.
-
-        Gated by the X-Internal-Secret middleware only (no admin user needed):
-        the Go backend calls this at startup with no user context to ensure its
-        local-asset prompt templates exist in the store. Create-if-missing —
-        an existing row is never overwritten, so user edits to built-ins are
-        preserved. Seeded rows default to global visibility.
-        """
-        body.id = id
-        # Built-ins must resolve for every service/user, so seed them global by
-        # default. The backend never sets visibility on its seed calls.
-        if body.visibility != "global":
-            body.visibility = "global"
-        return await prompts.seed_prompt(session, body)
 
     # ── error handler ────────────────────────────────────────────────────────
 

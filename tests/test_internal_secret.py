@@ -39,8 +39,6 @@ CLIP_ID = "00000000-0000-0000-0000-0000000000c1"
 # Representative sample covering every resource family + verb. If the gate
 # regresses, these tests light up before any business-logic test does.
 SAMPLE_ROUTES = [
-    ("get", "/v1/pipelines"),
-    ("get", "/v1/prompts"),
     ("get", "/v1/render-templates"),
     ("get", "/v1/render-proposals"),
     ("get", "/v1/clips"),

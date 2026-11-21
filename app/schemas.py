@@ -8,82 +8,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-class PipelineTemplateOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: str
-    name: str
-    data: dict[str, Any]
-    version: int
-    user_id: str | None = None
-    visibility: str = "private"
-    assigned_user_ids: list[str] = []
-    created_at: datetime
-    updated_at: datetime
-
-
-class PipelineTemplateIn(BaseModel):
-    id: str
-    name: str
-    data: dict[str, Any]
-    version: int = 1
-    user_id: str | None = None
-    visibility: str = "private"
-    assigned_user_ids: list[str] = []
-
-
-class PipelineRunSnapshotOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: str
-    user_id: str | None = None
-    status: str = ""
-    snapshot: dict[str, Any] = {}
-    created_at: datetime
-    updated_at: datetime
-
-
-class PipelineRunSnapshotIn(BaseModel):
-    id: str
-    status: str = ""
-    snapshot: dict[str, Any] = {}
-
-
-class PromptTemplateOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: str
-    name: str
-    content: str
-    metadata: dict[str, Any] = {}
-    user_id: str | None = None
-    visibility: str = "private"
-    created_at: datetime
-    updated_at: datetime
-
-    @classmethod
-    def from_orm_row(cls, row) -> "PromptTemplateOut":
-        return cls(
-            id=row.id,
-            name=row.name,
-            content=row.content,
-            metadata=row.metadata_ or {},
-            user_id=row.user_id,
-            visibility=getattr(row, "visibility", "private") or "private",
-            created_at=row.created_at,
-            updated_at=row.updated_at,
-        )
-
-
-class PromptTemplateIn(BaseModel):
-    id: str
-    name: str
-    content: str
-    metadata: dict[str, Any] = {}
-    user_id: str | None = None
-    visibility: str = "private"
-
-
 class IdeaIn(BaseModel):
     seed: str
     template_id: str
@@ -351,14 +275,6 @@ class AccessFeaturePatch(BaseModel):
 
 class UserFeatureUpdate(BaseModel):
     feature_keys: list[str]
-
-
-class PipelineAssignmentsUpdate(BaseModel):
-    user_ids: list[str]
-
-
-class PipelineVisibilityUpdate(BaseModel):
-    visibility: str
 
 
 class ClipPromptOut(BaseModel):
