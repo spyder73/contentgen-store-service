@@ -1698,7 +1698,10 @@ def create_fastapi_app() -> FastAPI:
     async def patch_scene_video_handler(
         user_id: str, video_id: str, payload: SceneVideoPatch, request: Request, session: SessionDep
     ) -> Any:
-        row = await scene_videos.patch(session, _path_user(request, user_id), video_id, payload)
+        try:
+            row = await scene_videos.patch(session, _path_user(request, user_id), video_id, payload)
+        except scene_videos.SceneVideoError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail)
         return _chat_found(row, "scene_video_not_found")
 
     @app.get("/v1/internal/scene-videos", response_model=list[SceneVideoOut])

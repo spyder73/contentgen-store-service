@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import uuid
 from datetime import date, datetime, timezone
+import json
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -1521,14 +1522,31 @@ SCENE_FILE_MAX_BYTES = 64 * 1024
 SCENE_FILES_MAX_BYTES = 512 * 1024
 
 
+# Copied from remotion/modal_bridge/validator_types.py (PACKAGE_PATH_PATTERN): the paths a package may hold.
+SCENE_PATH_PATTERN = re.compile(
+    r"(?:manifest\.ts|schema\.ts|Template\.tsx|validate\.ts|writing-guide\.md|settings\.ts|settings\.json"
+    r"|fixtures/(?!constructor\.json\Z)[a-z0-9][a-z0-9-]{0,63}\.json"
+    r"|components/[A-Z][A-Za-z0-9]{0,63}\.tsx|lib/[a-z][A-Za-z0-9-]{0,63}\.ts)"
+)
+SCENE_JSON_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _scene_json(value: dict[str, Any] | None) -> dict[str, Any] | None:
+    if value is not None and len(json.dumps(value, separators=(",", ":")).encode("utf-8")) > SCENE_JSON_MAX_BYTES:
+        raise ValueError("over 2 MiB")
+    return value
+
+
 def _scene_files(value: dict[str, str] | None) -> dict[str, str] | None:
     if value is None:
         return None
     if len(value) > SCENE_FILES_MAX:
         raise ValueError(f"at most {SCENE_FILES_MAX} files")
     total = 0
-    for text in value.values():
-        size = len(text.encode("utf-8"))
+    for path, text in value.items():
+        if not SCENE_PATH_PATTERN.fullmatch(path):
+            raise ValueError("path not allowed")
+        size = len(path.encode("utf-8")) + len(text.encode("utf-8"))
         if size > SCENE_FILE_MAX_BYTES:
             raise ValueError("a file is over 64 KiB")
         total += size
@@ -1564,6 +1582,7 @@ class SceneVideoPatch(BaseModel):
     woken_at: datetime | None = None
 
     _files = field_validator("files")(_scene_files)
+    _json = field_validator("last_report", "bundle", "plan", "voice_timeline")(_scene_json)
     _utc = field_validator("woken_at")(lambda v: None if v is None else _as_utc(v))
 
     @model_validator(mode="after")

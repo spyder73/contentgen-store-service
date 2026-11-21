@@ -14,7 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import SceneVideo
 from ..schemas import SCENE_VIDEO_LIMIT, SceneVideoIn, SceneVideoPatch
+from .chat import _owned_thread
 from .credits import _lock_user_row
+from .media import _get_owned
 
 LIST_MAX = 50
 BY_STATUS_MAX = 500
@@ -39,7 +41,25 @@ async def _owned(session: AsyncSession, user_id: str, video_id: str) -> SceneVid
     ).scalar_one_or_none()
 
 
+async def _check_references(
+    session: AsyncSession, user_id: str, thread_id: str | None, media_ids: list[str | None]
+) -> None:
+    """Every referenced chat thread and media row must be the user's own (else 404 ``not_found``)."""
+    if thread_id is not None and await _owned_thread(session, user_id, thread_id) is None:
+        raise SceneVideoError(404, "not_found")
+    for media_id in media_ids:
+        if media_id is None:
+            continue
+        try:
+            mid = str(uuid.UUID(media_id))
+        except (ValueError, AttributeError, TypeError):
+            raise SceneVideoError(404, "not_found")
+        if await _get_owned(session, mid, user_id) is None:
+            raise SceneVideoError(404, "not_found")
+
+
 async def create(session: AsyncSession, user_id: str, payload: SceneVideoIn) -> SceneVideo:
+    await _check_references(session, user_id, payload.thread_id, [])
     await _lock_user_row(session, user_id)
     held = (
         await session.execute(select(func.count()).select_from(SceneVideo).where(SceneVideo.user_id == user_id))
@@ -82,7 +102,20 @@ async def patch(session: AsyncSession, user_id: str, video_id: str, payload: Sce
     row = await _owned(session, user_id, video_id)
     if row is None:
         return None
-    for name in payload.model_fields_set:
+    sent = payload.model_fields_set
+    bundle = payload.bundle if "bundle" in sent else None
+    bundle_media = bundle.get("media_id") if bundle else None
+    await _check_references(
+        session,
+        user_id,
+        payload.thread_id if "thread_id" in sent else None,
+        [
+            payload.narration_media_id if "narration_media_id" in sent else None,
+            payload.final_media_id if "final_media_id" in sent else None,
+            bundle_media if bundle_media is not None else None,
+        ],
+    )
+    for name in sent:
         setattr(row, name, getattr(payload, name))
     await session.commit()
     await session.refresh(row)

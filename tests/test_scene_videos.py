@@ -10,12 +10,13 @@ from typing import get_args
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import event
+from sqlalchemy.schema import CreateTable
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.db import get_session
 from app.fastapi_app import create_fastapi_app
-from app.models import SceneVideo
+from app.models import ClipPrompt, MediaItem, RenderTemplate, SceneVideo
 from app.schemas import ChatAction
 from tests.test_chat import SECRET, USER_A, USER_B, Env, _consume_body, _create_tables, _h
 
@@ -34,6 +35,9 @@ def env(tmp_path, monkeypatch):
     async def create() -> None:
         await _create_tables(engine)
         async with engine.begin() as conn:
+            for table in (RenderTemplate, ClipPrompt, MediaItem):  # the media table's own dialect-specific defaults
+                ddl = str(CreateTable(table.__table__).compile(dialect=conn.dialect))
+                await conn.exec_driver_sql(ddl.replace("'{}'::jsonb", "'{}'"))
             await conn.run_sync(lambda c: SceneVideo.__table__.create(c))
 
     asyncio.run(create())
@@ -80,12 +84,12 @@ def test_another_users_video_is_404(env):
 
 def test_patch_moves_the_row_along_and_null_clears(env):
     vid = _mk(env)["id"]
-    bundle = {"media_id": "m1", "sha256": "ab", "image_ref": "img"}
-    r = _patch(env, vid, status="built", files={"a.tsx": "x"}, bundle=bundle, session_id="s1",
+    bundle = {"sha256": "ab", "image_ref": "img"}
+    r = _patch(env, vid, status="built", files={"manifest.ts": "x"}, bundle=bundle, session_id="s1",
                woken_at="2026-11-21T10:00:00Z")
     assert r.status_code == 200, r.text
     out = r.json()
-    assert out["status"] == "built" and out["files"] == {"a.tsx": "x"} and out["bundle"] == bundle
+    assert out["status"] == "built" and out["files"] == {"manifest.ts": "x"} and out["bundle"] == bundle
     assert out["woken_at"].startswith("2026-11-21T10:00:00")
     cleared = _patch(env, vid, session_id=None, woken_at=None).json()
     assert cleared["session_id"] is None and cleared["woken_at"] is None
@@ -94,16 +98,16 @@ def test_patch_moves_the_row_along_and_null_clears(env):
 
 def test_patch_validation(env):
     vid = _mk(env)["id"]
-    assert _patch(env, vid, files={f"f{i}.tsx": "x" for i in range(49)}).status_code == 422
-    assert _patch(env, vid, files={f"f{i}.tsx": "x" for i in range(48)}).status_code == 200
+    assert _patch(env, vid, files={f"fixtures/f{i}.json": "x" for i in range(49)}).status_code == 422
+    assert _patch(env, vid, files={f"fixtures/f{i}.json": "x" for i in range(48)}).status_code == 200
     assert _patch(env, vid, status="weird").status_code == 422
     assert _patch(env, vid, status=None).status_code == 422
     assert _patch(env, vid, user_id=USER_B).status_code == 422
-    assert _patch(env, vid, files={"a": "x" * (64 * 1024 + 1)}).status_code == 422
-    assert _patch(env, vid, files={"a": "x" * (64 * 1024)}).status_code == 200
-    nine = {f"f{i}": "x" * (64 * 1024) for i in range(9)}
+    assert _patch(env, vid, files={"schema.ts": "x" * (64 * 1024 + 1)}).status_code == 422
+    assert _patch(env, vid, files={"schema.ts": "x" * (64 * 1024 - len("schema.ts"))}).status_code == 200
+    nine = {f"fixtures/f{i}.json": "x" * (64 * 1024 - 16) for i in range(9)}
     assert _patch(env, vid, files=nine).status_code == 422  # 576 KiB in all
-    assert _patch(env, vid, files={f"f{i}": "x" * (64 * 1024) for i in range(8)}).status_code == 200  # exactly 512 KiB
+    assert _patch(env, vid, files={f"fixtures/f{i}.json": "x" * (64 * 1024 - len(f"fixtures/f{i}.json")) for i in range(8)}).status_code == 200  # exactly 512 KiB
 
 
 def test_the_501st_create_is_409(env):
@@ -149,3 +153,60 @@ def test_a_scene_approval_row_is_accepted(env, action):
     assert (stored["action"], stored["status"]) == (action, "approved")
     r = env.consume(_consume_body(thread_id, token, action=action, subject=subject, needed_usd=0))
     assert r.status_code == 200 and r.json()["status"] == "used"
+
+
+def _media(env: Env, user: str) -> str:
+    import uuid
+
+    mid = str(uuid.uuid4())
+
+    async def add() -> None:
+        async with env.factory() as s:
+            s.add(MediaItem(id=mid, user_id=user, type="audio", prompt="p"))
+            await s.commit()
+
+    asyncio.run(add())
+    return mid
+
+
+def test_file_paths_must_be_package_paths_and_key_bytes_count(env):
+    vid = _mk(env)["id"]
+    for bad in ("../x.ts", "/abs.ts", "lib/../x.ts", "random.txt", "fixtures/constructor.json"):
+        assert _patch(env, vid, files={bad: "x"}).status_code == 422, bad
+    # the key's bytes count toward the per-file cap
+    assert _patch(env, vid, files={"schema.ts": "x" * (64 * 1024 - 8)}).status_code == 422
+
+
+def test_json_fields_are_capped_at_2_mib(env):
+    vid = _mk(env)["id"]
+    big = {"k": "x" * (2 * 1024 * 1024)}
+    for name in ("plan", "last_report", "bundle", "voice_timeline"):
+        assert _patch(env, vid, **{name: big}).status_code == 422, name
+    assert _patch(env, vid, plan={"k": "x" * 1000}).status_code == 200
+
+
+def test_another_users_thread_is_404_on_create_and_patch(env):
+    theirs = env.thread(USER_B)["id"]
+    r = env.client.post(f"/v1/users/{USER_A}/scene-videos", json={"thread_id": theirs}, headers=_h())
+    assert r.status_code == 404 and r.json()["detail"] == "not_found"
+    vid = _mk(env)["id"]
+    assert _patch(env, vid, thread_id=theirs).status_code == 404
+    mine = env.thread(USER_A)["id"]
+    assert _mk(env, thread_id=mine)["thread_id"] == mine
+    assert _patch(env, vid, thread_id=mine).status_code == 200
+
+
+def test_media_references_must_be_the_users_own(env):
+    vid = _mk(env)["id"]
+    theirs, mine = _media(env, USER_B), _media(env, USER_A)
+    for body in (
+        {"narration_media_id": theirs},
+        {"final_media_id": theirs},
+        {"bundle": {"media_id": theirs, "sha256": "ab", "image_ref": "i"}},
+        {"narration_media_id": "not-a-uuid"},
+    ):
+        r = _patch(env, vid, **body)
+        assert r.status_code == 404 and r.json()["detail"] == "not_found", body
+    ok = _patch(env, vid, narration_media_id=mine, final_media_id=mine, bundle={"media_id": mine, "sha256": "ab"})
+    assert ok.status_code == 200 and ok.json()["narration_media_id"] == mine
+    assert _patch(env, vid, narration_media_id=None).status_code == 200
