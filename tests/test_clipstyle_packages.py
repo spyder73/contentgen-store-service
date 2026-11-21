@@ -331,7 +331,7 @@ def test_status_route_forwards_and_maps_conflicts(client):
     assert m.call_args.kwargs == {"user_id": UID, "validation_report_json": None, "preview_url": "/v1/media/m/file"}
     for detail in ("invalid_transition:approved->draft", "package_immutable", "package_version_already_approved",
                    "package_id_taken", "validation_report_stale", "validation_report_not_ok",
-                   "validation_report_contract_version"):
+                   "validation_report_contract_version", "validation_report_changed"):
         with patch("app.stores.clipstyle_packages.set_package_status", new=AsyncMock(side_effect=ValueError(detail))):
             resp = client.patch("/v1/render-templates/tpl-1/status", headers=HEADERS, json={"status": "draft"})
         assert (resp.status_code, resp.json()["detail"]) == (409, detail)
@@ -916,3 +916,24 @@ def test_archiving_keeps_the_media_ids_when_the_delete_fails(db):
     assert row.status == "archived"
     assert row.validation_report_json == {"orphaned_media": [sheet]}
     assert _media_present(db, [sheet]) == {sheet}  # cleanup failed (logged), but kept for a later sweep
+
+
+def test_approve_with_a_report_other_than_the_stored_one_is_refused():
+    """A re-validation replaced the report the caller read: the approve must not overwrite it."""
+    row = _row(status="validated", validation_report_json=OK)
+    newer = {**OK, "note": "a newer report"}
+    session = _session(row)
+    with patch.object(cp, "drop_stale_preview_media", new=AsyncMock()) as drop:
+        with pytest.raises(ValueError, match="^validation_report_changed$"):
+            asyncio.run(cp.set_package_status(session, "tpl-1", "approved", user_id=UID, validation_report_json=newer))
+    assert (row.status, row.validation_report_json, row.approved_at) == ("validated", OK, None)
+    drop.assert_not_awaited()
+    session.commit.assert_not_awaited()
+
+
+def test_approve_with_the_stored_report_still_approves():
+    row = _row(status="validated", validation_report_json=OK)
+    with patch.object(cp, "_template_out", side_effect=lambda r: r):
+        out = asyncio.run(cp.set_package_status(_session(row), "tpl-1", "approved", user_id=UID, validation_report_json=dict(OK)))
+    assert out.status == "approved" and isinstance(out.approved_at, datetime)
+    assert out.validation_report_json == OK

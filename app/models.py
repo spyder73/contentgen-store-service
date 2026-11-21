@@ -1040,7 +1040,8 @@ class ChatApproval(Base):
         CheckConstraint(
             "action IN ('run.start', 'run.continue', 'image.generate', 'clip.render', "
             "'plan.approve', 'frames.approve', 'graph.extend', 'sourcing.run', 'production.budget', 'playbook.save', "
-            "'routine.save', 'routine.delete')",
+            "'routine.save', 'routine.delete', "
+            "'clipstyle.build', 'clipstyle.edit', 'clipstyle.save', 'clipstyle.publish')",
             name="ck_chat_approvals_action",
         ),
         CheckConstraint(

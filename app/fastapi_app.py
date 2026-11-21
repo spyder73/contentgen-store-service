@@ -205,6 +205,7 @@ _TEMPLATE_CONFLICTS = (
     "package_id_taken",
     "validation_report_not_ok",
     "validation_report_stale",
+    "validation_report_changed",
     "validation_report_contract_version",
     "render_template_id_taken",
     "package_not_approved",

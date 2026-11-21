@@ -36,7 +36,8 @@ ACTIONS_0045 = (
     "'graph.extend', 'sourcing.run', 'production.budget'"
 )
 ACTIONS_0046 = f"{ACTIONS_0045}, 'playbook.save'"
-ACTIONS_0050 = f"{ACTIONS_0046}, 'routine.save', 'routine.delete'"  # the live set (routines, 0050)
+ACTIONS_0050 = f"{ACTIONS_0046}, 'routine.save', 'routine.delete'"
+ACTIONS_0051 = f"{ACTIONS_0050}, 'clipstyle.build', 'clipstyle.edit', 'clipstyle.save', 'clipstyle.publish'"  # the live set (0051)
 
 SAVE = {
     "name": "Carousel",
@@ -341,9 +342,9 @@ def test_the_models_declare_what_the_migration_makes():
     ):
         assert f"CONSTRAINT {name} CHECK ({modelled[(table, name)]})" in sql, name
     action = "ck_chat_approvals_action"
-    # 0050 took the model's action list over from 0046; 0046's own DDL keeps its list.
+    # 0050 took the model's action list over from 0046 (0051 extended it); 0046's own DDL keeps its list.
     assert f"ADD CONSTRAINT {action} CHECK (action IN ({ACTIONS_0046}))" in sql
-    assert modelled[("chat_approvals", action)] == f"action IN ({ACTIONS_0050})"
+    assert modelled[("chat_approvals", action)] == f"action IN ({ACTIONS_0051})"
     for table in (Playbook.__table__, PlaybookVersion.__table__):
         assert all(f"{c.name} " in sql for c in table.columns), table.name
     uniques = {
@@ -357,7 +358,7 @@ def test_the_models_declare_what_the_migration_makes():
 
 
 def test_the_schema_literal_matches_the_check():
-    assert ", ".join(f"'{a}'" for a in get_args(ChatAction)) == ACTIONS_0050
+    assert ", ".join(f"'{a}'" for a in get_args(ChatAction)) == ACTIONS_0051
 
 
 # ── a seed: the text a first save replaces ───────────────────────────────────
@@ -440,3 +441,12 @@ def test_a_seeded_first_save_is_one_transaction(env):
     assert env.client.get(_url(), headers=_h()).status_code == 404
     # Nothing is left in the way of the next try.
     assert _saved(env, **SEED)["version"] == 2
+
+
+def test_an_approval_of_each_clipstyle_action_is_accepted(env):
+    for action in ("clipstyle.build", "clipstyle.edit", "clipstyle.save", "clipstyle.publish"):
+        thread_id, approval_id, token = env.approved(action=action, subject="s", amount_usd=0)
+        stored = env.client.get(f"/v1/chat/approvals/{approval_id}", headers=_h()).json()
+        assert (stored["action"], stored["status"]) == (action, "approved")
+        r = env.consume(_consume_body(thread_id, token, action=action, subject="s", needed_usd=0))
+        assert r.status_code == 200 and r.json()["status"] == "used", action

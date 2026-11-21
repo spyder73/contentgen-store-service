@@ -947,10 +947,11 @@ ChatRole = Literal["user", "operator"]
 # 0043 added ``node`` / ``event`` (the director's live graph) and the three director approvals.
 ChatKind = Literal["text", "tool", "approval", "run", "media", "error", "node", "event"]
 # 0044 added sourcing.run (the chat's paid searches); 0045 added production.budget (a production's budget card);
-# 0046 added playbook.save (the card an agent's playbook edit waits behind).
+# 0046 added playbook.save (the card an agent's playbook edit waits behind); 0051 the four clipstyle.* actions.
 ChatAction = Literal[
     "run.start", "run.continue", "image.generate", "clip.render", "plan.approve", "frames.approve", "graph.extend",
     "sourcing.run", "production.budget", "playbook.save", "routine.save", "routine.delete",
+    "clipstyle.build", "clipstyle.edit", "clipstyle.save", "clipstyle.publish",
 ]
 ChatApprovalStatus = Literal["pending", "approved", "used", "declined", "expired"]
 
