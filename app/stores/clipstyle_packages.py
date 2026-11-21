@@ -319,9 +319,17 @@ async def set_package_status(
     no-op retry, same as the report."""
     if validation_report_json is not None:
         _check_report_size(validation_report_json)
-    row = await session.get(RenderTemplate, id)
+    row = await session.get(RenderTemplate, id, with_for_update=True)
     if row is None or row.user_id != user_id or row.kind != PACKAGE_KIND:
         return None
+    if (
+        target == "approved"
+        and row.status == "validated"
+        and validation_report_json is not None
+        and validation_report_json != row.validation_report_json
+    ):
+        # The caller read an older report; a re-validation replaced it since. Never overwrite the newer one.
+        raise ValueError("validation_report_changed")
     report = validation_report_json if validation_report_json is not None else (row.validation_report_json or {})
     new_status = next_package_status(row.status, target, report=report, files=(row.config or {}).get("files") or {})
     new_preview_url = None if preview_url == "" else preview_url
