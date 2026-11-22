@@ -70,9 +70,9 @@ def _create_tables(sync_conn):
         sync_conn.exec_driver_sql(ddl.replace("'{}'::jsonb", "'{}'"))
 
 
-def _row(id_, *, status="approved", style="miniCard", version=1, user_id=OWNER, visibility="private", extra=None):
+def _row(id_, *, status="approved", style="miniCard", version=1, user_id=OWNER, visibility="private", extra=None, kind="carousel"):
     now = datetime(2026, 10, 10, 12, 0, tzinfo=timezone.utc)
-    config = {"manifest": {"id": style, "version": version, "kind": "carousel"}, "files": {"manifest.ts": "m"}, **(extra or {})}
+    config = {"manifest": {"id": style, "version": version, "kind": kind}, "files": {"manifest.ts": "m"}, **(extra or {})}
     return dict(id=id_, user_id=user_id, name=id_, kind="clipstyle_package", source="agent_generated", status=status,
                 visibility=visibility, config=config, created_at=now, updated_at=now)
 
@@ -272,6 +272,11 @@ class TestResolvePackage:
         rows = [_row("v1", visibility="revoked", extra={"implements": "technologyCarousel@1"})]
         out = _run(rows, lambda s: render_store.resolve_package(s, style="miniCard", version=None, caller=OWNER))
         assert (out.visibility, out.implements) == ("revoked", "technologyCarousel@1")
+
+    @pytest.mark.parametrize("kind", ["carousel", "video", "scene"])
+    def test_answers_the_package_kind(self, kind):
+        out = _run([_row("v1", kind=kind)], lambda s: render_store.resolve_package(s, style="miniCard", version=None, caller=OWNER))
+        assert out.kind == kind
 
     @pytest.mark.parametrize("rows,version", [
         ([], None),
