@@ -63,6 +63,11 @@ def test_vectors_include_the_ordering_and_surrogate_cases():
     assert {"sort-order-utf16", "sort-order-utf16-contents", "surrogate-pair-and-lone", "lone-surrogate-over-limit"} <= names
 
 
+@pytest.mark.parametrize("kind", ["carousel", "video", "scene"])
+def test_check_package_config_accepts_every_package_kind(kind):
+    cp.check_package_config({"manifest": {"id": "miniCard", "version": 1, "kind": kind}, "files": FILES})
+
+
 @pytest.mark.parametrize(
     "config, reason",
     [
@@ -72,6 +77,7 @@ def test_vectors_include_the_ordering_and_surrogate_cases():
         ({"manifest": {"id": "miniCard", "version": 0, "kind": "carousel"}, "files": FILES}, "manifest.version"),
         ({"manifest": {"id": "miniCard", "version": "1", "kind": "carousel"}, "files": FILES}, "manifest.version"),
         ({"manifest": {"id": "miniCard", "version": 1, "kind": "gif"}, "files": FILES}, "manifest.kind"),
+        ({"manifest": {"id": "miniCard", "version": 1, "kind": "slides"}, "files": FILES}, "manifest.kind"),
         ({"manifest": {"id": "miniCard", "version": 1, "kind": "video"}, "files": {}}, "files"),
         ({"manifest": {"id": "miniCard", "version": 1, "kind": "video"}, "files": {"a": 1}}, "files"),
         # M2 (final fix wave): the same path/count/size limits the runner's check_files enforces,

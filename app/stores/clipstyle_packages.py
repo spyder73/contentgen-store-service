@@ -96,7 +96,7 @@ def check_package_config(config: dict) -> None:
     version = manifest.get("version")
     if isinstance(version, bool) or not isinstance(version, int) or version < 1:
         raise ValueError("invalid_package_config:manifest.version")
-    if manifest.get("kind") not in ("carousel", "video"):
+    if manifest.get("kind") not in ("carousel", "video", "scene"):
         raise ValueError("invalid_package_config:manifest.kind")
     files = config.get("files")
     if not isinstance(files, dict) or not files or not all(isinstance(k, str) and isinstance(v, str) for k, v in files.items()):

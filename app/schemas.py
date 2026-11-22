@@ -867,6 +867,7 @@ class ClipstylePackageResolveOut(BaseModel):
     has_bundle: bool
     image_refs: list[str]
     implements: str | None = None
+    kind: str = ""  # the manifest kind (carousel | video | scene); "" when the row has none
 
 
 class VisibilityPatch(BaseModel):

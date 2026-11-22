@@ -112,6 +112,7 @@ async def resolve_package(
         RenderTemplate.visibility,
         config[("manifest", "version")].as_string().label("version"),
         config["implements"].as_string().label("implements"),
+        config[("manifest", "kind")].as_string().label("manifest_kind"),
     ).where(
         RenderTemplate.kind == PACKAGE_KIND,
         RenderTemplate.status == "approved",
@@ -134,6 +135,7 @@ async def resolve_package(
         has_bundle=bool(bundles),
         image_refs=[b.image_ref for b in bundles],
         implements=implements if isinstance(implements, str) else None,
+        kind=row.manifest_kind if isinstance(row.manifest_kind, str) else "",
     )
 
 
