@@ -37,7 +37,8 @@ ACTIONS_0045 = (
 )
 ACTIONS_0046 = f"{ACTIONS_0045}, 'playbook.save'"
 ACTIONS_0050 = f"{ACTIONS_0046}, 'routine.save', 'routine.delete'"
-ACTIONS_0051 = f"{ACTIONS_0050}, 'clipstyle.build', 'clipstyle.edit', 'clipstyle.save', 'clipstyle.publish'"  # the live set (0051)
+ACTIONS_0051 = f"{ACTIONS_0050}, 'clipstyle.build', 'clipstyle.edit', 'clipstyle.save', 'clipstyle.publish'"
+ACTIONS_0052 = f"{ACTIONS_0051}, 'scene.build', 'scene.render'"  # the live set (0052)
 
 SAVE = {
     "name": "Carousel",
@@ -342,9 +343,9 @@ def test_the_models_declare_what_the_migration_makes():
     ):
         assert f"CONSTRAINT {name} CHECK ({modelled[(table, name)]})" in sql, name
     action = "ck_chat_approvals_action"
-    # 0050 took the model's action list over from 0046 (0051 extended it); 0046's own DDL keeps its list.
+    # 0050 took the model's action list over from 0046 (0051 and 0052 extended it); 0046's own DDL keeps its list.
     assert f"ADD CONSTRAINT {action} CHECK (action IN ({ACTIONS_0046}))" in sql
-    assert modelled[("chat_approvals", action)] == f"action IN ({ACTIONS_0051})"
+    assert modelled[("chat_approvals", action)] == f"action IN ({ACTIONS_0052})"
     for table in (Playbook.__table__, PlaybookVersion.__table__):
         assert all(f"{c.name} " in sql for c in table.columns), table.name
     uniques = {
@@ -358,7 +359,7 @@ def test_the_models_declare_what_the_migration_makes():
 
 
 def test_the_schema_literal_matches_the_check():
-    assert ", ".join(f"'{a}'" for a in get_args(ChatAction)) == ACTIONS_0051
+    assert ", ".join(f"'{a}'" for a in get_args(ChatAction)) == ACTIONS_0052
 
 
 # ── a seed: the text a first save replaces ───────────────────────────────────
