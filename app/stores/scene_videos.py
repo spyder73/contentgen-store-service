@@ -8,6 +8,7 @@ secret only.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -122,14 +123,23 @@ async def patch(session: AsyncSession, user_id: str, video_id: str, payload: Sce
     return row
 
 
-async def by_status(session: AsyncSession, status: str) -> list[SceneVideo]:
-    return list(
-        (
-            await session.execute(
-                select(SceneVideo)
-                .where(SceneVideo.status == status)
-                .order_by(SceneVideo.created_at, SceneVideo.id)
-                .limit(BY_STATUS_MAX)
-            )
-        ).scalars()
-    )
+async def by_status(
+    session: AsyncSession,
+    status: str,
+    *,
+    unwoken: bool = False,
+    since: datetime | None = None,
+) -> list[SceneVideo]:
+    """Cross-user rows of one status. Without filters: the oldest BY_STATUS_MAX (the rendering
+    sweep). With ``unwoken`` (woken_at is null) or ``since`` (updated_at >= since): the newest
+    BY_STATUS_MAX, so a boot pass sees recent rows however many old ones exist."""
+    stmt = select(SceneVideo).where(SceneVideo.status == status)
+    if not unwoken and since is None:
+        stmt = stmt.order_by(SceneVideo.created_at, SceneVideo.id)
+    else:
+        if unwoken:
+            stmt = stmt.where(SceneVideo.woken_at.is_(None))
+        if since is not None:
+            stmt = stmt.where(SceneVideo.updated_at >= since)
+        stmt = stmt.order_by(SceneVideo.updated_at.desc(), SceneVideo.id)
+    return list((await session.execute(stmt.limit(BY_STATUS_MAX))).scalars())

@@ -1705,8 +1705,16 @@ def create_fastapi_app() -> FastAPI:
         return _chat_found(row, "scene_video_not_found")
 
     @app.get("/v1/internal/scene-videos", response_model=list[SceneVideoOut])
-    async def internal_scene_videos_handler(status: SceneVideoStatus, session: SessionDep) -> Any:
-        return await scene_videos.by_status(session, status)
+    async def internal_scene_videos_handler(
+        status: SceneVideoStatus,
+        session: SessionDep,
+        woken: bool | None = Query(None),
+        since: datetime | None = Query(None),
+    ) -> Any:
+        # woken=false: only rows never woken; since: only rows updated at or after it (a naive time is UTC).
+        if since is not None and since.tzinfo is None:
+            since = since.replace(tzinfo=timezone.utc)
+        return await scene_videos.by_status(session, status, unwoken=woken is False, since=since)
 
     # ── routines ─────────────────────────────────────────────────────────────
     #

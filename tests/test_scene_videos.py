@@ -5,6 +5,8 @@ Same harness as ``test_routines.py``.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 from typing import get_args
 
 import pytest
@@ -139,6 +141,36 @@ def test_internal_list_is_every_users_rendering_rows_behind_the_secret(env):
     assert {v["id"] for v in r.json()} == {a, b}
     assert env.client.get("/v1/internal/scene-videos?status=weird", headers=_h()).status_code == 422
     assert env.client.get("/v1/internal/scene-videos?status=rendering").status_code == 401
+
+
+def _set_updated(env: Env, vid: str, when: datetime) -> None:
+    async def go() -> None:
+        async with env.factory() as s:
+            row = await s.get(SceneVideo, vid)
+            row.updated_at = when
+            await s.commit()
+
+    asyncio.run(go())
+
+
+def test_internal_list_filters_unwoken_and_recent_newest_first(env):
+    now = datetime.now(timezone.utc)
+    old, mid, new, told = (_mk(env)["id"] for _ in range(4))
+    for v in (old, mid, new, told):
+        _patch(env, v, status="ready")
+    _patch(env, told, status="ready", woken_at=now.isoformat())
+    _set_updated(env, old, now - timedelta(days=3))
+    _set_updated(env, mid, now - timedelta(hours=2))
+    _set_updated(env, new, now - timedelta(hours=1))
+    _set_updated(env, told, now)
+    url = "/v1/internal/scene-videos?status=ready"
+    ids = lambda q: [v["id"] for v in env.client.get(url + q, headers=_h()).json()]
+    assert ids("&woken=false") == [new, mid, old]  # told excluded, newest first
+    since = quote((now - timedelta(hours=24)).isoformat())
+    assert ids(f"&woken=false&since={since}") == [new, mid]  # old excluded
+    assert ids(f"&since={since}") == [told, new, mid]
+    assert env.client.get(url + "&since=yesterday", headers=_h()).status_code == 422
+    assert set(ids("")) == {old, mid, new, told}  # no params: as before
 
 
 def test_the_action_literal_ends_with_the_scene_actions():
