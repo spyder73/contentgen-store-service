@@ -1611,7 +1611,6 @@ class SceneVideoPatch(BaseModel):
     final_media_id: str | None = Field(default=None, max_length=120)
     session_id: str | None = Field(default=None, max_length=200)
     woken_at: datetime | None = None
-    clear: list[Literal["voice_takes"]] = Field(default_factory=list, max_length=1)
 
     _takes = field_validator("voice_takes")(_voice_takes)
     _files = field_validator("files")(_scene_files)
