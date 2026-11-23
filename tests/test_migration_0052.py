@@ -44,6 +44,6 @@ def test_the_models_match_the_migration():
     assert "'draft', 'voiced', 'building', 'built', 'rendering', 'ready', 'failed'" in video["ck_scene_videos_status"]
     assert {c.name for c in SceneVideo.__table__.columns} == {
         "id", "user_id", "thread_id", "style_ref", "title", "status", "files", "files_hash", "last_report",
-        "bundle", "narration_media_id", "voice_timeline", "plan", "final_media_id", "session_id", "woken_at",
+        "bundle", "narration_media_id", "voice_timeline", "voice_takes", "plan", "final_media_id", "session_id", "woken_at",
         "created_at", "updated_at",
     }

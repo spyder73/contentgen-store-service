@@ -64,8 +64,8 @@ def test_pipeline_template_prompt_and_snapshot_routes_are_gone(client):
     assert {"GET", "PUT"} <= methods
 
 
-def test_alembic_still_has_one_head_0052():
+def test_alembic_still_has_one_head_0053():
     root = Path(__file__).resolve().parents[1]
     out = subprocess.run([sys.executable, "-m", "alembic", "heads"], cwd=root, capture_output=True, text=True, check=True)
     heads = [l for l in out.stdout.splitlines() if l.strip()]
-    assert len(heads) == 1 and heads[0].startswith("0052"), out.stdout
+    assert len(heads) == 1 and heads[0].startswith("0053"), out.stdout

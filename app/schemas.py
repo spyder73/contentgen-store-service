@@ -4,7 +4,7 @@ import re
 import uuid
 from datetime import date, datetime, timezone
 import json
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -1556,6 +1556,35 @@ def _scene_files(value: dict[str, str] | None) -> dict[str, str] | None:
     return value
 
 
+VOICE_TAKES_MAX = 40
+
+
+class VoiceTake(BaseModel):
+    """One narration chunk: lines ``first``..``last`` voiced as one take."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    first: int = Field(ge=0, le=VOICE_TAKES_MAX - 1)
+    last: int = Field(ge=0, le=VOICE_TAKES_MAX - 1)
+    texts: list[Annotated[str, Field(max_length=500)]]
+    voice: str = Field(max_length=200)
+    media_id: uuid.UUID
+
+    @model_validator(mode="after")
+    def _span(self) -> "VoiceTake":
+        if self.first > self.last:
+            raise ValueError("first is after last")
+        if len(self.texts) != self.last - self.first + 1:
+            raise ValueError("texts must hold one line per index")
+        return self
+
+
+def _voice_takes(value: list[VoiceTake] | None) -> list[VoiceTake] | None:
+    if value is not None and len(value) > VOICE_TAKES_MAX:
+        raise ValueError(f"at most {VOICE_TAKES_MAX} takes")
+    return value
+
+
 class SceneVideoIn(BaseModel):
     thread_id: str | None = Field(default=None, max_length=80)
     style_ref: str = Field(default="sceneStarter@1", min_length=1, max_length=120)
@@ -1577,11 +1606,13 @@ class SceneVideoPatch(BaseModel):
     bundle: dict[str, Any] | None = None
     narration_media_id: str | None = Field(default=None, max_length=120)
     voice_timeline: dict[str, Any] | None = None
+    voice_takes: list[VoiceTake] | None = None
     plan: dict[str, Any] | None = None
     final_media_id: str | None = Field(default=None, max_length=120)
     session_id: str | None = Field(default=None, max_length=200)
     woken_at: datetime | None = None
 
+    _takes = field_validator("voice_takes")(_voice_takes)
     _files = field_validator("files")(_scene_files)
     _json = field_validator("last_report", "bundle", "plan", "voice_timeline")(_scene_json)
     _utc = field_validator("woken_at")(lambda v: None if v is None else _as_utc(v))
@@ -1609,6 +1640,7 @@ class SceneVideoOut(BaseModel):
     bundle: dict[str, Any] | None = None
     narration_media_id: str | None = None
     voice_timeline: dict[str, Any] | None = None
+    voice_takes: list[VoiceTake] | None = None
     plan: dict[str, Any] | None = None
     final_media_id: str | None = None
     session_id: str | None = None

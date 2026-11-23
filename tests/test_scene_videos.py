@@ -242,3 +242,60 @@ def test_media_references_must_be_the_users_own(env):
     ok = _patch(env, vid, narration_media_id=mine, final_media_id=mine, bundle={"media_id": mine, "sha256": "ab"})
     assert ok.status_code == 200 and ok.json()["narration_media_id"] == mine
     assert _patch(env, vid, narration_media_id=None).status_code == 200
+
+
+def _takes(env: Env):
+    m1, m2 = _media(env, USER_A), _media(env, USER_A)
+    a = {"first": 0, "last": 1, "texts": ["one", "two"], "voice": "v1", "media_id": m1}
+    b = {"first": 2, "last": 2, "texts": ["three"], "voice": "v1", "media_id": m2}
+    return a, b
+
+
+def test_voice_takes_round_trip_null_clears_and_default_null(env):
+    vid = _mk(env)["id"]
+    a, b = _takes(env)
+    assert env.client.get(f"/v1/users/{USER_A}/scene-videos/{vid}", headers=_h()).json()["voice_takes"] is None
+    out = _patch(env, vid, voice_takes=[a, b])
+    assert out.status_code == 200, out.text
+    assert out.json()["voice_takes"] == [a, b]
+    got = env.client.get(f"/v1/users/{USER_A}/scene-videos/{vid}", headers=_h()).json()
+    assert got["voice_takes"] == [a, b]
+    assert _patch(env, vid, voice_takes=None, title="t").json()["voice_takes"] is None
+
+
+def test_voice_take_media_must_be_the_users_own(env):
+    vid = _mk(env)["id"]
+    a, b = _takes(env)
+    assert _patch(env, vid, voice_takes=[a]).status_code == 200
+    theirs = _media(env, USER_B)
+    r = _patch(env, vid, voice_takes=[a, {**b, "media_id": theirs}])
+    assert r.status_code == 404 and r.json()["detail"] == "not_found"
+    got = env.client.get(f"/v1/users/{USER_A}/scene-videos/{vid}", headers=_h()).json()
+    assert got["voice_takes"] == [a]
+    missing = "33333333-3333-4333-8333-333333333333"
+    assert _patch(env, vid, voice_takes=[{**a, "media_id": missing}]).status_code == 404
+
+
+def test_voice_takes_bounds(env):
+    vid = _mk(env)["id"]
+    a, _ = _takes(env)
+    mid = a["media_id"]
+
+    def bad(**over):
+        return _patch(env, vid, voice_takes=[{**a, **over}]).status_code
+
+    one = lambda i: {"first": i % 40, "last": i % 40, "texts": ["x"], "voice": "v", "media_id": mid}
+    assert _patch(env, vid, voice_takes=[one(i) for i in range(40)]).status_code == 200
+    assert _patch(env, vid, voice_takes=[one(i) for i in range(41)]).status_code == 422
+    assert bad(first=2, last=1, texts=["a", "b"]) == 422
+    assert bad(first=-1, last=0, texts=["a", "b"]) == 422
+    assert bad(first=39, last=40, texts=["a", "b"]) == 422
+    assert bad(texts=["only one"]) == 422
+    assert bad(texts=["a", "x" * 501]) == 422
+    assert bad(texts=["a", "x" * 500]) == 200
+    assert bad(voice="v" * 201) == 422
+    assert bad(voice="v" * 200) == 200
+    assert bad(media_id="not-a-uuid") == 422
+    assert bad(extra=1) == 422
+    assert _patch(env, vid, voice_takes=[{"first": 0, "last": 0, "texts": ["a"], "voice": "v"}]).status_code == 422
+    assert _patch(env, vid, voice_takes=[{**a, "first": 0, "last": 39, "texts": ["a"] * 40}]).status_code == 200
