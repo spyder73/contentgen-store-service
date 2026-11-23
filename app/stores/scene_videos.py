@@ -116,8 +116,13 @@ async def patch(session: AsyncSession, user_id: str, video_id: str, payload: Sce
             bundle_media if bundle_media is not None else None,
         ],
     )
-    for name in sent:
-        setattr(row, name, getattr(payload, name))
+    for name in sent - {"clear"}:
+        value = getattr(payload, name)
+        if name == "voice_takes" and value is not None:
+            value = [t.model_dump(mode="json") for t in value]
+        setattr(row, name, value)
+    for name in payload.clear:
+        setattr(row, name, None)
     await session.commit()
     await session.refresh(row)
     return row

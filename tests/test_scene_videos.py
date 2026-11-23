@@ -242,3 +242,46 @@ def test_media_references_must_be_the_users_own(env):
     ok = _patch(env, vid, narration_media_id=mine, final_media_id=mine, bundle={"media_id": mine, "sha256": "ab"})
     assert ok.status_code == 200 and ok.json()["narration_media_id"] == mine
     assert _patch(env, vid, narration_media_id=None).status_code == 200
+
+
+_TAKE_A = {"first": 0, "last": 1, "texts": ["one", "two"], "voice": "v1", "media_id": "11111111-1111-4111-8111-111111111111"}
+_TAKE_B = {"first": 2, "last": 2, "texts": ["three"], "voice": "v1", "media_id": "22222222-2222-4222-8222-222222222222"}
+
+
+def test_voice_takes_round_trip_clear_and_default_null(env):
+    vid = _mk(env)["id"]
+    assert env.client.get(f"/v1/users/{USER_A}/scene-videos/{vid}", headers=_h()).json()["voice_takes"] is None
+    out = _patch(env, vid, voice_takes=[_TAKE_A, _TAKE_B])
+    assert out.status_code == 200, out.text
+    assert out.json()["voice_takes"] == [_TAKE_A, _TAKE_B]
+    got = env.client.get(f"/v1/users/{USER_A}/scene-videos/{vid}", headers=_h()).json()
+    assert got["voice_takes"] == [_TAKE_A, _TAKE_B]
+    cleared = _patch(env, vid, clear=["voice_takes"], title="t")
+    assert cleared.status_code == 200 and cleared.json()["voice_takes"] is None and cleared.json()["title"] == "t"
+    _patch(env, vid, voice_takes=[_TAKE_A])
+    assert _patch(env, vid, voice_takes=None).json()["voice_takes"] is None
+    assert _patch(env, vid, clear=["title"]).status_code == 422
+
+
+def test_voice_takes_bounds(env):
+    vid = _mk(env)["id"]
+
+    def bad(**over):
+        take = {**_TAKE_A, **over}
+        return _patch(env, vid, voice_takes=[take]).status_code
+
+    one = lambda i: {"first": i % 40, "last": i % 40, "texts": ["x"], "voice": "v", "media_id": _TAKE_A["media_id"]}
+    assert _patch(env, vid, voice_takes=[one(i) for i in range(40)]).status_code == 200
+    assert _patch(env, vid, voice_takes=[one(i) for i in range(41)]).status_code == 422
+    assert bad(first=2, last=1, texts=["a", "b"]) == 422
+    assert bad(first=-1, last=0, texts=["a", "b"]) == 422
+    assert bad(first=39, last=40, texts=["a", "b"]) == 422
+    assert bad(texts=["only one"]) == 422
+    assert bad(texts=["a", "x" * 301]) == 422
+    assert bad(texts=["a", "x" * 300]) == 200
+    assert bad(voice="v" * 201) == 422
+    assert bad(voice="v" * 200) == 200
+    assert bad(media_id="not-a-uuid") == 422
+    assert bad(extra=1) == 422
+    assert _patch(env, vid, voice_takes=[{"first": 0, "last": 0, "texts": ["a"], "voice": "v"}]).status_code == 422
+    assert _patch(env, vid, voice_takes=[{**_TAKE_A, "first": 0, "last": 39, "texts": ["a"] * 40}]).status_code == 200
