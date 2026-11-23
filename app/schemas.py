@@ -1647,3 +1647,38 @@ class SceneVideoOut(BaseModel):
     woken_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+
+
+SCENE_EXAMPLES_KEEP = 20
+SCENE_EXAMPLE_PLAN_MAX_BYTES = 65536
+
+
+class SceneStyleExampleIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    style_id: str = Field(min_length=1, max_length=64)
+    style_ref: str = Field(max_length=80)
+    title: str = Field(max_length=200)
+    topic: str = Field(max_length=4000)
+    plan: dict[str, Any]
+
+    @field_validator("plan")
+    @classmethod
+    def _plan_size(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if len(json.dumps(value, separators=(",", ":")).encode("utf-8")) > SCENE_EXAMPLE_PLAN_MAX_BYTES:
+            raise ValueError("over 64 KiB")
+        return value
+
+
+class SceneStyleExampleOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    video_id: str
+    style_id: str
+    style_ref: str
+    title: str
+    topic: str
+    plan: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
