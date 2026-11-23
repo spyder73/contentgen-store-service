@@ -1284,6 +1284,32 @@ class SceneVideo(Base):
     )
 
 
+class SceneStyleExample(Base):
+    """The shot plan of a rendered scene video, kept as an example on its style (migration 0054).
+    One row per video; the store keeps the newest 20 per (user, style). Mirrors 0054."""
+
+    __tablename__ = "scene_style_examples"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
+    user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    style_id: Mapped[str] = mapped_column(Text, nullable=False)
+    style_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    video_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("scene_videos.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    title: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    topic: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    plan: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, onupdate=_now, server_default=func.now()
+    )
+
+    __table_args__ = (Index("ix_scene_style_examples_user_style_updated", "user_id", "style_id", "updated_at"),)
+
+
 class RoutineSpendDay(Base):
     """What a user's routines have spent on one local day (migration 0050); the daily budget's counter."""
 

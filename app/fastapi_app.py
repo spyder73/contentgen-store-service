@@ -77,6 +77,8 @@ from .schemas import (
     RoutinePatch,
     RoutineSpendAdd,
     RoutineSpendReserve,
+    SceneStyleExampleIn,
+    SceneStyleExampleOut,
     SceneVideoIn,
     SceneVideoOut,
     SceneVideoPatch,
@@ -129,6 +131,7 @@ from .stores import (
     system_prompts,
     user_settings,
     routines,
+    scene_style_examples,
     scene_videos,
     video_analyses,
     users,
@@ -1715,6 +1718,25 @@ def create_fastapi_app() -> FastAPI:
         if since is not None and since.tzinfo is None:
             since = since.replace(tzinfo=timezone.utc)
         return await scene_videos.by_status(session, status, unwoken=woken is False, since=since)
+
+    @app.put("/v1/users/{user_id}/scene-style-examples/{video_id}", response_model=SceneStyleExampleOut)
+    async def put_scene_style_example_handler(
+        user_id: str, video_id: str, payload: SceneStyleExampleIn, request: Request, session: SessionDep
+    ) -> Any:
+        try:
+            return await scene_style_examples.put(session, _path_user(request, user_id), video_id, payload)
+        except scene_videos.SceneVideoError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+    @app.get("/v1/users/{user_id}/scene-style-examples", response_model=list[SceneStyleExampleOut])
+    async def list_scene_style_examples_handler(
+        user_id: str,
+        request: Request,
+        session: SessionDep,
+        style_id: str = Query(min_length=1, max_length=64),
+        limit: int = Query(default=20, ge=1, le=20),
+    ) -> Any:
+        return await scene_style_examples.list_for_style(session, _path_user(request, user_id), style_id, limit)
 
     # ── routines ─────────────────────────────────────────────────────────────
     #
