@@ -291,8 +291,8 @@ def test_voice_takes_bounds(env):
     assert bad(first=-1, last=0, texts=["a", "b"]) == 422
     assert bad(first=39, last=40, texts=["a", "b"]) == 422
     assert bad(texts=["only one"]) == 422
-    assert bad(texts=["a", "x" * 301]) == 422
-    assert bad(texts=["a", "x" * 300]) == 200
+    assert bad(texts=["a", "x" * 501]) == 422
+    assert bad(texts=["a", "x" * 500]) == 200
     assert bad(voice="v" * 201) == 422
     assert bad(voice="v" * 200) == 200
     assert bad(media_id="not-a-uuid") == 422

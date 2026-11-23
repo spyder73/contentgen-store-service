@@ -1566,7 +1566,7 @@ class VoiceTake(BaseModel):
 
     first: int = Field(ge=0, le=VOICE_TAKES_MAX - 1)
     last: int = Field(ge=0, le=VOICE_TAKES_MAX - 1)
-    texts: list[Annotated[str, Field(max_length=300)]]
+    texts: list[Annotated[str, Field(max_length=500)]]
     voice: str = Field(max_length=200)
     media_id: uuid.UUID
 
