@@ -478,6 +478,34 @@ def test_newest_messages_are_the_threads_tail_in_seq_order(env):
     assert (r.status_code, r.json()["detail"]) == (404, "thread_not_found")
 
 
+def test_newest_messages_at_their_boundaries(env):
+    empty = env.thread()
+    url = f"/v1/chat/threads/{empty['id']}/messages/newest"
+    r = env.client.get(url + "?limit=3", headers=_h())
+    assert (r.status_code, r.json()) == (200, [])  # an empty thread is an empty page, not a 404
+
+    t = env.thread()
+    for n in range(1, 4):
+        env.message(t["id"], text=f"m{n}")
+    url = f"/v1/chat/threads/{t['id']}/messages/newest"
+
+    def seqs(query: str) -> list[int]:
+        r = env.client.get(url + query, headers=_h())
+        assert r.status_code == 200, r.text
+        return [m["seq"] for m in r.json()]
+
+    # before_seq is exclusive: nothing comes before seq 1, nor before 0.
+    assert seqs("?limit=3&before_seq=1") == []
+    assert seqs("?limit=3&before_seq=0") == []
+    assert seqs("?limit=3&before_seq=2") == [1]
+    # Exactly `limit` messages: all of them; one fewer than there are: the newest.
+    assert seqs("?limit=3") == [1, 2, 3]
+    assert seqs("?limit=2") == [2, 3]
+    # The limit is clamped to 1..1000, as on the forward page.
+    assert seqs("?limit=0") == [3]
+    assert seqs("?limit=5000") == [1, 2, 3]
+
+
 def test_a_message_has_a_role_kind_text_and_data(env):
     t = env.thread()
     m = env.message(t["id"], role="operator", kind="tool", text="", data={"name": "x", "args": {"n": 1}})
