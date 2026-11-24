@@ -117,6 +117,16 @@ async def _owned_thread(session: AsyncSession, user_id: str, thread_id: str) -> 
     ).scalar_one_or_none()
 
 
+async def _owned_thread_id(session: AsyncSession, user_id: str, thread_id: str) -> str | None:
+    """The thread's id when it is the user's: an ownership check that loads none of the row."""
+    tid = _uuid(thread_id)
+    if tid is None:
+        return None
+    return (
+        await session.execute(select(ChatThread.id).where(ChatThread.id == tid, ChatThread.user_id == user_id))
+    ).scalar_one_or_none()
+
+
 async def create_thread(session: AsyncSession, user_id: str, payload: ChatThreadIn) -> ChatThread:
     # Idempotent on a caller-minted id: a retried POST returns the thread already stored.
     # Another user's id is a conflict, never a read of that row.
@@ -186,6 +196,38 @@ async def list_threads(
 
 async def get_thread(session: AsyncSession, user_id: str, thread_id: str) -> ChatThread | None:
     return await _owned_thread(session, user_id, thread_id)
+
+
+async def get_thread_summary(session: AsyncSession, user_id: str, thread_id: str) -> ChatThread | None:
+    """The thread without its transcript and known media, neither of which is loaded: what a reader that
+    shows the thread needs (opening it in the browser). The operator's own read of the full row is get_thread."""
+    tid = _uuid(thread_id)
+    if tid is None:
+        return None
+    query = (
+        select(ChatThread)
+        .options(defer(ChatThread.transcript), defer(ChatThread.known_media))
+        .where(ChatThread.id == tid, ChatThread.user_id == user_id)
+    )
+    return (await session.execute(query)).scalar_one_or_none()
+
+
+async def mark_thread_read(session: AsyncSession, user_id: str, thread_id: str) -> ChatThread | None:
+    """Clears the thread's unread mark, alone: opening a thread is not activity, so updated_at is kept and the
+    thread keeps its place in the list, and a thread already read is not written. The thread comes back as
+    get_thread_summary reads it: the transcript and known media are neither loaded nor returned. Another user's
+    thread is not touched (None)."""
+    tid = _uuid(thread_id)
+    if tid is None:
+        return None
+    await session.execute(
+        update(ChatThread)
+        .where(ChatThread.id == tid, ChatThread.user_id == user_id, ChatThread.unread.is_(True))
+        .values(unread=False, updated_at=ChatThread.updated_at)
+        .execution_options(synchronize_session=False)
+    )
+    await session.commit()
+    return await get_thread_summary(session, user_id, tid)
 
 
 async def patch_thread(
@@ -302,18 +344,38 @@ async def create_message(
 
 
 async def list_messages(
-    session: AsyncSession, user_id: str, thread_id: str, *, after_seq: int = 0, limit: int = LIST_MESSAGES_DEFAULT
+    session: AsyncSession,
+    user_id: str,
+    thread_id: str,
+    *,
+    after_seq: int = 0,
+    before_seq: int | None = None,
+    limit: int = LIST_MESSAGES_DEFAULT,
+    newest: bool = False,
 ) -> list[ChatMessage] | None:
-    thread = await _owned_thread(session, user_id, thread_id)
-    if thread is None:
+    """A page of the thread's messages after ``after_seq`` (and, given, before ``before_seq``), in seq order.
+
+    The page is the oldest ``limit`` of them, which pages forward; with ``newest`` it is the newest ``limit``,
+    still in seq order: the tail of a thread (or the page before a seq) in one query, read backward along the
+    (thread_id, seq) unique index, however long the thread is.
+    """
+    # Only the ownership check: a page must not load the thread's transcript.
+    tid = await _owned_thread_id(session, user_id, thread_id)
+    if tid is None:
         return None
+    where = [ChatMessage.thread_id == tid, ChatMessage.seq > after_seq]
+    if before_seq is not None:
+        where.append(ChatMessage.seq < before_seq)
     query = (
         select(ChatMessage)
-        .where(ChatMessage.thread_id == thread.id, ChatMessage.seq > after_seq)
-        .order_by(ChatMessage.seq)
+        .where(*where)
+        .order_by(ChatMessage.seq.desc() if newest else ChatMessage.seq)
         .limit(max(1, min(limit, LIST_MESSAGES_MAX)))
     )
-    return list((await session.execute(query)).scalars())
+    rows = list((await session.execute(query)).scalars())
+    if newest:
+        rows.reverse()
+    return rows
 
 
 async def patch_message(

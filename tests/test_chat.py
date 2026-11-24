@@ -17,12 +17,13 @@ import asyncio
 import hashlib
 import importlib.util
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select, update
+from sqlalchemy import event, func, select, update
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.ext.compiler import compiles
@@ -211,6 +212,76 @@ def test_list_threads_newest_first_without_transcript(env):
     # Paging.
     page = env.client.get("/v1/chat/threads?limit=1&offset=1", headers=_h()).json()
     assert [t["id"] for t in page] == [new["id"]]
+
+
+@contextmanager
+def _statements(env):
+    """Every SQL statement the app sends while the block runs."""
+    engine = env.factory.kw["bind"].sync_engine
+    seen: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        seen.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        yield seen
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+
+def test_a_thread_summary_is_the_thread_without_its_transcript(env):
+    t = env.thread(title="Ideas", model="m", transcript=[{"user": "hello"}], known_media=[{"media_id": "m1"}])
+    url = f"/v1/chat/threads/{t['id']}"
+    env.message(t["id"])
+    with _statements(env) as seen:
+        r = env.client.get(url + "/summary", headers=_h())
+        page = env.client.get(url + "/messages/newest?limit=200", headers=_h())
+    assert r.status_code == 200, r.text
+    summary = r.json()
+    assert (summary["id"], summary["title"], summary["model"], summary["status"], summary["unread"]) == (
+        t["id"], "Ideas", "m", "idle", False
+    )
+    assert "transcript" not in summary and "known_media" not in summary
+    assert [m["seq"] for m in page.json()] == [1]
+    # Neither the summary nor a message page loads the JSON columns from the database.
+    assert seen and not any("transcript" in s or "known_media" in s for s in seen), seen
+    # The full read, the operator's, still loads and carries both.
+    with _statements(env) as seen:
+        full = env.client.get(url, headers=_h()).json()
+    assert any("transcript" in s for s in seen)
+    assert (full["transcript"], full["known_media"]) == ([{"user": "hello"}], [{"media_id": "m1"}])
+    # Scoped, and an id that is not a UUID is a 404.
+    assert env.client.get(url + "/summary", headers=_h(USER_B)).status_code == 404
+    assert env.client.get("/v1/chat/threads/not-a-uuid/summary", headers=_h()).status_code == 404
+    assert env.client.get(url + "/summary", headers=_h(None)).status_code == 401
+
+
+def test_marking_a_thread_read_loads_no_transcript_and_keeps_its_place(env):
+    t = env.thread(title="Morning", transcript=[{"user": "hello"}], known_media=[{"media_id": "m1"}])
+    env.set_row(ChatThread, t["id"], unread=True)
+    before = env.client.get(f"/v1/chat/threads/{t['id']}/summary", headers=_h()).json()
+    url = f"/v1/chat/threads/{t['id']}/read"
+    # Another user's thread is the store's own 404, and stays unread.
+    r = env.client.post(url, headers=_h(USER_B))
+    assert (r.status_code, r.json()["detail"]) == (404, "thread_not_found")
+    r = env.client.post("/v1/chat/threads/not-a-uuid/read", headers=_h())
+    assert (r.status_code, r.json()["detail"]) == (404, "thread_not_found")
+    assert env.client.get(f"/v1/chat/threads/{t['id']}/summary", headers=_h()).json()["unread"] is True
+    with _statements(env) as seen:
+        r = env.client.post(url, headers=_h())
+    assert r.status_code == 200, r.text
+    read = r.json()
+    assert (read["id"], read["title"], read["unread"]) == (t["id"], "Morning", False)
+    assert "transcript" not in read and "known_media" not in read
+    assert seen and not any("transcript" in s or "known_media" in s for s in seen), seen
+    after = env.client.get(f"/v1/chat/threads/{t['id']}", headers=_h()).json()
+    assert after["unread"] is False and after["updated_at"] == before["updated_at"]  # in its place in the list
+    assert after["transcript"] == [{"user": "hello"}]
+    # A thread already read is answered, and nothing changes.
+    again = env.client.post(url, headers=_h())
+    assert again.status_code == 200 and again.json()["unread"] is False
+    assert again.json()["updated_at"] == before["updated_at"]
 
 
 def _open_production(env, thread_id: str, user: str = USER_A) -> dict:
@@ -403,6 +474,63 @@ def test_messages_get_increasing_seq_and_list_after_seq(env):
     # seq is per thread.
     other = env.thread()
     assert env.message(other["id"])["seq"] == 1
+
+
+def test_newest_messages_are_the_threads_tail_in_seq_order(env):
+    t = env.thread()
+    for n in range(1, 8):
+        env.message(t["id"], text=f"m{n}")
+    url = f"/v1/chat/threads/{t['id']}/messages"
+
+    def seqs(query: str) -> list[int]:
+        r = env.client.get(url + query, headers=_h())
+        assert r.status_code == 200, r.text
+        return [m["seq"] for m in r.json()]
+
+    assert seqs("/newest?limit=3") == [5, 6, 7]
+    assert [m["text"] for m in env.client.get(url + "/newest?limit=2", headers=_h()).json()] == ["m6", "m7"]
+    # The page before a seq ("load earlier").
+    assert seqs("/newest?limit=3&before_seq=5") == [2, 3, 4]
+    assert seqs("/newest?limit=3&before_seq=3") == [1, 2]
+    assert seqs("/newest?limit=100") == [1, 2, 3, 4, 5, 6, 7]
+    assert seqs("/newest") == [1, 2, 3, 4, 5, 6, 7]  # 200 by default
+    # Old callers are unchanged: the plain page is still the oldest, paging forward.
+    assert seqs("?limit=3") == [1, 2, 3]
+    assert seqs("?after_seq=2&limit=2") == [3, 4]
+    assert seqs("?before_seq=3") == [1, 2]
+    # Scoped like every other read: the store's own 404, not the framework's.
+    r = env.client.get(url + "/newest?limit=3", headers=_h(USER_B))
+    assert (r.status_code, r.json()["detail"]) == (404, "thread_not_found")
+    r = env.client.get("/v1/chat/threads/not-a-uuid/messages/newest", headers=_h())
+    assert (r.status_code, r.json()["detail"]) == (404, "thread_not_found")
+
+
+def test_newest_messages_at_their_boundaries(env):
+    empty = env.thread()
+    url = f"/v1/chat/threads/{empty['id']}/messages/newest"
+    r = env.client.get(url + "?limit=3", headers=_h())
+    assert (r.status_code, r.json()) == (200, [])  # an empty thread is an empty page, not a 404
+
+    t = env.thread()
+    for n in range(1, 4):
+        env.message(t["id"], text=f"m{n}")
+    url = f"/v1/chat/threads/{t['id']}/messages/newest"
+
+    def seqs(query: str) -> list[int]:
+        r = env.client.get(url + query, headers=_h())
+        assert r.status_code == 200, r.text
+        return [m["seq"] for m in r.json()]
+
+    # before_seq is exclusive: nothing comes before seq 1, nor before 0.
+    assert seqs("?limit=3&before_seq=1") == []
+    assert seqs("?limit=3&before_seq=0") == []
+    assert seqs("?limit=3&before_seq=2") == [1]
+    # Exactly `limit` messages: all of them; one fewer than there are: the newest.
+    assert seqs("?limit=3") == [1, 2, 3]
+    assert seqs("?limit=2") == [2, 3]
+    # The limit is clamped to 1..1000, as on the forward page.
+    assert seqs("?limit=0") == [3]
+    assert seqs("?limit=5000") == [1, 2, 3]
 
 
 def test_a_message_has_a_role_kind_text_and_data(env):

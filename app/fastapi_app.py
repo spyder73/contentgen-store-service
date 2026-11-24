@@ -65,6 +65,7 @@ from .schemas import (
     ChatThreadListItem,
     ChatThreadOut,
     ChatThreadPatch,
+    ChatThreadSummary,
     PlaybookIn,
     PlaybookOut,
     PlaybookVersionOut,
@@ -1442,6 +1443,18 @@ def create_fastapi_app() -> FastAPI:
         row = await chat.get_thread(session, _require_user_id(request), thread_id)
         return _chat_found(row, "thread_not_found")
 
+    @app.get("/v1/chat/threads/{thread_id}/summary", response_model=ChatThreadSummary)
+    async def get_chat_thread_summary_handler(thread_id: str, request: Request, session: SessionDep) -> Any:
+        # The thread without its transcript and known media: for the browser's open, not the operator.
+        row = await chat.get_thread_summary(session, _require_user_id(request), thread_id)
+        return _chat_found(row, "thread_not_found")
+
+    @app.post("/v1/chat/threads/{thread_id}/read", response_model=ChatThreadSummary)
+    async def mark_chat_thread_read_handler(thread_id: str, request: Request, session: SessionDep) -> Any:
+        # The unread mark alone, answered without the transcript: a thread opened in the browser.
+        row = await chat.mark_thread_read(session, _require_user_id(request), thread_id)
+        return _chat_found(row, "thread_not_found")
+
     @app.patch("/v1/chat/threads/{thread_id}", response_model=ChatThreadOut)
     async def patch_chat_thread_handler(
         thread_id: str, payload: ChatThreadPatch, request: Request, session: SessionDep
@@ -1467,10 +1480,27 @@ def create_fastapi_app() -> FastAPI:
 
     @app.get("/v1/chat/threads/{thread_id}/messages", response_model=list[ChatMessageOut])
     async def list_chat_messages_handler(
-        thread_id: str, request: Request, session: SessionDep, after_seq: int = 0, limit: int = 500
+        thread_id: str,
+        request: Request,
+        session: SessionDep,
+        after_seq: int = 0,
+        before_seq: int | None = None,
+        limit: int = 500,
     ) -> Any:
         rows = await chat.list_messages(
-            session, _require_user_id(request), thread_id, after_seq=after_seq, limit=limit
+            session, _require_user_id(request), thread_id, after_seq=after_seq, before_seq=before_seq, limit=limit
+        )
+        return _chat_found(rows, "thread_not_found")
+
+    # Its own route, not a parameter of the one above: a store from before it answers the framework's 404
+    # ("Not Found"), which a caller tells apart from "thread_not_found", instead of the oldest messages.
+    @app.get("/v1/chat/threads/{thread_id}/messages/newest", response_model=list[ChatMessageOut])
+    async def newest_chat_messages_handler(
+        thread_id: str, request: Request, session: SessionDep, limit: int = 200, before_seq: int | None = None
+    ) -> Any:
+        # The newest `limit` messages (before before_seq, when given), still in seq order.
+        rows = await chat.list_messages(
+            session, _require_user_id(request), thread_id, before_seq=before_seq, limit=limit, newest=True
         )
         return _chat_found(rows, "thread_not_found")
 
