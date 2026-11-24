@@ -1585,6 +1585,72 @@ def _voice_takes(value: list[VoiceTake] | None) -> list[VoiceTake] | None:
     return value
 
 
+SCENE_PICTURES_MAX = 12
+SCENE_PICTURE_BYTES_MAX = 5 * 1024 * 1024
+SCENE_PICTURE_SIDE_MAX = 8192
+SCENE_PICTURE_PIXELS_MAX = 40_000_000
+_PICTURE_LABEL = re.compile(r"^pic-[a-z0-9]{1,24}$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_HTTP_URL = re.compile(r"^https?://\S+$")
+
+
+class ScenePicture(BaseModel):
+    """One picture of a scene video; the bytes are a hidden ``scene_picture`` media."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str
+    media_id: uuid.UUID
+    sha256: str
+    mime: Literal["image/png", "image/jpeg", "image/webp"]
+    bytes: int = Field(ge=1, le=SCENE_PICTURE_BYTES_MAX)
+    width: int = Field(ge=1, le=SCENE_PICTURE_SIDE_MAX)
+    height: int = Field(ge=1, le=SCENE_PICTURE_SIDE_MAX)
+    kind: Literal["library", "generated", "licensed", "screenshot"]
+    credit: str | None = Field(default=None, max_length=300)
+    licence: str | None = Field(default=None, max_length=80)
+    licence_url: str | None = Field(default=None, max_length=2000)
+    source_url: str | None = Field(default=None, max_length=2000)
+    author: str | None = Field(default=None, max_length=200)
+
+    @field_validator("label")
+    @classmethod
+    def _label(cls, value: str) -> str:
+        if not _PICTURE_LABEL.fullmatch(value):
+            raise ValueError("label must be pic-<name>, name of 1-24 lowercase letters or digits")
+        return value
+
+    @field_validator("sha256")
+    @classmethod
+    def _sha(cls, value: str) -> str:
+        if not _SHA256.fullmatch(value):
+            raise ValueError("sha256 must be 64 lowercase hex digits")
+        return value
+
+    @field_validator("licence_url", "source_url")
+    @classmethod
+    def _url(cls, value: str | None) -> str | None:
+        if value is not None and not _HTTP_URL.fullmatch(value):
+            raise ValueError("must be an http(s) url")
+        return value
+
+    @model_validator(mode="after")
+    def _pixels(self) -> "ScenePicture":
+        if self.width * self.height > SCENE_PICTURE_PIXELS_MAX:
+            raise ValueError("picture is over 40 megapixels")
+        return self
+
+
+def _scene_pictures(value: list[ScenePicture] | None) -> list[ScenePicture] | None:
+    if value is None:
+        return None
+    if len(value) > SCENE_PICTURES_MAX:
+        raise ValueError(f"at most {SCENE_PICTURES_MAX} pictures")
+    if len({p.label for p in value}) != len(value):
+        raise ValueError("picture labels must be unique")
+    return value or None
+
+
 class SceneVideoIn(BaseModel):
     thread_id: str | None = Field(default=None, max_length=80)
     style_ref: str = Field(default="sceneStarter@1", min_length=1, max_length=120)
@@ -1607,11 +1673,13 @@ class SceneVideoPatch(BaseModel):
     narration_media_id: str | None = Field(default=None, max_length=120)
     voice_timeline: dict[str, Any] | None = None
     voice_takes: list[VoiceTake] | None = None
+    pictures: list[ScenePicture] | None = None
     plan: dict[str, Any] | None = None
     final_media_id: str | None = Field(default=None, max_length=120)
     session_id: str | None = Field(default=None, max_length=200)
     woken_at: datetime | None = None
 
+    _pictures = field_validator("pictures")(_scene_pictures)
     _takes = field_validator("voice_takes")(_voice_takes)
     _files = field_validator("files")(_scene_files)
     _json = field_validator("last_report", "bundle", "plan", "voice_timeline")(_scene_json)
@@ -1641,6 +1709,7 @@ class SceneVideoOut(BaseModel):
     narration_media_id: str | None = None
     voice_timeline: dict[str, Any] | None = None
     voice_takes: list[VoiceTake] | None = None
+    pictures: list[ScenePicture] | None = None
     plan: dict[str, Any] | None = None
     final_media_id: str | None = None
     session_id: str | None = None

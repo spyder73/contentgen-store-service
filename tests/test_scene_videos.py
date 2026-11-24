@@ -299,3 +299,116 @@ def test_voice_takes_bounds(env):
     assert bad(extra=1) == 422
     assert _patch(env, vid, voice_takes=[{"first": 0, "last": 0, "texts": ["a"], "voice": "v"}]).status_code == 422
     assert _patch(env, vid, voice_takes=[{**a, "first": 0, "last": 39, "texts": ["a"] * 40}]).status_code == 200
+
+
+# ---- pictures (migration 0055) ----
+
+SHA = "a" * 64
+
+
+def _pic_media(env: Env, user: str, kind: str | None = "scene_picture") -> str:
+    import uuid
+
+    mid = str(uuid.uuid4())
+
+    async def add() -> None:
+        async with env.factory() as s:
+            meta = {"kind": kind} if kind else {}
+            s.add(MediaItem(id=mid, user_id=user, type="image", prompt="p", metadata_=meta))
+            await s.commit()
+
+    asyncio.run(add())
+    return mid
+
+
+def _pic(mid: str, label: str = "pic-one", **over) -> dict:
+    return {"label": label, "media_id": mid, "sha256": SHA, "mime": "image/png", "bytes": 1000,
+            "width": 640, "height": 480, "kind": "library", **over}
+
+
+def _get(env: Env, vid: str) -> dict:
+    return env.client.get(f"/v1/users/{USER_A}/scene-videos/{vid}", headers=_h()).json()
+
+
+def test_pictures_round_trip_null_clears_and_omitting_keeps(env):
+    vid = _mk(env)["id"]
+    assert _get(env, vid)["pictures"] is None
+    full = _pic(_pic_media(env, USER_A), "pic-one", credit="c", licence="CC BY 4.0",
+                licence_url="https://creativecommons.org/licenses/by/4.0/",
+                source_url="http://example.org/p", author="A. Person")
+    other = _pic(_pic_media(env, USER_A), "pic-two", kind="generated")
+    out = _patch(env, vid, pictures=[full, other])
+    assert out.status_code == 200, out.text
+    assert out.json()["pictures"][0] == full
+    assert out.json()["pictures"][1] == {**other, "credit": None, "licence": None, "licence_url": None,
+                                         "source_url": None, "author": None}
+    got = _get(env, vid)["pictures"]
+    assert got[0]["author"] == "A. Person" and got[1]["kind"] == "generated" and got[1]["width"] == 640
+    assert got[0]["media_id"] == full["media_id"]
+    assert _patch(env, vid, title="t").json()["pictures"] == got  # omitted: unchanged
+    assert _patch(env, vid, pictures=[]).json()["pictures"] is None  # empty clears
+    _patch(env, vid, pictures=[full])
+    assert _patch(env, vid, pictures=None).status_code == 200
+    assert _get(env, vid)["pictures"] is None
+
+
+def test_pictures_cap_of_twelve_and_unique_labels(env):
+    vid = _mk(env)["id"]
+    mid = _pic_media(env, USER_A)
+    twelve = [_pic(mid, f"pic-p{i}") for i in range(12)]
+    assert _patch(env, vid, pictures=twelve).status_code == 200
+    assert _patch(env, vid, pictures=[*twelve, _pic(mid, "pic-p12")]).status_code == 422
+    assert _patch(env, vid, pictures=[_pic(mid, "pic-a"), _pic(mid, "pic-a")]).status_code == 422
+
+
+def test_picture_media_must_be_the_users_own_and_a_scene_picture(env):
+    vid = _mk(env)["id"]
+    mine = _pic_media(env, USER_A)
+    assert _patch(env, vid, pictures=[_pic(mine)]).status_code == 200
+    theirs = _pic_media(env, USER_B)
+    r = _patch(env, vid, pictures=[_pic(mine, "pic-a"), _pic(theirs, "pic-b")])
+    assert r.status_code == 404 and r.json()["detail"] == "not_found"
+    missing = "33333333-3333-4333-8333-333333333333"
+    assert _patch(env, vid, pictures=[_pic(missing)]).status_code == 404
+    for kind in (None, "clipstyle_asset", "generated"):
+        wrong = _pic_media(env, USER_A, kind)
+        r = _patch(env, vid, pictures=[_pic(wrong)])
+        assert r.status_code == 422 and r.json()["detail"] == "not_a_scene_picture", kind
+    assert [p["label"] for p in _get(env, vid)["pictures"]] == ["pic-one"]
+
+
+def test_an_ownerless_scene_picture_is_not_the_users(env):
+    # _get_owned lets a row with no owner through; a picture must be the user's own copy.
+    vid = _mk(env)["id"]
+    ownerless = _pic_media(env, None)
+    r = _patch(env, vid, pictures=[_pic(_pic_media(env, USER_A), "pic-a"), _pic(ownerless, "pic-b")])
+    assert r.status_code == 422 and r.json()["detail"] == "not_a_scene_picture"
+    assert _get(env, vid)["pictures"] is None
+
+
+def test_picture_field_bounds(env):
+    vid = _mk(env)["id"]
+    mid = _pic_media(env, USER_A)
+
+    def code(**over):
+        return _patch(env, vid, pictures=[_pic(mid, **over)]).status_code
+
+    assert code() == 200
+    for label in ("one", "pic-", "pic-A", "pic-a-b", "pic-" + "a" * 25, "pic-é"):
+        assert code(label=label) == 422, label
+    assert code(label="pic-" + "a" * 24) == 200
+    assert code(media_id="not-a-uuid") == 422
+    assert code(sha256="A" * 64) == 422 and code(sha256="a" * 63) == 422
+    assert code(mime="image/gif") == 422 and code(mime="image/webp") == 200
+    assert code(bytes=0) == 422 and code(bytes=5 * 1024 * 1024) == 200 and code(bytes=5 * 1024 * 1024 + 1) == 422
+    assert code(width=0) == 422 and code(height=8193) == 422 and code(width=8192, height=4880) == 200
+    assert code(width=8192, height=4883) == 422 and code(width=8192, height=8192) == 422
+    assert code(credit="x" * 300) == 200 and code(credit="x" * 301) == 422
+    assert code(licence="x" * 81) == 422 and code(author="x" * 201) == 422
+    assert code(licence_url="ftp://x.org/a") == 422 and code(source_url="javascript:alert(1)") == 422
+    assert code(source_url="https://x.org/" + "a" * 2000) == 422
+    assert code(kind="screenshot") == 200 and code(kind="licensed") == 200 and code(kind="other") == 422
+    assert code(extra=1) == 422
+    bare = _pic(mid)
+    del bare["kind"]
+    assert _patch(env, vid, pictures=[bare]).status_code == 422

@@ -45,7 +45,9 @@ BRIDGE_MEDIA_KINDS = (CLIPSTYLE_PREVIEW_KIND, CLIPSTYLE_BUNDLE_KIND)
 # Brand assets the owner uploads in the clipstyle builder (Phase 4): hidden like the bridge's media,
 # deleted only by their owner, never while a frozen version uses them (clipstyle_assets).
 CLIPSTYLE_ASSET_KIND = "clipstyle_asset"
-HIDDEN_MEDIA_KINDS = (*BRIDGE_MEDIA_KINDS, CLIPSTYLE_ASSET_KIND)
+# Pictures a scene video uses (scene_videos.pictures): hidden copies owned by the user.
+SCENE_PICTURE_KIND = "scene_picture"
+HIDDEN_MEDIA_KINDS = (*BRIDGE_MEDIA_KINDS, CLIPSTYLE_ASSET_KIND, SCENE_PICTURE_KIND)
 
 # Generated videos are stored with type "ai_video", but the library's type chip
 # (and the per-type facet counts) speak of "video". Bucket both raw column values

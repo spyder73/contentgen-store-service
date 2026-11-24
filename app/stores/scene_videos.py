@@ -13,11 +13,11 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import SceneVideo
+from ..models import MediaItem, SceneVideo
 from ..schemas import SCENE_VIDEO_LIMIT, SceneVideoIn, SceneVideoPatch
 from .chat import _owned_thread
 from .credits import _lock_user_row
-from .media import _get_owned
+from .media import SCENE_PICTURE_KIND, _get_owned
 
 LIST_MAX = 50
 BY_STATUS_MAX = 500
@@ -57,6 +57,15 @@ async def _check_references(
             raise SceneVideoError(404, "not_found")
         if await _get_owned(session, mid, user_id) is None:
             raise SceneVideoError(404, "not_found")
+
+
+async def _check_picture_kinds(session: AsyncSession, user_id: str, media_ids: list[str]) -> None:
+    """Each picture must be the user's own hidden ``scene_picture`` media: ``_check_references`` also lets
+    an ownerless row through, which is not one (422 ``not_a_scene_picture``)."""
+    for media_id in media_ids:
+        row = await session.get(MediaItem, media_id)
+        if row is None or row.user_id != user_id or (row.metadata_ or {}).get("kind") != SCENE_PICTURE_KIND:
+            raise SceneVideoError(422, "not_a_scene_picture")
 
 
 async def create(session: AsyncSession, user_id: str, payload: SceneVideoIn) -> SceneVideo:
@@ -115,12 +124,17 @@ async def patch(session: AsyncSession, user_id: str, video_id: str, payload: Sce
             payload.final_media_id if "final_media_id" in sent else None,
             bundle_media if bundle_media is not None else None,
             *([str(t.media_id) for t in payload.voice_takes] if "voice_takes" in sent and payload.voice_takes else []),
+            *([str(p.media_id) for p in payload.pictures] if "pictures" in sent and payload.pictures else []),
         ],
     )
+    if "pictures" in sent and payload.pictures:
+        await _check_picture_kinds(session, user_id, [str(p.media_id) for p in payload.pictures])
     for name in sent:
         value = getattr(payload, name)
         if name == "voice_takes" and value is not None:
             value = [t.model_dump(mode="json") for t in value]
+        if name == "pictures" and value is not None:
+            value = [p.model_dump(mode="json", exclude_none=True) for p in value]
         setattr(row, name, value)
     await session.commit()
     await session.refresh(row)
