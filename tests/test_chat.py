@@ -330,10 +330,9 @@ def test_thread_flags_follow_the_open_production_only(env):
     assert env.client.patch(f"/v1/chat/productions/{old['id']}", json={"close": {"outcome": "x"}}, headers=_h()).status_code == 200
     assert _flags(env)[t["id"]] == (False, False)
 
-    # A new production does not inherit the old one's pending card, nor a card that names no
-    # production, nor another production's id (the id ends at the bar: no prefix collision).
+    # A new production does not inherit the old one's pending card, nor another production's id
+    # (the id ends at the bar: no prefix collision).
     new = _open_production(env, t["id"])
-    env.approval(t["id"], action="playbook.save", subject="series-1")
     env.approval(t["id"], action="production.budget", subject=f"production:{new['id']}x|v0")
     env.approval(t["id"], action="production.budget", subject=f"production:{new['id']}")
     assert _flags(env)[t["id"]] == (False, False)
@@ -354,6 +353,13 @@ def test_thread_flags_follow_the_open_production_only(env):
     assert patch(done).status_code == 200 and _flags(env)[t["id"]] == (True, False)
     assert patch(done, {"kind": "render", "clip_id": "c1", "status": "rendering"}).status_code == 200
     assert _flags(env)[t["id"]] == (True, True)
+
+
+def test_a_card_that_names_no_production_still_needs_you(env):
+    # A playbook card is pressable outside any production (the chat list counts every live card).
+    t = env.thread()
+    env.approval(t["id"], action="playbook.save", subject="series-1")
+    assert _flags(env)[t["id"]] == (True, False)
 
 
 def test_the_flags_are_on_the_list_only_and_paging_keeps_them(env):
