@@ -1263,6 +1263,7 @@ class SceneVideo(Base):
     narration_media_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     voice_timeline: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     voice_takes: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    pictures: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     plan: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     final_media_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     session_id: Mapped[str | None] = mapped_column(Text, nullable=True)

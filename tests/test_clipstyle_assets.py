@@ -283,7 +283,7 @@ def test_deleting_a_frozen_asset_is_a_409_over_http(monkeypatch):
 
 
 def test_asset_media_are_hidden_from_listings():
-    assert set(media_store.HIDDEN_MEDIA_KINDS) == {"clipstyle_preview", "clipstyle_bundle", "clipstyle_asset"}
+    assert set(media_store.HIDDEN_MEDIA_KINDS) == {"clipstyle_preview", "clipstyle_bundle", "clipstyle_asset", "scene_picture"}
 
 
 def test_migration_0039_sql_has_the_table_trigger_and_guarded_downgrade():
@@ -327,3 +327,7 @@ def test_migration_0040_check_refuses_an_underscore_in_the_icon_name():
     pattern = re.search(r"label ~ '(\^.*\$)'", up).group(1)
     assert re.search(pattern, "icon-a_b") is None
     assert re.search(pattern, "icon-claude") is not None
+
+
+def test_scene_pictures_are_hidden_from_listings():
+    assert "scene_picture" in media_store.HIDDEN_MEDIA_KINDS
