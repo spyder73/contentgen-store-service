@@ -302,18 +302,37 @@ async def create_message(
 
 
 async def list_messages(
-    session: AsyncSession, user_id: str, thread_id: str, *, after_seq: int = 0, limit: int = LIST_MESSAGES_DEFAULT
+    session: AsyncSession,
+    user_id: str,
+    thread_id: str,
+    *,
+    after_seq: int = 0,
+    before_seq: int | None = None,
+    limit: int = LIST_MESSAGES_DEFAULT,
+    newest: bool = False,
 ) -> list[ChatMessage] | None:
+    """A page of the thread's messages after ``after_seq`` (and, given, before ``before_seq``), in seq order.
+
+    The page is the oldest ``limit`` of them, which pages forward; with ``newest`` it is the newest ``limit``,
+    still in seq order: the tail of a thread (or the page before a seq) in one query, read backward along the
+    (thread_id, seq) unique index, however long the thread is.
+    """
     thread = await _owned_thread(session, user_id, thread_id)
     if thread is None:
         return None
+    where = [ChatMessage.thread_id == thread.id, ChatMessage.seq > after_seq]
+    if before_seq is not None:
+        where.append(ChatMessage.seq < before_seq)
     query = (
         select(ChatMessage)
-        .where(ChatMessage.thread_id == thread.id, ChatMessage.seq > after_seq)
-        .order_by(ChatMessage.seq)
+        .where(*where)
+        .order_by(ChatMessage.seq.desc() if newest else ChatMessage.seq)
         .limit(max(1, min(limit, LIST_MESSAGES_MAX)))
     )
-    return list((await session.execute(query)).scalars())
+    rows = list((await session.execute(query)).scalars())
+    if newest:
+        rows.reverse()
+    return rows
 
 
 async def patch_message(

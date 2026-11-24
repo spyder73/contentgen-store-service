@@ -1467,10 +1467,18 @@ def create_fastapi_app() -> FastAPI:
 
     @app.get("/v1/chat/threads/{thread_id}/messages", response_model=list[ChatMessageOut])
     async def list_chat_messages_handler(
-        thread_id: str, request: Request, session: SessionDep, after_seq: int = 0, limit: int = 500
+        thread_id: str,
+        request: Request,
+        session: SessionDep,
+        after_seq: int = 0,
+        before_seq: int | None = None,
+        limit: int = 500,
+        newest: bool = False,
     ) -> Any:
+        # newest=true: the newest `limit` messages (before before_seq, when given), still in seq order.
         rows = await chat.list_messages(
-            session, _require_user_id(request), thread_id, after_seq=after_seq, limit=limit
+            session, _require_user_id(request), thread_id,
+            after_seq=after_seq, before_seq=before_seq, limit=limit, newest=newest,
         )
         return _chat_found(rows, "thread_not_found")
 

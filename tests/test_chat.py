@@ -405,6 +405,32 @@ def test_messages_get_increasing_seq_and_list_after_seq(env):
     assert env.message(other["id"])["seq"] == 1
 
 
+def test_newest_messages_are_the_threads_tail_in_seq_order(env):
+    t = env.thread()
+    for n in range(1, 8):
+        env.message(t["id"], text=f"m{n}")
+    url = f"/v1/chat/threads/{t['id']}/messages"
+
+    def seqs(query: str) -> list[int]:
+        r = env.client.get(url + query, headers=_h())
+        assert r.status_code == 200, r.text
+        return [m["seq"] for m in r.json()]
+
+    assert seqs("?newest=true&limit=3") == [5, 6, 7]
+    assert [m["text"] for m in env.client.get(url + "?newest=true&limit=2", headers=_h()).json()] == ["m6", "m7"]
+    # The page before a seq ("load earlier"), and a tail that after_seq cuts short.
+    assert seqs("?newest=true&limit=3&before_seq=5") == [2, 3, 4]
+    assert seqs("?newest=true&limit=3&before_seq=3") == [1, 2]
+    assert seqs("?newest=true&limit=5&after_seq=4") == [5, 6, 7]
+    assert seqs("?newest=true&limit=100") == [1, 2, 3, 4, 5, 6, 7]
+    # Old callers are unchanged: without newest the page is still the oldest, paging forward.
+    assert seqs("?limit=3") == [1, 2, 3]
+    assert seqs("?after_seq=2&limit=2") == [3, 4]
+    assert seqs("?before_seq=3") == [1, 2]
+    # Scoped like every other read.
+    assert env.client.get(url + "?newest=true&limit=3", headers=_h(USER_B)).status_code == 404
+
+
 def test_a_message_has_a_role_kind_text_and_data(env):
     t = env.thread()
     m = env.message(t["id"], role="operator", kind="tool", text="", data={"name": "x", "args": {"n": 1}})
