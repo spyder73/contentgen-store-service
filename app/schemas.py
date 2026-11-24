@@ -1005,13 +1005,51 @@ class ChatThreadSummary(BaseModel):
     updated_at: datetime
 
 
-class ChatThreadListItem(ChatThreadSummary):
-    """A thread as the list route answers it, never as a single read does. ``needs_you``: its
-    open production has a pending card to press. ``jobs_running``: its open production has a
-    render or media job in flight."""
+class ListedProduction(BaseModel):
+    """The production a list row shows: the open one, else the newest closed. ``settled_usd`` and
+    ``held_usd`` are the ledger's figures for an open production with a budget, None otherwise."""
 
+    id: str
+    status: str
+    budget_usd: float = 0
+    settled_usd: float | None = None
+    held_usd: float | None = None
+    outcome: str = ""
+    closed_at: datetime | None = None
+
+
+class ListedRoutine(BaseModel):
+    """The routine that owns a thread, as its list row shows it."""
+
+    cadence: str
+    weekday: int | None = None
+    time_of_day: str
+    state: str
+    run_count: int = 0
+    last_outcome: str | None = None
+    last_error_code: str | None = None
+    last_run_at: datetime | None = None
+
+
+class ChatThreadListItem(ChatThreadSummary):
+    """A thread as the list route answers it, never as a single read does. ``needs_you``: it has a
+    pending card the owner can press, at most 14 days old (``pending_count`` > 0; ``pending_*`` describe the
+    newest one).
+    ``jobs_running``: its open production has a render or media job in flight. ``last_*`` is its last line
+    and ``thumb_media_id`` its newest picture."""
+
+    last_text: str = ""
+    last_role: str = ""
+    last_kind: str = ""
+    thumb_media_id: str | None = None
     needs_you: bool = False
     jobs_running: bool = False
+    pending_count: int = 0
+    pending_action: str | None = None
+    pending_summary: str = ""
+    pending_amount_usd: float = 0
+    latest_production: ListedProduction | None = None
+    routine_info: ListedRoutine | None = None
 
 
 class ChatThreadOut(ChatThreadSummary):

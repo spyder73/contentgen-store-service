@@ -33,9 +33,9 @@ from ..schemas import (
     ChatMessageIn,
     ChatMessagePatch,
     ChatThreadIn,
-    ChatThreadListItem,
     ChatThreadPatch,
 )
+from .chat_preview import last_line
 
 LIST_THREADS_MAX = 200
 LIST_MESSAGES_DEFAULT = 500
@@ -145,55 +145,6 @@ async def create_thread(session: AsyncSession, user_id: str, payload: ChatThread
     )
 
 
-async def list_threads(
-    session: AsyncSession, user_id: str, *, limit: int = 100, offset: int = 0
-) -> list[ChatThreadListItem]:
-    """Newest activity first. The transcript and known media are not loaded. Each thread says
-    whether its open production needs the user (a pending card of that production) and whether
-    a job of it is in flight; both come from two grouped queries over the page's thread ids."""
-    from .productions import _in_flight  # productions imports this module
-
-    query = (
-        select(ChatThread)
-        .options(defer(ChatThread.transcript), defer(ChatThread.known_media))
-        .where(ChatThread.user_id == user_id)
-        .order_by(ChatThread.updated_at.desc(), ChatThread.created_at.desc(), ChatThread.id.desc())
-        .limit(max(1, min(limit, LIST_THREADS_MAX)))
-        .offset(max(0, offset))
-    )
-    threads = list((await session.execute(query)).scalars())
-    ids = [thread.id for thread in threads]
-    items = [ChatThreadListItem.model_validate(thread) for thread in threads]
-    if not ids:
-        return items
-    open_rows = (
-        await session.execute(
-            select(ChatProduction.thread_id, ChatProduction.id, ChatProduction.watches).where(
-                ChatProduction.thread_id.in_(ids), ChatProduction.status == "open"
-            )
-        )
-    ).all()
-    # A thread has at most one open production (a partial unique index).
-    open_ids = {thread_id: production_id for thread_id, production_id, _ in open_rows}
-    running = {thread_id for thread_id, _, watches in open_rows if any(_in_flight(w) for w in watches)}
-    pending = []
-    if open_ids:
-        pending = (
-            await session.execute(
-                select(ChatApproval.thread_id, ChatApproval.subject).where(
-                    ChatApproval.thread_id.in_(list(open_ids)), ChatApproval.status == "pending"
-                )
-            )
-        ).all()
-    needing = {
-        thread_id for thread_id, subject in pending if subject.startswith(f"production:{open_ids[thread_id]}|")
-    }
-    for item in items:
-        item.needs_you = item.id in needing
-        item.jobs_running = item.id in running
-    return items
-
-
 async def get_thread(session: AsyncSession, user_id: str, thread_id: str) -> ChatThread | None:
     return await _owned_thread(session, user_id, thread_id)
 
@@ -280,11 +231,17 @@ async def delete_thread(session: AsyncSession, user_id: str, thread_id: str) -> 
     return True
 
 
-async def _touch_thread(session: AsyncSession, thread_id: str) -> None:
+async def _touch_thread(
+    session: AsyncSession, thread_id: str, last: tuple[str, str, str] | None = None
+) -> None:
+    """Bump the thread's activity time; ``last`` (role, kind, preview) also becomes its last line."""
+    values: dict[str, Any] = {"updated_at": _now()}
+    if last is not None:
+        values.update(last_role=last[0], last_kind=last[1], last_text=last[2])
     await session.execute(
         update(ChatThread)
         .where(ChatThread.id == thread_id)
-        .values(updated_at=_now())
+        .values(**values)
         .execution_options(synchronize_session=False)
     )
 
@@ -309,6 +266,7 @@ async def create_message(
         return None
     tid = thread.id
     message_id = payload.id or str(uuid.uuid4())
+    last = last_line(payload.role, payload.kind, payload.text)
 
     async def already_stored() -> ChatMessage | None:
         # Idempotent on a caller-minted id: a retried POST returns the stored message.
@@ -331,7 +289,7 @@ async def create_message(
         )
         session.add(row)
         try:
-            await _touch_thread(session, tid)
+            await _touch_thread(session, tid, last)
             await session.commit()
         except IntegrityError:
             await session.rollback()

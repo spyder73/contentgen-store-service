@@ -21,7 +21,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import ChatProduction
+from ..models import ChatProduction, ChatThread, MediaItem
 from ..schemas import ProductionIn, ProductionPatch, SceneShow
 from .chat import ChatError, _now, _owned_thread, _usd, _uuid
 
@@ -220,6 +220,23 @@ def _values(row: ChatProduction, patch: ProductionPatch, now: datetime) -> dict[
     return values
 
 
+async def _newest_image(session: AsyncSession, user_id: str, media_ids: list[str] | None) -> str | None:
+    """The last of the patch's media ids that is one of the user's pictures (type ``image``)."""
+    wanted = [m for m in (_uuid(raw) for raw in media_ids or []) if m is not None]
+    if not wanted:
+        return None
+    found = set(
+        (
+            await session.execute(
+                select(MediaItem.id).where(
+                    MediaItem.id.in_(wanted), MediaItem.user_id == user_id, MediaItem.type == "image"
+                )
+            )
+        ).scalars()
+    )
+    return next((m for m in reversed(wanted) if m in found), None)
+
+
 async def patch_production(
     session: AsyncSession, user_id: str, production_id: str, patch: ProductionPatch
 ) -> ChatProduction | None:
@@ -251,6 +268,7 @@ async def patch_production(
         guards.append(ChatProduction.budget_version == patch.expect_budget_version)
     if set(values) - {"acked_seq"}:
         guards.append(ChatProduction.status == "open")
+    picture = await _newest_image(session, user_id, patch.add_media_ids) if "artifacts" in values else None
     result = await session.execute(
         update(ChatProduction)
         .where(*guards)
@@ -260,6 +278,14 @@ async def patch_production(
     if result.rowcount == 0:
         await session.rollback()
         raise ChatError(409, "stale_budget_version" if patch.expect_budget_version is not None else "production_closed")
+    if picture is not None:
+        # The list's thumbnail. Not activity: the thread keeps its time, as an unread-only patch does.
+        await session.execute(
+            update(ChatThread)
+            .where(ChatThread.id == row.thread_id)
+            .values(thumb_media_id=picture, updated_at=ChatThread.updated_at)
+            .execution_options(synchronize_session=False)
+        )
     await session.commit()
     await session.refresh(row)
     return row

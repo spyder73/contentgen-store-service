@@ -113,6 +113,7 @@ from .stores import (
     access,
     characters,
     chat,
+    chat_list,
     clipstyle_packages,
     clipstyle_render,
     clips,
@@ -1436,7 +1437,7 @@ def create_fastapi_app() -> FastAPI:
     async def list_chat_threads_handler(
         request: Request, session: SessionDep, limit: int = 100, offset: int = 0
     ) -> Any:
-        return await chat.list_threads(session, _require_user_id(request), limit=limit, offset=offset)
+        return await chat_list.list_threads(session, _require_user_id(request), limit=limit, offset=offset)
 
     @app.get("/v1/chat/threads/{thread_id}", response_model=ChatThreadOut)
     async def get_chat_thread_handler(thread_id: str, request: Request, session: SessionDep) -> Any:

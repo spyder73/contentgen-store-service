@@ -621,7 +621,10 @@ def test_the_models_declare_what_the_migration_makes():
     columns = {c.name for c in ChatProduction.__table__.columns}
     assert all(f"{name} " in sql for name in columns), columns
     indexes = {i.name for i in ChatProduction.__table__.indexes}
-    assert indexes == {"uq_chat_productions_open_thread", "ix_chat_productions_user_status"}
+    # 0056 added ix_chat_productions_thread_closed (the chat list's newest-production read).
+    assert indexes == {
+        "uq_chat_productions_open_thread", "ix_chat_productions_user_status", "ix_chat_productions_thread_closed"
+    }
 
 
 # The model-vs-migration pin of the approval action list moved on with 0046: see test_playbooks.py.
