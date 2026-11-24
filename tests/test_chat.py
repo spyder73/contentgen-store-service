@@ -257,6 +257,33 @@ def test_a_thread_summary_is_the_thread_without_its_transcript(env):
     assert env.client.get(url + "/summary", headers=_h(None)).status_code == 401
 
 
+def test_marking_a_thread_read_loads_no_transcript_and_keeps_its_place(env):
+    t = env.thread(title="Morning", transcript=[{"user": "hello"}], known_media=[{"media_id": "m1"}])
+    env.set_row(ChatThread, t["id"], unread=True)
+    before = env.client.get(f"/v1/chat/threads/{t['id']}/summary", headers=_h()).json()
+    url = f"/v1/chat/threads/{t['id']}/read"
+    # Another user's thread is the store's own 404, and stays unread.
+    r = env.client.post(url, headers=_h(USER_B))
+    assert (r.status_code, r.json()["detail"]) == (404, "thread_not_found")
+    r = env.client.post("/v1/chat/threads/not-a-uuid/read", headers=_h())
+    assert (r.status_code, r.json()["detail"]) == (404, "thread_not_found")
+    assert env.client.get(f"/v1/chat/threads/{t['id']}/summary", headers=_h()).json()["unread"] is True
+    with _statements(env) as seen:
+        r = env.client.post(url, headers=_h())
+    assert r.status_code == 200, r.text
+    read = r.json()
+    assert (read["id"], read["title"], read["unread"]) == (t["id"], "Morning", False)
+    assert "transcript" not in read and "known_media" not in read
+    assert seen and not any("transcript" in s or "known_media" in s for s in seen), seen
+    after = env.client.get(f"/v1/chat/threads/{t['id']}", headers=_h()).json()
+    assert after["unread"] is False and after["updated_at"] == before["updated_at"]  # in its place in the list
+    assert after["transcript"] == [{"user": "hello"}]
+    # A thread already read is answered, and nothing changes.
+    again = env.client.post(url, headers=_h())
+    assert again.status_code == 200 and again.json()["unread"] is False
+    assert again.json()["updated_at"] == before["updated_at"]
+
+
 def _open_production(env, thread_id: str, user: str = USER_A) -> dict:
     r = env.client.post(
         f"/v1/chat/threads/{thread_id}/productions", json={"title": "t", "goal": "g", "agent_cap_usd": 1}, headers=_h(user)

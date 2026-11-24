@@ -1449,6 +1449,12 @@ def create_fastapi_app() -> FastAPI:
         row = await chat.get_thread_summary(session, _require_user_id(request), thread_id)
         return _chat_found(row, "thread_not_found")
 
+    @app.post("/v1/chat/threads/{thread_id}/read", response_model=ChatThreadSummary)
+    async def mark_chat_thread_read_handler(thread_id: str, request: Request, session: SessionDep) -> Any:
+        # The unread mark alone, answered without the transcript: a thread opened in the browser.
+        row = await chat.mark_thread_read(session, _require_user_id(request), thread_id)
+        return _chat_found(row, "thread_not_found")
+
     @app.patch("/v1/chat/threads/{thread_id}", response_model=ChatThreadOut)
     async def patch_chat_thread_handler(
         thread_id: str, payload: ChatThreadPatch, request: Request, session: SessionDep

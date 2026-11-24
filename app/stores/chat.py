@@ -212,6 +212,24 @@ async def get_thread_summary(session: AsyncSession, user_id: str, thread_id: str
     return (await session.execute(query)).scalar_one_or_none()
 
 
+async def mark_thread_read(session: AsyncSession, user_id: str, thread_id: str) -> ChatThread | None:
+    """Clears the thread's unread mark, alone: opening a thread is not activity, so updated_at is kept and the
+    thread keeps its place in the list, and a thread already read is not written. The thread comes back as
+    get_thread_summary reads it: the transcript and known media are neither loaded nor returned. Another user's
+    thread is not touched (None)."""
+    tid = _uuid(thread_id)
+    if tid is None:
+        return None
+    await session.execute(
+        update(ChatThread)
+        .where(ChatThread.id == tid, ChatThread.user_id == user_id, ChatThread.unread.is_(True))
+        .values(unread=False, updated_at=ChatThread.updated_at)
+        .execution_options(synchronize_session=False)
+    )
+    await session.commit()
+    return await get_thread_summary(session, user_id, tid)
+
+
 async def patch_thread(
     session: AsyncSession, user_id: str, thread_id: str, patch: ChatThreadPatch
 ) -> ChatThread | None:
