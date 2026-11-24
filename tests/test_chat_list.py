@@ -3,17 +3,17 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import event, select
+from sqlalchemy import event, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.db import get_session
 from app.fastapi_app import create_fastapi_app
-from app.models import ChatThread, CreditsLedger, MediaItem, Routine, RoutineSpendDay
+from app.models import ChatApproval, ChatThread, CreditsLedger, MediaItem, Routine, RoutineSpendDay
 from app.stores import chat_list, credits_spent
 from tests.test_chat import SECRET, USER_A, USER_B, Env, _create_tables, _h, _statements
 from tests.test_chat_productions import _new, _patch
@@ -144,6 +144,40 @@ def test_retired_and_stale_cards_never_count(env):
     env.approval(t["id"], action="production.budget", subject=f"production:{closed['id']}|v1")
     row = _one(env, t["id"])
     assert (row["needs_you"], row["pending_count"], row["pending_action"]) == (False, 0, None)
+
+
+def _age(env: Env, approval_id: str, days: float) -> None:
+    """Moves a card's creation ``days`` back from now."""
+
+    async def run(session):
+        at = datetime.now(timezone.utc) - timedelta(days=days)
+        await session.execute(update(ChatApproval).where(ChatApproval.id == approval_id).values(created_at=at))
+        await session.commit()
+
+    env.db(run)
+
+
+def test_the_age_limit_is_fourteen_days():
+    assert chat_list.PENDING_CARD_MAX_AGE == timedelta(days=14)
+
+
+def test_a_card_counts_for_at_most_fourteen_days(env):
+    recent, old = env.thread(), env.thread()
+    _age(env, env.approval(recent["id"], action="playbook.save", subject="series-1", summary="Recent")["id"], 13)
+    _age(env, env.approval(old["id"], action="playbook.save", subject="series-1", summary="Old")["id"], 15)
+    rows = _list(env)
+    assert (rows[recent["id"]]["needs_you"], rows[recent["id"]]["pending_count"]) == (True, 1)
+    assert (rows[old["id"]]["needs_you"], rows[old["id"]]["pending_count"], rows[old["id"]]["pending_action"]) == (
+        False, 0, None
+    )
+
+
+def test_an_old_card_beside_a_recent_one_is_not_counted(env):
+    t = env.thread()
+    _age(env, env.approval(t["id"], action="routine.save", subject="r", summary="Long gone")["id"], 15)
+    _age(env, env.approval(t["id"], action="playbook.save", subject="series-1", summary="Still waiting")["id"], 2)
+    row = _one(env, t["id"])
+    assert (row["pending_count"], row["pending_action"], row["pending_summary"]) == (1, "playbook.save", "Still waiting")
 
 
 def test_answered_cards_do_not_count(env):

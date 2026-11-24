@@ -4,11 +4,12 @@
 size: threads, productions, pending cards, routines and, only while an open production has a budget,
 the two ledger reads of ``spent_by_scope``. None of them reads a transcript, a log, artifacts or a
 breakdown. A card counts as pending for the owner by ``pressable``, the same rule the backend uses to
-refuse a retired approval.
+refuse a retired approval, and only while it is at most ``PENDING_CARD_MAX_AGE`` old.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func, select
@@ -22,6 +23,10 @@ from .chat import LIST_THREADS_MAX, _uuid
 from .chat_preview import preview_line
 
 RETIRED_ACTIONS = frozenset({"run.start", "run.continue", "plan.approve", "graph.extend"})
+
+# How long a pending card counts for Needs you: an older one nobody answered is not waiting on anyone any more
+# (its chat draws it so too). The backend's fake and the frontend's isPendingCard use the same 14 days.
+PENDING_CARD_MAX_AGE = timedelta(days=14)
 
 
 def _is_preview_subject(subject: str) -> bool:
@@ -74,7 +79,8 @@ async def _productions(session: AsyncSession, ids: list[str]) -> dict[str, Any]:
 
 
 async def _pending(session: AsyncSession, ids: list[str], open_ids: dict[str, str]) -> dict[str, list[Any]]:
-    """Per thread, its pressable pending cards, oldest first."""
+    """Per thread, its pressable pending cards at most ``PENDING_CARD_MAX_AGE`` old, oldest first."""
+    since = datetime.now(timezone.utc) - PENDING_CARD_MAX_AGE
     rows = (
         await session.execute(
             select(
@@ -85,7 +91,7 @@ async def _pending(session: AsyncSession, ids: list[str], open_ids: dict[str, st
                 ChatApproval.amount_usd,
                 ChatApproval.created_at,
             )
-            .where(ChatApproval.thread_id.in_(ids), ChatApproval.status == "pending")
+            .where(ChatApproval.thread_id.in_(ids), ChatApproval.status == "pending", ChatApproval.created_at >= since)
             .order_by(ChatApproval.created_at, ChatApproval.id)
         )
     ).all()

@@ -1033,7 +1033,8 @@ class ListedRoutine(BaseModel):
 
 class ChatThreadListItem(ChatThreadSummary):
     """A thread as the list route answers it, never as a single read does. ``needs_you``: it has a
-    pending card the owner can press (``pending_count`` > 0; ``pending_*`` describe the newest one).
+    pending card the owner can press, at most 14 days old (``pending_count`` > 0; ``pending_*`` describe the
+    newest one).
     ``jobs_running``: its open production has a render or media job in flight. ``last_*`` is its last line
     and ``thumb_media_id`` its newest picture."""
 
