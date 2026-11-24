@@ -956,6 +956,12 @@ class ChatThread(Base):
         Numeric(12, 6, asdecimal=False), nullable=False, default=0, server_default="0"
     )
     status: Mapped[str] = mapped_column(Text, nullable=False, default="idle", server_default="idle")
+    # Migration 0056: the last line a list row shows (role, kind, a one-line preview; never a tool, run
+    # or node message) and the newest picture a production of the chat made (no FK).
+    last_text: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    last_role: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    last_kind: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    thumb_media_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now, server_default=func.now()
     )
@@ -1124,6 +1130,7 @@ class ChatProduction(Base):
             sqlite_where=text("status = 'open'"),
         ),
         Index("ix_chat_productions_user_status", "user_id", "status"),
+        Index("ix_chat_productions_thread_closed", "thread_id", "closed_at"),
     )
 
 
@@ -1223,6 +1230,8 @@ class Routine(Base):
     last_outcome: Mapped[str | None] = mapped_column(Text, nullable=True)
     consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     last_error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Migration 0056: runs that finished (ok or failed), added to when the outcome is recorded.
+    run_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now, server_default=func.now()
     )

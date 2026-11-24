@@ -180,6 +180,8 @@ async def record_outcome(session: AsyncSession, routine_id: str, payload: Routin
     row.last_run_at = payload.at
     row.last_outcome = payload.outcome
     row.last_error_code = payload.error_code
+    if payload.outcome != "skipped":
+        row.run_count += 1  # a skipped wake is not a run
     if payload.outcome == "failed":
         row.consecutive_failures += 1
         if row.consecutive_failures >= PAUSE_AFTER_FAILURES:

@@ -36,6 +36,7 @@ from ..schemas import (
     ChatThreadListItem,
     ChatThreadPatch,
 )
+from .chat_preview import last_line
 
 LIST_THREADS_MAX = 200
 LIST_MESSAGES_DEFAULT = 500
@@ -280,11 +281,17 @@ async def delete_thread(session: AsyncSession, user_id: str, thread_id: str) -> 
     return True
 
 
-async def _touch_thread(session: AsyncSession, thread_id: str) -> None:
+async def _touch_thread(
+    session: AsyncSession, thread_id: str, last: tuple[str, str, str] | None = None
+) -> None:
+    """Bump the thread's activity time; ``last`` (role, kind, preview) also becomes its last line."""
+    values: dict[str, Any] = {"updated_at": _now()}
+    if last is not None:
+        values.update(last_role=last[0], last_kind=last[1], last_text=last[2])
     await session.execute(
         update(ChatThread)
         .where(ChatThread.id == thread_id)
-        .values(updated_at=_now())
+        .values(**values)
         .execution_options(synchronize_session=False)
     )
 
@@ -309,6 +316,7 @@ async def create_message(
         return None
     tid = thread.id
     message_id = payload.id or str(uuid.uuid4())
+    last = last_line(payload.role, payload.kind, payload.text)
 
     async def already_stored() -> ChatMessage | None:
         # Idempotent on a caller-minted id: a retried POST returns the stored message.
@@ -331,7 +339,7 @@ async def create_message(
         )
         session.add(row)
         try:
-            await _touch_thread(session, tid)
+            await _touch_thread(session, tid, last)
             await session.commit()
         except IntegrityError:
             await session.rollback()
