@@ -59,11 +59,12 @@ async def _check_references(
             raise SceneVideoError(404, "not_found")
 
 
-async def _check_picture_kinds(session: AsyncSession, media_ids: list[str]) -> None:
-    """Ownership is already checked; each picture must also be a hidden ``scene_picture`` media."""
+async def _check_picture_kinds(session: AsyncSession, user_id: str, media_ids: list[str]) -> None:
+    """Each picture must be the user's own hidden ``scene_picture`` media: ``_check_references`` also lets
+    an ownerless row through, which is not one (422 ``not_a_scene_picture``)."""
     for media_id in media_ids:
         row = await session.get(MediaItem, media_id)
-        if row is None or (row.metadata_ or {}).get("kind") != SCENE_PICTURE_KIND:
+        if row is None or row.user_id != user_id or (row.metadata_ or {}).get("kind") != SCENE_PICTURE_KIND:
             raise SceneVideoError(422, "not_a_scene_picture")
 
 
@@ -127,7 +128,7 @@ async def patch(session: AsyncSession, user_id: str, video_id: str, payload: Sce
         ],
     )
     if "pictures" in sent and payload.pictures:
-        await _check_picture_kinds(session, [str(p.media_id) for p in payload.pictures])
+        await _check_picture_kinds(session, user_id, [str(p.media_id) for p in payload.pictures])
     for name in sent:
         value = getattr(payload, name)
         if name == "voice_takes" and value is not None:

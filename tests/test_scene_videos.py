@@ -377,6 +377,15 @@ def test_picture_media_must_be_the_users_own_and_a_scene_picture(env):
     assert [p["label"] for p in _get(env, vid)["pictures"]] == ["pic-one"]
 
 
+def test_an_ownerless_scene_picture_is_not_the_users(env):
+    # _get_owned lets a row with no owner through; a picture must be the user's own copy.
+    vid = _mk(env)["id"]
+    ownerless = _pic_media(env, None)
+    r = _patch(env, vid, pictures=[_pic(_pic_media(env, USER_A), "pic-a"), _pic(ownerless, "pic-b")])
+    assert r.status_code == 422 and r.json()["detail"] == "not_a_scene_picture"
+    assert _get(env, vid)["pictures"] is None
+
+
 def test_picture_field_bounds(env):
     vid = _mk(env)["id"]
     mid = _pic_media(env, USER_A)
