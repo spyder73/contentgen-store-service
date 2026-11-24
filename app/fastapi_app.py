@@ -65,6 +65,7 @@ from .schemas import (
     ChatThreadListItem,
     ChatThreadOut,
     ChatThreadPatch,
+    ChatThreadSummary,
     PlaybookIn,
     PlaybookOut,
     PlaybookVersionOut,
@@ -1440,6 +1441,12 @@ def create_fastapi_app() -> FastAPI:
     @app.get("/v1/chat/threads/{thread_id}", response_model=ChatThreadOut)
     async def get_chat_thread_handler(thread_id: str, request: Request, session: SessionDep) -> Any:
         row = await chat.get_thread(session, _require_user_id(request), thread_id)
+        return _chat_found(row, "thread_not_found")
+
+    @app.get("/v1/chat/threads/{thread_id}/summary", response_model=ChatThreadSummary)
+    async def get_chat_thread_summary_handler(thread_id: str, request: Request, session: SessionDep) -> Any:
+        # The thread without its transcript and known media: for the browser's open, not the operator.
+        row = await chat.get_thread_summary(session, _require_user_id(request), thread_id)
         return _chat_found(row, "thread_not_found")
 
     @app.patch("/v1/chat/threads/{thread_id}", response_model=ChatThreadOut)

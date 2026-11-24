@@ -17,12 +17,13 @@ import asyncio
 import hashlib
 import importlib.util
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select, update
+from sqlalchemy import event, func, select, update
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.ext.compiler import compiles
@@ -211,6 +212,49 @@ def test_list_threads_newest_first_without_transcript(env):
     # Paging.
     page = env.client.get("/v1/chat/threads?limit=1&offset=1", headers=_h()).json()
     assert [t["id"] for t in page] == [new["id"]]
+
+
+@contextmanager
+def _statements(env):
+    """Every SQL statement the app sends while the block runs."""
+    engine = env.factory.kw["bind"].sync_engine
+    seen: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        seen.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        yield seen
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+
+def test_a_thread_summary_is_the_thread_without_its_transcript(env):
+    t = env.thread(title="Ideas", model="m", transcript=[{"user": "hello"}], known_media=[{"media_id": "m1"}])
+    url = f"/v1/chat/threads/{t['id']}"
+    env.message(t["id"])
+    with _statements(env) as seen:
+        r = env.client.get(url + "/summary", headers=_h())
+        page = env.client.get(url + "/messages?newest=true&limit=200", headers=_h())
+    assert r.status_code == 200, r.text
+    summary = r.json()
+    assert (summary["id"], summary["title"], summary["model"], summary["status"], summary["unread"]) == (
+        t["id"], "Ideas", "m", "idle", False
+    )
+    assert "transcript" not in summary and "known_media" not in summary
+    assert [m["seq"] for m in page.json()] == [1]
+    # Neither the summary nor a message page loads the JSON columns from the database.
+    assert seen and not any("transcript" in s or "known_media" in s for s in seen), seen
+    # The full read, the operator's, still loads and carries both.
+    with _statements(env) as seen:
+        full = env.client.get(url, headers=_h()).json()
+    assert any("transcript" in s for s in seen)
+    assert (full["transcript"], full["known_media"]) == ([{"user": "hello"}], [{"media_id": "m1"}])
+    # Scoped, and an id that is not a UUID is a 404.
+    assert env.client.get(url + "/summary", headers=_h(USER_B)).status_code == 404
+    assert env.client.get("/v1/chat/threads/not-a-uuid/summary", headers=_h()).status_code == 404
+    assert env.client.get(url + "/summary", headers=_h(None)).status_code == 401
 
 
 def _open_production(env, thread_id: str, user: str = USER_A) -> dict:

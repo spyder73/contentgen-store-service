@@ -117,6 +117,16 @@ async def _owned_thread(session: AsyncSession, user_id: str, thread_id: str) -> 
     ).scalar_one_or_none()
 
 
+async def _owned_thread_id(session: AsyncSession, user_id: str, thread_id: str) -> str | None:
+    """The thread's id when it is the user's: an ownership check that loads none of the row."""
+    tid = _uuid(thread_id)
+    if tid is None:
+        return None
+    return (
+        await session.execute(select(ChatThread.id).where(ChatThread.id == tid, ChatThread.user_id == user_id))
+    ).scalar_one_or_none()
+
+
 async def create_thread(session: AsyncSession, user_id: str, payload: ChatThreadIn) -> ChatThread:
     # Idempotent on a caller-minted id: a retried POST returns the thread already stored.
     # Another user's id is a conflict, never a read of that row.
@@ -186,6 +196,20 @@ async def list_threads(
 
 async def get_thread(session: AsyncSession, user_id: str, thread_id: str) -> ChatThread | None:
     return await _owned_thread(session, user_id, thread_id)
+
+
+async def get_thread_summary(session: AsyncSession, user_id: str, thread_id: str) -> ChatThread | None:
+    """The thread without its transcript and known media, neither of which is loaded: what a reader that
+    shows the thread needs (opening it in the browser). The operator's own read of the full row is get_thread."""
+    tid = _uuid(thread_id)
+    if tid is None:
+        return None
+    query = (
+        select(ChatThread)
+        .options(defer(ChatThread.transcript), defer(ChatThread.known_media))
+        .where(ChatThread.id == tid, ChatThread.user_id == user_id)
+    )
+    return (await session.execute(query)).scalar_one_or_none()
 
 
 async def patch_thread(
@@ -317,10 +341,11 @@ async def list_messages(
     still in seq order: the tail of a thread (or the page before a seq) in one query, read backward along the
     (thread_id, seq) unique index, however long the thread is.
     """
-    thread = await _owned_thread(session, user_id, thread_id)
-    if thread is None:
+    # Only the ownership check: a page must not load the thread's transcript.
+    tid = await _owned_thread_id(session, user_id, thread_id)
+    if tid is None:
         return None
-    where = [ChatMessage.thread_id == thread.id, ChatMessage.seq > after_seq]
+    where = [ChatMessage.thread_id == tid, ChatMessage.seq > after_seq]
     if before_seq is not None:
         where.append(ChatMessage.seq < before_seq)
     query = (
