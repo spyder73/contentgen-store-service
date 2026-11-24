@@ -1480,12 +1480,21 @@ def create_fastapi_app() -> FastAPI:
         after_seq: int = 0,
         before_seq: int | None = None,
         limit: int = 500,
-        newest: bool = False,
     ) -> Any:
-        # newest=true: the newest `limit` messages (before before_seq, when given), still in seq order.
         rows = await chat.list_messages(
-            session, _require_user_id(request), thread_id,
-            after_seq=after_seq, before_seq=before_seq, limit=limit, newest=newest,
+            session, _require_user_id(request), thread_id, after_seq=after_seq, before_seq=before_seq, limit=limit
+        )
+        return _chat_found(rows, "thread_not_found")
+
+    # Its own route, not a parameter of the one above: a store from before it answers the framework's 404
+    # ("Not Found"), which a caller tells apart from "thread_not_found", instead of the oldest messages.
+    @app.get("/v1/chat/threads/{thread_id}/messages/newest", response_model=list[ChatMessageOut])
+    async def newest_chat_messages_handler(
+        thread_id: str, request: Request, session: SessionDep, limit: int = 200, before_seq: int | None = None
+    ) -> Any:
+        # The newest `limit` messages (before before_seq, when given), still in seq order.
+        rows = await chat.list_messages(
+            session, _require_user_id(request), thread_id, before_seq=before_seq, limit=limit, newest=True
         )
         return _chat_found(rows, "thread_not_found")
 

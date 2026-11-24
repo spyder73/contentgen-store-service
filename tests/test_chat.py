@@ -236,7 +236,7 @@ def test_a_thread_summary_is_the_thread_without_its_transcript(env):
     env.message(t["id"])
     with _statements(env) as seen:
         r = env.client.get(url + "/summary", headers=_h())
-        page = env.client.get(url + "/messages?newest=true&limit=200", headers=_h())
+        page = env.client.get(url + "/messages/newest?limit=200", headers=_h())
     assert r.status_code == 200, r.text
     summary = r.json()
     assert (summary["id"], summary["title"], summary["model"], summary["status"], summary["unread"]) == (
@@ -460,19 +460,22 @@ def test_newest_messages_are_the_threads_tail_in_seq_order(env):
         assert r.status_code == 200, r.text
         return [m["seq"] for m in r.json()]
 
-    assert seqs("?newest=true&limit=3") == [5, 6, 7]
-    assert [m["text"] for m in env.client.get(url + "?newest=true&limit=2", headers=_h()).json()] == ["m6", "m7"]
-    # The page before a seq ("load earlier"), and a tail that after_seq cuts short.
-    assert seqs("?newest=true&limit=3&before_seq=5") == [2, 3, 4]
-    assert seqs("?newest=true&limit=3&before_seq=3") == [1, 2]
-    assert seqs("?newest=true&limit=5&after_seq=4") == [5, 6, 7]
-    assert seqs("?newest=true&limit=100") == [1, 2, 3, 4, 5, 6, 7]
-    # Old callers are unchanged: without newest the page is still the oldest, paging forward.
+    assert seqs("/newest?limit=3") == [5, 6, 7]
+    assert [m["text"] for m in env.client.get(url + "/newest?limit=2", headers=_h()).json()] == ["m6", "m7"]
+    # The page before a seq ("load earlier").
+    assert seqs("/newest?limit=3&before_seq=5") == [2, 3, 4]
+    assert seqs("/newest?limit=3&before_seq=3") == [1, 2]
+    assert seqs("/newest?limit=100") == [1, 2, 3, 4, 5, 6, 7]
+    assert seqs("/newest") == [1, 2, 3, 4, 5, 6, 7]  # 200 by default
+    # Old callers are unchanged: the plain page is still the oldest, paging forward.
     assert seqs("?limit=3") == [1, 2, 3]
     assert seqs("?after_seq=2&limit=2") == [3, 4]
     assert seqs("?before_seq=3") == [1, 2]
-    # Scoped like every other read.
-    assert env.client.get(url + "?newest=true&limit=3", headers=_h(USER_B)).status_code == 404
+    # Scoped like every other read: the store's own 404, not the framework's.
+    r = env.client.get(url + "/newest?limit=3", headers=_h(USER_B))
+    assert (r.status_code, r.json()["detail"]) == (404, "thread_not_found")
+    r = env.client.get("/v1/chat/threads/not-a-uuid/messages/newest", headers=_h())
+    assert (r.status_code, r.json()["detail"]) == (404, "thread_not_found")
 
 
 def test_a_message_has_a_role_kind_text_and_data(env):
