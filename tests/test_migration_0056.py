@@ -4,6 +4,9 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+from sqlalchemy import text
+
 from app.models import ChatProduction, ChatThread, Routine
 from tests.test_chat import _render
 
@@ -32,12 +35,34 @@ def test_upgrade_adds_the_columns_and_the_index():
     assert "CREATE INDEX ix_chat_productions_thread_closed ON chat_productions (thread_id, closed_at)" in sql
 
 
-def test_upgrade_backfills_the_last_line_from_the_newest_kept_message():
+def test_upgrade_backfills_the_last_line_from_the_newest_message_with_a_line():
     sql = _render(_module().upgrade)
-    assert "SELECT DISTINCT ON (thread_id) thread_id, role, kind, text FROM chat_messages" in sql
-    assert "kind IN ('text', 'approval', 'error', 'event', 'media')" in sql
-    assert "ORDER BY thread_id, seq DESC" in sql
-    assert "left(btrim(regexp_replace(m.text, '\\s+', ' ', 'g')), 140)" in sql
+    # Per thread, a backward walk to its newest message of a kind that has a line, skipping one whose line is empty.
+    assert "WITH lines AS ( SELECT t.id AS thread_id, m.role, m.kind, m.line FROM chat_threads t CROSS JOIN LATERAL (" in sql
+    assert "WHERE c.thread_id = t.id AND c.kind IN ('text', 'approval', 'error', 'event', 'media') AND f.flat <> ''" in sql
+    assert "ORDER BY c.seq DESC LIMIT 1" in sql
+    assert "SET last_role = lines.role, last_kind = lines.kind, last_text = lines.line FROM lines WHERE lines.thread_id = t.id" in sql
+
+
+def test_the_last_line_is_preview_lines_rule_step_by_step():
+    module = _module()
+    sql = _render(module.upgrade)
+    # The steps nest in preview_line's order over the first 4,000 characters, trimmed at the end.
+    nested = "btrim(" + "regexp_replace(" * len(module.PREVIEW_STEPS) + "left(c.text, 4000), "
+    assert nested in sql
+    patterns = [pattern for pattern, _, _ in module.PREVIEW_STEPS]
+    assert patterns[0].startswith("```") and patterns[-1] == r"\s+"
+    for pattern, replacement, flags in module.PREVIEW_STEPS:
+        assert f"'{pattern}', '{replacement}', '{flags}')" in sql
+    # Code blocks go first, so no fence, ref or mark is ever written; only the line marks match per line.
+    assert [flags for _, _, flags in module.PREVIEW_STEPS].count("gn") == 1
+    assert "CASE WHEN char_length(f.flat) <= 140 THEN f.flat" in sql and "|| '…'" in sql
+
+
+@pytest.mark.parametrize("name", ["BACKFILL_LAST_LINE", "BACKFILL_RUN_COUNT", "BACKFILL_THUMB"])
+def test_no_backfill_reads_as_a_bind_parameter(name):
+    # op.execute wraps a string in text(): a ":name" in a pattern would become a bind parameter with no value.
+    assert text(getattr(_module(), name))._bindparams == {}
 
 
 def test_upgrade_backfills_the_run_count_from_the_routine_event_lines():
@@ -47,11 +72,13 @@ def test_upgrade_backfills_the_run_count_from_the_routine_event_lines():
     assert "r.id::text = c.routine_id" in sql
 
 
-def test_upgrade_backfills_the_thumbnail_from_the_newest_image_of_the_newest_production():
+def test_upgrade_backfills_the_thumbnail_from_the_owners_newest_image_of_the_newest_production():
     sql = _render(_module().upgrade)
     assert "UPDATE chat_threads t SET thumb_media_id = x.media_id" in sql
     assert "SELECT DISTINCT ON (p.thread_id)" in sql and "ORDER BY p.thread_id, p.created_at DESC" in sql
     assert "mi.type = 'image'" in sql and "ORDER BY e.ord DESC LIMIT 1" in sql
+    # Only a picture the thread's owner owns, as the write path takes it.
+    assert "AND mi.type = 'image' AND mi.user_id = p.user_id" in sql
     # Only well-formed uuids are cast: the cast sits behind the regex test.
     assert "CASE WHEN e.media_id ~* '^[0-9a-f]{8}-" in sql and "THEN e.media_id::uuid END" in sql
 
