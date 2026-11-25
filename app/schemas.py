@@ -954,7 +954,7 @@ ChatAction = Literal[
     "run.start", "run.continue", "image.generate", "clip.render", "plan.approve", "frames.approve", "graph.extend",
     "sourcing.run", "production.budget", "playbook.save", "routine.save", "routine.delete",
     "clipstyle.build", "clipstyle.edit", "clipstyle.save", "clipstyle.publish",
-    "scene.build", "scene.render",
+    "scene.build", "scene.render", "routine.budget", "telegram.targets",
 ]
 ChatApprovalStatus = Literal["pending", "approved", "used", "declined", "expired"]
 

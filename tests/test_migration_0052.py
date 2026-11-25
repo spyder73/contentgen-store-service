@@ -39,7 +39,7 @@ def test_downgrade_refuses_while_scene_approvals_exist_then_drops_the_table():
 
 def test_the_models_match_the_migration():
     checks = {c.name: str(c.sqltext) for c in ChatApproval.__table__.constraints if getattr(c, "sqltext", None) is not None}
-    assert checks["ck_chat_approvals_action"] == f"action IN ({m._ACTIONS_0052})"
+    assert checks["ck_chat_approvals_action"] == f"action IN ({m._ACTIONS_0052}, 'routine.budget', 'telegram.targets')"  # 0057 extended it
     video = {c.name: str(c.sqltext) for c in SceneVideo.__table__.constraints if getattr(c, "sqltext", None) is not None}
     assert "'draft', 'voiced', 'building', 'built', 'rendering', 'ready', 'failed'" in video["ck_scene_videos_status"]
     assert {c.name for c in SceneVideo.__table__.columns} == {

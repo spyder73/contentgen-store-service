@@ -618,7 +618,8 @@ def test_the_models_declare_what_the_migration_makes():
     }
     for name in ("ck_chat_productions_status", "ck_chat_productions_amounts", "ck_chat_productions_ack"):
         assert f"CONSTRAINT {name} CHECK ({modelled[name]})" in sql, name
-    columns = {c.name for c in ChatProduction.__table__.columns}
+    # 0057's two columns are pinned in test_migration_0057.py.
+    columns = {c.name for c in ChatProduction.__table__.columns} - {"ends_at", "allowed"}
     assert all(f"{name} " in sql for name in columns), columns
     indexes = {i.name for i in ChatProduction.__table__.indexes}
     # 0056 added ix_chat_productions_thread_closed (the chat list's newest-production read).

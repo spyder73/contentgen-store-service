@@ -174,7 +174,7 @@ def test_internal_list_filters_unwoken_and_recent_newest_first(env):
 
 
 def test_the_action_literal_ends_with_the_scene_actions():
-    assert get_args(ChatAction)[-2:] == ("scene.build", "scene.render")
+    assert get_args(ChatAction)[-4:] == ("scene.build", "scene.render", "routine.budget", "telegram.targets")
 
 
 @pytest.mark.parametrize("action", ["scene.build", "scene.render"])
