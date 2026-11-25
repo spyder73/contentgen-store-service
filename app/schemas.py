@@ -1506,9 +1506,25 @@ class VideoAnalysisIn(BaseModel):
         return v
 
 
+class JudgedWindow(BaseModel):
+    """A stretch of the video (seconds) a pick set looked at, whether or not it chose a moment in it."""
+
+    start: float = Field(ge=0, allow_inf_nan=False)
+    end: float = Field(allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def _ends_after_it_starts(self) -> "JudgedWindow":
+        if self.end <= self.start:
+            raise ValueError("end must be after start")
+        return self
+
+
 class VideoAnalysisPicksIn(BaseModel):
+    """``judged`` is every window the pick set looked at (at most 40); a body without it records none."""
+
     brief: str = Field(min_length=1, max_length=500)
     moments: list[dict] = Field(max_length=20)
+    judged: list[JudgedWindow] = Field(default=[], max_length=40)
 
 
 class VideoAnalysisOut(BaseModel):

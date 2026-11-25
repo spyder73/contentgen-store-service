@@ -172,9 +172,49 @@ def test_picks_append_and_keep_the_newest_20(env):
     picks = r.json()["picks"]
     assert len(picks) == 20
     assert [p["brief"] for p in picks][0] == "brief 2" and picks[-1]["brief"] == "brief 21"
-    assert set(picks[-1]) == {"brief", "created_at", "moments"}
+    assert set(picks[-1]) == {"brief", "created_at", "moments", "judged"}
     assert picks[-1]["moments"] == [{"start": 1, "end": 9}]
     assert env.client.get(_url(), headers=_h()).json()["picks"] == picks
+
+
+def _picks_body(env: Env, analysis_id: str, **body):
+    return env.client.post(f"/v1/users/{USER_A}/video-analyses/{analysis_id}/picks", json=body, headers=_h())
+
+
+def test_picks_keep_their_judged_windows(env):
+    a = _saved(env)
+    windows = [{"start": 0, "end": 30.5}, {"start": 30.5, "end": 61}]
+    r = _picks_body(env, a["id"], brief="b", moments=[{"start": 1, "end": 9}], judged=windows)
+    assert r.status_code == 200, r.text
+    assert r.json()["picks"][-1]["judged"] == windows
+    assert env.client.get(_url(), headers=_h()).json()["picks"][-1]["judged"] == windows
+
+
+def test_a_pick_set_with_no_moments_but_judged_windows_is_kept(env):
+    a = _saved(env)
+    r = _picks_body(env, a["id"], brief="b", moments=[], judged=[{"start": 0, "end": 10}])
+    assert r.status_code == 200
+    assert r.json()["picks"][-1]["moments"] == [] and r.json()["picks"][-1]["judged"] == [{"start": 0, "end": 10}]
+
+
+def test_an_old_body_without_judged_reads_as_none(env):
+    a = _saved(env)
+    r = _picks_body(env, a["id"], brief="b", moments=[{"start": 1, "end": 9}])
+    assert r.status_code == 200 and r.json()["picks"][-1]["judged"] == []
+
+
+@pytest.mark.parametrize("window", [{"start": 9, "end": 5}, {"start": 5, "end": 5}, {"start": -1, "end": 5}])
+def test_a_window_that_ends_before_it_starts_is_refused(env, window):
+    a = _saved(env)
+    assert _picks_body(env, a["id"], brief="b", moments=[], judged=[window]).status_code == 422
+    assert env.client.get(_url(), headers=_h()).json()["picks"] == []
+
+
+def test_more_than_forty_judged_windows_are_refused(env):
+    a = _saved(env)
+    windows = [{"start": i, "end": i + 1} for i in range(41)]
+    assert _picks_body(env, a["id"], brief="b", moments=[], judged=windows).status_code == 422
+    assert _picks_body(env, a["id"], brief="b", moments=[], judged=windows[:40]).status_code == 200
 
 
 def test_another_users_row_is_404_and_the_path_user_must_be_the_header_user(env):
