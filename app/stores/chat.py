@@ -436,10 +436,10 @@ async def _decide(
 async def approve_approval(
     session: AsyncSession, user_id: str, approval_id: str, body: ChatApprovalApprove
 ) -> ChatApproval | None:
-    return await _decide(
-        session, user_id, approval_id,
-        status="approved", token_sha256=body.token_sha256, expires_at=body.expires_at,
-    )
+    values: dict[str, object] = {"status": "approved", "token_sha256": body.token_sha256, "expires_at": body.expires_at}
+    if body.choices is not None:  # an absent key stays SQL NULL (not JSON null)
+        values["choices"] = body.choices
+    return await _decide(session, user_id, approval_id, **values)
 
 
 async def decline_approval(session: AsyncSession, user_id: str, approval_id: str) -> ChatApproval | None:

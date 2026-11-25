@@ -39,7 +39,7 @@ BODY = {"title": "Cat week", "goal": "Ten pictures of cats", "agent_cap_usd": 5.
 # What a watch and the artifacts read back with when nothing sets the media fields (phase 4a).
 NO_MEDIA = {
     "media_id": "", "batch": "", "what": "", "vendor": "", "vendor_job_id": "", "request_id": "",
-    "scene_key": "", "failure_kind": "", "failure": "",
+    "scene_key": "", "failure_kind": "", "failure": "", "session_id": "", "cap_usd": 0,
 }
 NO_SCENES = {"approved_scenes": [], "tries": {}, "scenes": {}}
 

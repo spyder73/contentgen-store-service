@@ -1134,6 +1134,21 @@ class ChatApprovalIn(BaseModel):
     _canonical_ids = field_validator("id", "message_id")(_uuid_or_none)
 
 
+CHOICE_KEY = re.compile(r"^[a-z_]{1,20}$")
+CHOICES_MAX = 10
+ROUTINE_BUDGET_MAX_USD = 10.0
+
+
+def _choice_keys(value: list[str] | None) -> list[str] | None:
+    """Spend-category keys (a routine's ticks, a press's choices): at most ten, each ``^[a-z_]{1,20}$``,
+    repeats collapsed. The store keeps them opaque; the backend owns their meaning."""
+    if value is None:
+        return None
+    if len(value) > CHOICES_MAX or not all(CHOICE_KEY.match(key) for key in value):
+        raise ValueError(f"at most {CHOICES_MAX} keys, each of a-z and _ (1-20 characters)")
+    return list(dict.fromkeys(value))
+
+
 class ChatApprovalOut(BaseModel):
     """Never carries ``token_sha256``: the hash is the credential ``consume`` takes."""
 
@@ -1147,6 +1162,7 @@ class ChatApprovalOut(BaseModel):
     amount_usd: float
     summary: str = ""
     breakdown: dict[str, Any] | list[Any] = {}
+    choices: list[str] | None = None
     status: ChatApprovalStatus
     expires_at: datetime | None = None
     created_at: datetime
@@ -1157,8 +1173,11 @@ class ChatApprovalOut(BaseModel):
 class ChatApprovalApprove(BaseModel):
     token_sha256: str = Field(min_length=1, max_length=128)
     expires_at: datetime
+    # The ticked spend categories; [] is "nothing paid", absent (None) is a card with no checklist.
+    choices: list[str] | None = None
 
     _utc = field_validator("expires_at")(_as_utc)
+    _keys = field_validator("choices")(_choice_keys)
 
 
 class ChatApprovalConsume(BaseModel):
@@ -1183,6 +1202,19 @@ class ProductionIn(BaseModel):
     goal: str
     playbook_slug: str | None = None
     agent_cap_usd: float = Field(ge=0, allow_inf_nan=False)
+    # A routine's budget: a funded production with an end and its ticks. All three or none.
+    budget_usd: float | None = Field(default=None, gt=0, le=ROUTINE_BUDGET_MAX_USD, allow_inf_nan=False)
+    ends_at: datetime | None = None
+    allowed: list[str] | None = None
+
+    _utc = field_validator("ends_at")(lambda value: None if value is None else _as_utc(value))
+    _keys = field_validator("allowed")(_choice_keys)
+
+    @model_validator(mode="after")
+    def _budget_end_and_ticks_go_together(self) -> "ProductionIn":
+        if len({self.budget_usd is None, self.ends_at is None, self.allowed is None}) != 1:
+            raise ValueError("budget_usd, ends_at and allowed go together")
+        return self
 
 
 class ProductionLogIn(BaseModel):
@@ -1223,6 +1255,9 @@ class ProductionWatch(BaseModel):
     scene_key: str = ""
     failure_kind: str = ""
     failure: str = ""
+    # A ``build`` watch (a chat's clip-style build session): its session id and the cap it may spend.
+    session_id: str = ""
+    cap_usd: float = 0
 
     @field_validator("failure", mode="before")
     @classmethod
@@ -1331,6 +1366,8 @@ class ProductionOut(BaseModel):
     acked_seq: int
     wake_reason: str = ""
     outcome: str = ""
+    ends_at: datetime | None = None
+    allowed: list[str] | None = None
     created_at: datetime
     updated_at: datetime
     closed_at: datetime | None = None

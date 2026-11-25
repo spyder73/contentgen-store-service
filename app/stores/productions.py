@@ -14,7 +14,7 @@ WHERE clause so a budget card can never be applied twice.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select, update
@@ -27,6 +27,7 @@ from .chat import ChatError, _now, _owned_thread, _usd, _uuid
 
 LOG_KEEP = 200
 LIST_MAX = 50
+BUDGET_WINDOW = timedelta(days=14, hours=1)  # a routine budget may end at most this far ahead
 
 
 async def create_production(
@@ -38,6 +39,15 @@ async def create_production(
     if thread is None:
         return None
     tid = thread.id
+    budget: dict[str, Any] = {}
+    if payload.ends_at is not None:
+        now = _now()
+        if thread.routine_id is None or not now < payload.ends_at <= now + BUDGET_WINDOW:
+            raise ChatError(422, "routine_budget_invalid")
+        budget = {
+            "budget_usd": _usd(payload.budget_usd), "budget_version": 1,
+            "ends_at": payload.ends_at, "allowed": payload.allowed,
+        }
     row = ChatProduction(
         id=str(uuid.uuid4()),
         thread_id=tid,
@@ -46,6 +56,7 @@ async def create_production(
         goal=payload.goal,
         playbook_slug=payload.playbook_slug,
         agent_cap_usd=payload.agent_cap_usd,
+        **budget,
     )
     session.add(row)
     try:
@@ -147,6 +158,8 @@ def _refusal(row: ChatProduction, patch: ProductionPatch) -> ChatError | None:
     changes = {name for name in ProductionPatch.model_fields if getattr(patch, name) is not None}
     if row.status == "closed" and changes - {"acked_seq"}:
         return ChatError(409, "production_closed")
+    if patch.add_budget_usd is not None and row.ends_at is not None:
+        return ChatError(409, "routine_budget_fixed")  # a routine's budget is set once, never raised by a card
     if patch.expect_budget_version is not None and patch.expect_budget_version != row.budget_version:
         return ChatError(409, "stale_budget_version")
     wake_seq = row.wake_seq + (1 if patch.bump_wake is not None else 0)

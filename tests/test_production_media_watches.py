@@ -26,6 +26,8 @@ MEDIA_WATCH = {
     "scene_key": "f:img1",
     "failure_kind": "",
     "failure": "",
+    "session_id": "",
+    "cap_usd": 0,
 }
 
 
