@@ -177,7 +177,10 @@ async def add_picks(
     ).scalar_one_or_none()
     if row is None:
         return None
-    entry = {"brief": payload.brief, "created_at": now.isoformat(), "moments": payload.moments}
+    entry = {
+        "brief": payload.brief, "created_at": now.isoformat(), "moments": payload.moments,
+        "judged": [w.model_dump() for w in payload.judged],
+    }
     _check_size("pick", entry)
     row.picks = [*row.picks, entry][-PICKS_KEEP:]
     await session.commit()

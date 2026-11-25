@@ -962,6 +962,8 @@ class ChatThread(Base):
     last_role: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     last_kind: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     thumb_media_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Migration 0057: the Telegram ids this chat sends to (chosen from the user's telegram_recipients).
+    telegram_targets: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_now, server_default=func.now()
     )
@@ -1033,6 +1035,8 @@ class ChatApproval(Base):
     )
     summary: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     breakdown: Mapped[dict | list] = mapped_column(JSONB, nullable=False, default=dict)
+    # Migration 0057: the spend categories ticked when the card was pressed (null: the press had none).
+    choices: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="pending", server_default="pending")
     token_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -1048,7 +1052,7 @@ class ChatApproval(Base):
             "'plan.approve', 'frames.approve', 'graph.extend', 'sourcing.run', 'production.budget', 'playbook.save', "
             "'routine.save', 'routine.delete', "
             "'clipstyle.build', 'clipstyle.edit', 'clipstyle.save', 'clipstyle.publish', "
-            "'scene.build', 'scene.render')",
+            "'scene.build', 'scene.render', 'routine.budget', 'telegram.targets')",
             name="ck_chat_approvals_action",
         ),
         CheckConstraint(
@@ -1103,6 +1107,9 @@ class ChatProduction(Base):
         JSONB, nullable=False, default=lambda: {"media_ids": [], "clip_ids": []}
     )
     watches: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    # Migration 0057: a routine budget's end and the spend categories its owner ticked (null: not a routine budget).
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    allowed: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     wake_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     acked_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     wake_reason: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
@@ -1243,6 +1250,24 @@ class Routine(Base):
         CheckConstraint("last_outcome IS NULL OR last_outcome IN ('ok', 'failed', 'skipped')", name="ck_routines_outcome"),
         Index("ix_routines_state_next_run", "state", "next_run_at"),
     )
+
+
+class TelegramRecipient(Base):
+    """A Telegram chat id the user may send to (migration 0057); at most 20 per user, enforced by the store."""
+
+    __tablename__ = "telegram_recipients"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    telegram_id: Mapped[str] = mapped_column(Text, nullable=False)
+    username: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, server_default=func.now()
+    )
+
+    __table_args__ = (UniqueConstraint("user_id", "telegram_id", name="uq_telegram_recipients_user_tid"),)
 
 
 SCENE_VIDEO_STATUSES = ("draft", "voiced", "building", "built", "rendering", "ready", "failed")

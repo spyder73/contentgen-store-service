@@ -16,8 +16,9 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import ChatThread, Routine, RoutineSpendDay
+from ..models import ChatProduction, ChatThread, Routine, RoutineSpendDay
 from ..schemas import ROUTINE_LIMIT, RoutineClaimIn, RoutineIn, RoutineOutcomeIn, RoutinePatch
+from .chat import _now as _utc_now, _uuid
 from .credits import _lock_user_row
 
 PAUSE_AFTER_FAILURES = 3
@@ -128,6 +129,19 @@ async def delete(session: AsyncSession, user_id: str, routine_id: str) -> bool:
         .values(routine_id=None, updated_at=ChatThread.updated_at)
         .execution_options(synchronize_session=False)
     )
+    thread_id = _uuid(row.thread_id)
+    if thread_id is not None:
+        # Its budget (the open production with an end date) ends with it; an ordinary production stays.
+        now = _utc_now()
+        await session.execute(
+            update(ChatProduction)
+            .where(
+                ChatProduction.thread_id == thread_id, ChatProduction.user_id == user_id,
+                ChatProduction.status == "open", ChatProduction.ends_at.is_not(None),
+            )
+            .values(status="closed", outcome="routine_deleted", closed_at=now, updated_at=now)
+            .execution_options(synchronize_session=False)
+        )
     await session.delete(row)
     await session.commit()
     return True

@@ -65,6 +65,9 @@ from .schemas import (
     ChatThreadListItem,
     ChatThreadOut,
     ChatThreadPatch,
+    TELEGRAM_ID,
+    TelegramRecipientIn,
+    TelegramRecipientOut,
     ChatThreadSummary,
     PlaybookIn,
     PlaybookOut,
@@ -133,6 +136,7 @@ from .stores import (
     system_prompts,
     user_settings,
     routines,
+    telegram_recipients,
     scene_style_examples,
     scene_videos,
     video_analyses,
@@ -1460,7 +1464,10 @@ def create_fastapi_app() -> FastAPI:
     async def patch_chat_thread_handler(
         thread_id: str, payload: ChatThreadPatch, request: Request, session: SessionDep
     ) -> Any:
-        row = await chat.patch_thread(session, _require_user_id(request), thread_id, payload)
+        try:
+            row = await chat.patch_thread(session, _require_user_id(request), thread_id, payload)
+        except chat.ChatError as exc:
+            raise _chat_error(exc)
         return _chat_found(row, "thread_not_found")
 
     @app.delete("/v1/chat/threads/{thread_id}", status_code=204)
@@ -1804,6 +1811,36 @@ def create_fastapi_app() -> FastAPI:
     async def delete_routine_handler(user_id: str, routine_id: str, request: Request, session: SessionDep) -> Response:
         if not await routines.delete(session, _path_user(request, user_id), routine_id):
             raise HTTPException(status_code=404, detail="routine_not_found")
+        return Response(status_code=204)
+
+    # ── Telegram recipients: the ids a user may send to (a chat picks its own from them) ──
+
+    @app.get("/v1/users/{user_id}/telegram-recipients", response_model=list[TelegramRecipientOut])
+    async def list_telegram_recipients_handler(user_id: str, request: Request, session: SessionDep) -> Any:
+        return await telegram_recipients.list_for_user(session, _path_user(request, user_id))
+
+    @app.put("/v1/users/{user_id}/telegram-recipients/{telegram_id}", response_model=TelegramRecipientOut)
+    async def put_telegram_recipient_handler(
+        user_id: str,
+        telegram_id: Annotated[str, Path(pattern=TELEGRAM_ID.pattern)],
+        payload: TelegramRecipientIn,
+        request: Request,
+        session: SessionDep,
+    ) -> Any:
+        try:
+            return await telegram_recipients.put(session, _path_user(request, user_id), telegram_id, payload)
+        except chat.ChatError as exc:
+            raise _chat_error(exc)
+
+    @app.delete("/v1/users/{user_id}/telegram-recipients/{telegram_id}", status_code=204)
+    async def delete_telegram_recipient_handler(
+        user_id: str,
+        telegram_id: Annotated[str, Path(pattern=TELEGRAM_ID.pattern)],
+        request: Request,
+        session: SessionDep,
+    ) -> Response:
+        if not await telegram_recipients.delete_one(session, _path_user(request, user_id), telegram_id):
+            raise HTTPException(status_code=404, detail="recipient_not_found")
         return Response(status_code=204)
 
     @app.get("/v1/routines/due", response_model=list[RoutineOut])
