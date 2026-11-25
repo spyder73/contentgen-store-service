@@ -1056,6 +1056,23 @@ class ChatThreadOut(ChatThreadSummary):
     transcript: list[Any] = []
     known_media: list[Any] = []
     tool_groups: list[str] = []
+    telegram_targets: list[str] = []
+
+
+class TelegramRecipientIn(BaseModel):
+    username: str = Field(default="", max_length=64)
+
+
+class TelegramRecipientOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    telegram_id: str
+    username: str = ""
+    created_at: datetime
+
+
+TELEGRAM_ID = re.compile(r"^[0-9]{1,20}$")
+TELEGRAM_TARGETS_MAX = 10
 
 
 class ChatThreadPatch(BaseModel):
@@ -1072,8 +1089,19 @@ class ChatThreadPatch(BaseModel):
     status: ChatThreadStatus | None = None
     unread: bool | None = None
     add_cost_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    # The Telegram ids this chat sends to: at most ten, each one of the user's recipients (the store checks).
+    telegram_targets: list[str] | None = None
 
     _canonical_series = field_validator("series_id")(_uuid_or_none)
+
+    @field_validator("telegram_targets")
+    @classmethod
+    def _targets(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        if len(v) > TELEGRAM_TARGETS_MAX or not all(TELEGRAM_ID.match(t) for t in v):
+            raise ValueError(f"at most {TELEGRAM_TARGETS_MAX} ids, each 1-20 digits")
+        return list(dict.fromkeys(v))
 
     @field_validator("tool_groups")
     @classmethod

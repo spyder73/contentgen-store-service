@@ -25,7 +25,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
-from ..models import ChatApproval, ChatMessage, ChatProduction, ChatThread
+from ..models import ChatApproval, ChatMessage, ChatProduction, ChatThread, TelegramRecipient
 from ..schemas import (
     ChatApprovalApprove,
     ChatApprovalConsume,
@@ -187,6 +187,12 @@ async def patch_thread(
     row = await _owned_thread(session, user_id, thread_id)
     if row is None:
         return None
+    if patch.telegram_targets:
+        known = set(
+            (await session.execute(select(TelegramRecipient.telegram_id).where(TelegramRecipient.user_id == user_id))).scalars()
+        )
+        if not set(patch.telegram_targets) <= known:
+            raise ChatError(422, "unknown_recipient")
     if patch.unread is not None and patch.model_fields_set == {"unread"}:
         # Opening a thread is not activity: an unread-only patch keeps updated_at (an explicit
         # value stops the column's onupdate).
@@ -201,7 +207,7 @@ async def patch_thread(
         return row
     if patch.unread is not None:
         row.unread = patch.unread
-    for field in ("title", "provider", "model", "transcript", "known_media", "tool_groups", "status"):
+    for field in ("title", "provider", "model", "transcript", "known_media", "tool_groups", "status", "telegram_targets"):
         value = getattr(patch, field)
         if value is not None:
             setattr(row, field, value)
