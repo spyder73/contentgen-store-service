@@ -1071,7 +1071,8 @@ class TelegramRecipientOut(BaseModel):
     created_at: datetime
 
 
-TELEGRAM_ID = re.compile(r"^[0-9]{1,20}$")
+# A Telegram chat id: a person's is positive, a group's or a channel's negative.
+TELEGRAM_ID = re.compile(r"^-?[0-9]{1,20}$")
 TELEGRAM_TARGETS_MAX = 10
 
 
@@ -1100,7 +1101,7 @@ class ChatThreadPatch(BaseModel):
         if v is None:
             return None
         if len(v) > TELEGRAM_TARGETS_MAX or not all(TELEGRAM_ID.match(t) for t in v):
-            raise ValueError(f"at most {TELEGRAM_TARGETS_MAX} ids, each 1-20 digits")
+            raise ValueError(f"at most {TELEGRAM_TARGETS_MAX} ids, each 1-20 digits after an optional minus")
         return list(dict.fromkeys(v))
 
     @field_validator("tool_groups")

@@ -48,10 +48,25 @@ def test_another_users_recipients_are_never_listed(env):
     assert env.client.delete(_url("111"), headers=_h()).status_code == 404
 
 
-@pytest.mark.parametrize("bad", ["abc", "12a", "1" * 21, "-5"])
+@pytest.mark.parametrize("bad", ["abc", "12a", "1" * 21, "-" + "1" * 21, "--5", "-", "5-", "+5"])
 def test_an_id_that_is_not_digits_is_refused(env, bad):
     assert _put(env, bad).status_code == 422
     assert env.client.delete(_url(bad), headers=_h()).status_code == 422
+
+
+def test_a_negative_id_is_stored_listed_chosen_and_deleted(env):
+    """A group's or a channel's chat id is negative."""
+    group = "-1001234567890"
+    r = _put(env, group, username="crew")
+    assert r.status_code == 200 and r.json()["telegram_id"] == group
+    _put(env, "111")
+    assert [g["telegram_id"] for g in env.client.get(_url(), headers=_h()).json()] == [group, "111"]
+    thread = env.thread()
+    assert _targets(env, thread["id"], [group, "111"]).json()["telegram_targets"] == [group, "111"]
+    assert _targets(env, thread["id"], ["-999"]).json()["detail"] == "unknown_recipient"
+    assert env.client.delete(_url(group), headers=_h()).status_code == 204
+    assert env.client.get(f"/v1/chat/threads/{thread['id']}", headers=_h()).json()["telegram_targets"] == ["111"]
+    assert [g["telegram_id"] for g in env.client.get(_url(), headers=_h()).json()] == ["111"]
 
 
 def test_a_username_over_64_characters_is_refused(env):
